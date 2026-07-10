@@ -1,0 +1,43 @@
+# Python bytecode and cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Virtual environment directory
+venv/
+.venv/
+env/
+ENV/
+
+# Local configuration files containing secret API keys
+.env
+.env.local
+.env.*.local
+
+# Operating System specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Ignore output directory (local generation only)
+outputs/
+
+# Ignore local datasets and big asset directories completely
+data/
+reports/
+docs/
+
+# Ignore global jsonl, json files
+*.jsonl
+*.json
+!requirements.txt
+
+# WHITELIST: Only track text prompt files
+!prompts/
+!prompts/**/*.txt
