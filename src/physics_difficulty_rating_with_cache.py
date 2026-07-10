@@ -2313,6 +2313,527 @@ def postprocess_physics_difficulty(rating_result: Dict[str, Any], data: Dict[str
     sync_coarse_difficulty(rating_result)
     return rating_result
 
+
+
+# -------------------------- 3.11 V6 回收中等保护与恢复压轴保护覆盖层 --------------------------
+# 说明：V6 针对 V5 的反弹问题继续小修：
+# 1. 回收“并列辨析 -> 中等”的触发范围，避免较易题大量被抬到中等；
+# 2. 适度放宽送分题：极简单教材原型图示/漫画/生活背景中的单概念识别可判送分；
+# 3. 常规中等保护加入高阶黑名单，防止项目式/自动控制/复杂电路被误降；
+# 4. 恢复项目式创新实验、自动控制、电磁继电器、可行性验证等压轴保护。
+
+
+def has_high_level_project_or_control_signal(data: Dict[str, Any]) -> bool:
+    """项目式/自动控制/复杂方案信号。命中后不得走常规中等保护。"""
+    text = full_text_of(data)
+    high_cues = [
+        "项目", "项目式", "任务", "挑战", "挑战赛", "实践", "改装", "重新设计", "设计方案",
+        "方案可行", "可行性", "是否能", "能否覆盖", "边界", "标注", "密度尺",
+        "自动控制", "自动控温", "控温", "电磁继电器", "继电器", "控制电路",
+        "NTC", "PTC", "热敏电阻", "压敏电阻", "光敏电阻", "传感器",
+        "发热体", "电热丝", "安全电流", "安全电压", "额定电流", "温度范围",
+        "多阶段", "多状态", "临界", "不等式", "分类讨论", "多解", "筛选", "黑箱", "非线性", "I-U", "U-I"
+    ]
+    return contains_any(text, high_cues)
+
+
+def is_simple_picture_or_context_easy_question(data: Dict[str, Any], features: Dict[str, Any]) -> bool:
+    """V6 放宽送分：极简单教材原型图示/漫画/生活背景中的单概念识别。"""
+    visible = visible_text_of(data)
+
+    # 明确不是送分的内容：规范作图、实验、电路/电磁应用、公式计算、复杂图像表格。
+    hard_block = [
+        "画出", "作出", "作图", "连接", "改线", "实验", "探究", "装置", "表格", "数据",
+        "电路", "电压表", "电流表", "滑动变阻器", "故障", "短路", "断路",
+        "螺线管", "磁感线", "安培定则", "平面镜成像作图", "光路图", "反射光", "折射光",
+        "求", "计算", "多少", "多大", "取值范围", "最大", "最小"
+    ]
+    if contains_any(visible, hard_block) or has_formula_calculation_intent(visible):
+        return False
+
+    # 多知识点长选项辨析仍至少基础，不放到送分。
+    if is_choice_like_question(visible) and len(visible) > 140 and features.get("knowledge_count") != "1个":
+        return False
+
+    # 允许非常典型的一步直答，包括简单图片/漫画背景。
+    easy_cues = [
+        "主要描述", "描述的是", "主要利用", "主要是", "主要为了", "相当于", "经历的物态变化",
+        "属于", "最小的是", "联系是通过", "传播是通过", "空间尺度", "单位", "命名",
+        "响度", "音调", "音色", "声速", "熔化", "凝固", "汽化", "液化", "升华", "凝华",
+        "惯性", "无线电波", "电磁波", "凸透镜", "硬度", "不可再生", "可再生", "扩散", "竖直向下"
+    ]
+
+    return (
+        contains_any(visible, easy_cues)
+        and features.get("step_count") == "1-2步"
+        and features.get("formula_count") == "0-1个"
+        and features.get("calculation_complexity") == "口算或直接判断"
+        and features.get("reasoning_chain") in ["直接套用", "简单因果推理"]
+        and features.get("knowledge_count") == "1个"
+        and features.get("knowledge_diff") == "低"
+        and features.get("state_count") == "单状态"
+        and features.get("constraint_count") == "无约束"
+        and features.get("variable_relation") == "无变量关系"
+        and features.get("experiment_requirement") == "无"
+        and features.get("graph_table_requirement") == "无"
+    )
+
+
+def is_pure_recognition_easy_question(data: Dict[str, Any], features: Dict[str, Any]) -> bool:
+    """V6：送分题既包括纯文字一眼识别，也包括极简单图示/生活背景单概念识别。"""
+    visible = visible_text_of(data)
+
+    # 先允许 V6 新增的简单图示/生活背景送分通道。
+    if is_simple_picture_or_context_easy_question(data, features):
+        return True
+
+    # 其余仍沿用严格送分口径。
+    if contains_any(visible, [
+        "画出", "作出", "作图", "示意图", "根据图", "由图", "如图", "图甲", "图乙",
+        "平面镜", "成像", "光路", "反射光", "折射", "磁感线", "螺线管", "安培定则",
+        "电路", "连接", "实验", "探究", "装置", "说明", "分析"
+    ]):
+        return False
+
+    if has_formula_calculation_intent(visible):
+        return False
+
+    if is_choice_like_question(visible) and len(visible) > 110:
+        return False
+
+    easy_cues = [
+        "单位", "物理学家", "首先", "命名", "属于", "哪种", "哪一个", "哪个", "特性", "方向是",
+        "不可再生", "可再生", "扩散", "凝固", "熔化", "汽化", "液化", "升华", "凝华",
+        "响度", "音调", "音色", "红绿蓝", "竖直向下"
+    ]
+
+    return (
+        contains_any(visible, easy_cues)
+        and features.get("step_count") == "1-2步"
+        and features.get("formula_count") == "0-1个"
+        and features.get("calculation_complexity") == "口算或直接判断"
+        and features.get("reasoning_chain") == "直接套用"
+        and features.get("knowledge_count") == "1个"
+        and features.get("knowledge_diff") == "低"
+        and features.get("state_count") == "单状态"
+        and features.get("constraint_count") == "无约束"
+        and features.get("variable_relation") == "无变量关系"
+        and features.get("experiment_requirement") == "无"
+        and features.get("graph_table_requirement") == "无"
+    )
+
+
+def is_mid_level_parallel_analysis(features: Dict[str, Any], data: Dict[str, Any]) -> bool:
+    """V6 回收中等保护：并列题只有强信号才保护到中等。
+    避免“选项长 + 多知识点”自动把较易题抬到中等。
+    """
+    visible = visible_text_of(data)
+    text = full_text_of(data)
+
+    if not is_parallel_choice_or_independent_points(data, features):
+        return False
+    if is_pure_recognition_easy_question(data, features):
+        return False
+
+    # 直接计算小问互相独立，不因小问数量多升中等。
+    if contains_any(visible, ["求", "计算"]) and features.get("calculation_complexity") in ["简单笔算", "口算或直接判断"]:
+        if features.get("subquestion_dependency") in ["多问但相互独立", "无多问"]:
+            return False
+
+    # 明确基础并列概念题黑名单：这些最高通常基础，不走中等保护。
+    simple_parallel_cues = [
+        "油条", "塑性形变", "热传递", "热量是", "不可再生能源", "可再生能源",
+        "大气压", "吸管喝水", "拔火罐", "水瓶琴", "声音的传播", "响度", "音调", "音色",
+        "验电器", "同种电荷", "异种电荷", "电动机", "发电机", "电热毯", "电水壶",
+        "功和功率", "起重机", "工人搬运", "水果电池", "发光二极管"
+    ]
+    if contains_any(text, simple_parallel_cues) and features.get("experiment_requirement") == "无":
+        return False
+
+    # 强实验流程/表格归纳：可保护中等。
+    strong_experiment = (
+        features.get("problem_structure") == "实验探究"
+        and features.get("experiment_requirement") in ["控制变量或故障分析", "方案设计或误差评价"]
+        and (
+            features.get("graph_table_requirement") in ["多组比较归纳", "图像反推或外推"]
+            or contains_any(text, ["实验步骤", "记录数据", "表格", "多次实验", "控制变量", "实验结论", "反射定律", "串联电路电压"])
+        )
+    )
+
+    # 真实连续运动/受力过程，且有明显易错辨析：可保护中等。
+    mechanics_terms = ["受力", "惯性", "力可以改变", "运动状态", "摩擦力", "重力", "机械能", "动能", "重力势能"]
+    strong_real_process = (
+        contains_any(text, ["钢卷尺", "纸飞机", "飞离", "滑行", "每隔相等时间", "运动过程", "斜坡", "水平面"])
+        and sum(1 for k in mechanics_terms if k in text) >= 3
+        and features.get("reasoning_chain") in ["简单因果推理", "多层因果推理"]
+    )
+
+    # 图像/空间方位/光路实验判断：可保护中等，但必须不是普通单一概念图。
+    strong_spatial_or_graph = (
+        features.get("information_carrier") in ["实验装置图", "图像或表格", "多图表综合"]
+        and contains_any(text, ["方位", "位置", "入射角", "反射角", "法线", "实验序号", "表格", "图像", "数据"])
+        and features.get("reasoning_chain") in ["多层因果推理", "逆向推理或临界分析"]
+    )
+
+    # 高易错多知识点辨析：允许中等，但要求选项较长且非普通概念匹配。
+    strong_error_parallel = (
+        features.get("knowledge_count") == "4个及以上"
+        and features.get("error_risk") in ["明显易错点", "高易错点"]
+        and features.get("reasoning_chain") == "多层因果推理"
+        and len(visible) > 180
+        and not contains_any(text, simple_parallel_cues)
+    )
+
+    return strong_experiment or strong_real_process or strong_spatial_or_graph or strong_error_parallel
+
+
+def is_common_medium_circuit_or_experiment(features: Dict[str, Any], data: Dict[str, Any]) -> bool:
+    """V6：常规中等保护只保护真正模型清楚的题；项目式/自动控制/复杂方案一律排除。"""
+    text = full_text_of(data)
+    problem = features.get("problem_structure")
+
+    if has_high_level_project_or_control_signal(data):
+        return False
+
+    hard_block_cues = [
+        "黑箱", "非线性", "I-U", "U-I", "多开关", "分类讨论", "不等式", "多解", "自主设计",
+        "缺表", "等效替代", "特殊方法", "表达式", "异常点", "偏离", "新猜想", "挑战赛", "改装",
+        "临界", "极值", "筛选", "可行", "方案", "项目", "自动控制", "继电器", "安全电流"
+    ]
+    if contains_any(text, hard_block_cues):
+        return False
+
+    circuit_medium = (
+        problem in ["电路综合", "跨模块综合"]
+        and contains_any(text, ["量程", "压敏", "热敏", "滑动变阻器", "电热水壶", "双挡", "低温挡", "高温挡", "图像", "图乙", "最大"])
+        and features.get("calculation_complexity") in ["简单笔算", "多公式联立"]
+        and features.get("reasoning_chain") in ["简单因果推理", "多层因果推理"]
+        and features.get("state_count") in ["单状态", "双状态", "多状态"]
+        and features.get("variable_relation") in ["无变量关系", "简单正反比", "图像函数关系"]
+    )
+
+    experiment_medium = (
+        problem == "实验探究"
+        and features.get("experiment_requirement") in ["控制变量或故障分析", "方案设计或误差评价"]
+        and contains_any(text, ["测量", "密度", "小灯泡", "电功率", "表格", "数据", "误差", "实验步骤", "电压表", "电流表"])
+        and features.get("calculation_complexity") in ["口算或直接判断", "简单笔算", "多公式联立"]
+        and features.get("state_count") in ["单状态", "双状态"]
+        and features.get("constraint_count") in ["无约束", "单一约束"]
+    )
+
+    return circuit_medium or experiment_medium
+
+
+def is_hidden_process_hard_case(features: Dict[str, Any], data: Dict[str, Any]) -> bool:
+    """V6：较难题补强，但必须命中较明确的半陌生/隐含/几何/过程顺序模式。"""
+    text = full_text_of(data)
+
+    patterns = [
+        ["空调", "线路", "载流量"],
+        ["教室", "加装", "空调"],
+        ["杠杆", "力臂", "角度"],
+        ["头颈", "杠杆"],
+        ["汲水", "玻璃管", "最佳组合"],
+        ["管口", "快速上提", "大气压"],
+        ["虹", "球形水珠", "法线"],
+        ["色散", "反射", "折射", "α"],
+        ["带出部分水", "仍然准确"],
+        ["餐盘", "保持水平", "受力"],
+        ["天坛", "回音壁", "第三个回声"],
+        ["电磁继电器", "热敏电阻", "自动控温"],
+        ["发热体", "安全电流", "温度范围"],
+    ]
+
+    hit_pattern = any(all(k in text for k in p) for p in patterns)
+    hard_reasoning = (
+        features.get("reasoning_chain") in ["多层因果推理", "逆向推理或临界分析"]
+        or features.get("subquestion_dependency") == "多问且层层递进"
+        or contains_any(text, ["最佳组合", "顺序", "几何", "力臂", "可行", "准确", "为什么", "原因", "筛选", "安全"])
+    )
+    return hit_pattern and hard_reasoning and not is_parallel_choice_or_independent_points(data, features)
+
+
+def is_project_or_innovation_final_case(features: Dict[str, Any], data: Dict[str, Any]) -> bool:
+    """项目式创新/自动控制/可行性验证压轴保护。"""
+    text = full_text_of(data)
+    stem = data.get("stem", "") or ""
+
+    project_signal = contains_any(stem + text, [
+        "项目", "挑战赛", "改装", "重新设计", "自制", "设计", "任务", "实践",
+        "自动控温", "自动控制", "电磁继电器", "热敏电阻", "NTC", "PTC", "发热体", "安全电流"
+    ])
+    validation_signal = contains_any(text, ["可行", "是否", "能否", "判断", "范围", "最大", "最小", "标注", "筛选", "安全", "边界", "温度范围"])
+    high_model_signal = (
+        features.get("experiment_requirement") == "方案设计或误差评价"
+        or features.get("constraint_count") == "多约束"
+        or features.get("variable_relation") in ["图像函数关系", "多变量耦合关系"]
+        or features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"]
+        or features.get("reasoning_chain") == "逆向推理或临界分析"
+        or features.get("graph_table_requirement") in ["多组比较归纳", "图像反推或外推"]
+    )
+    return project_signal and validation_signal and high_model_signal
+
+
+def should_downgrade_basic_to_easy(features: Dict[str, Any], data: Dict[str, Any]) -> bool:
+    if is_long_context_or_new_situation(data):
+        # 长情境原则上不送分，但若实际就是极短单概念题，前面函数会处理；这里保守不降。
+        return False
+    return is_pure_recognition_easy_question(data, features) or is_simple_picture_or_context_easy_question(data, features)
+
+
+def should_upgrade_easy_to_basic(features: Dict[str, Any], data: Dict[str, Any]) -> List[str]:
+    reasons = []
+    visible = visible_text_of(data)
+    text = full_text_of(data)
+
+    if is_pure_recognition_easy_question(data, features) or is_simple_picture_or_context_easy_question(data, features):
+        return reasons
+
+    if contains_any(visible, ["画出", "作出", "作图", "示意图"]):
+        reasons.append("涉及规范作图，至少基础题")
+    if contains_any(visible, ["平面镜", "成像", "磁感线", "螺线管", "安培定则", "光路", "电路", "连接"]):
+        reasons.append("涉及规范作图/电磁或电路规律应用，至少基础题")
+    if is_choice_like_question(visible) and len(visible) > 150 and features.get("knowledge_count") != "1个":
+        reasons.append("选择题存在多选项辨析，至少基础题")
+    if features.get("information_carrier") in ["电路图", "实验装置图", "多图表综合", "图像或表格"] and contains_any(visible, ["根据图", "由图", "读数", "表格", "电路", "实验"]):
+        reasons.append(f'信息载体为"{features.get("information_carrier")}"，需要识图或读图')
+    if features.get("experiment_requirement") != "无":
+        reasons.append("含有实验操作探究")
+    if features.get("problem_structure") == "直接计算" or has_formula_calculation_intent(visible):
+        reasons.append("需要公式代入或物理量计算，至少基础题")
+    if features.get("knowledge_count") != "1个" and not is_parallel_choice_or_independent_points(data, features):
+        reasons.append(f'知识点数量为"{features.get("knowledge_count")}"')
+    if features.get("state_count") != "单状态":
+        reasons.append(f'物理状态数量为"{features.get("state_count")}"')
+    if features.get("constraint_count") != "无约束":
+        reasons.append("存在物理约束条件")
+    if count_fill_blanks(text) >= 3 and not is_parallel_choice_or_independent_points(data, features):
+        reasons.append("多空填空题且存在综合关系，不宜判为送分题")
+
+    return reasons
+
+
+def should_upgrade_basic_to_medium(features: Dict[str, Any], data: Dict[str, Any]) -> List[str]:
+    reasons = []
+    text = full_text_of(data)
+    step = features.get("step_count")
+    state = features.get("state_count")
+    calc = features.get("calculation_complexity")
+    cross = features.get("cross_module")
+    problem = features.get("problem_structure")
+    variable = features.get("variable_relation")
+    experiment = features.get("experiment_requirement")
+    graph = features.get("graph_table_requirement")
+    formula = features.get("formula_count")
+    knowledge = features.get("knowledge_count")
+    reasoning = features.get("reasoning_chain")
+
+    if is_mid_level_parallel_analysis(features, data):
+        reasons.append("强易错/实验流程/真实连续过程辨析达到中等题，但不按拔高处理")
+        return reasons
+
+    if is_parallel_choice_or_independent_points(data, features):
+        return reasons
+
+    if step in ["6-8步", "9-12步", "12步以上"] and has_real_integration(features, data):
+        reasons.append(f'步骤数达"{step}"且存在真实综合')
+    if step == "3-5步" and knowledge in ["2-3个", "4个及以上"] and has_real_integration(features, data) and (
+        reasoning in ["多层因果推理", "逆向推理或临界分析"]
+        or problem in ["实验探究", "图像表格分析", "电路综合", "力学综合", "光学声学综合", "跨模块综合"]
+        or formula in ["2-3个", "4-6个", "7个以上"]
+    ):
+        reasons.append("3-5步连续推理且涉及常规模型转化，达到中等题")
+    if state in ["多状态", "连续变化或临界状态"]:
+        reasons.append(f'物理状态为"{state}"')
+    if state == "双状态" and has_real_integration(features, data) and (
+        calc in ["多公式联立", "复杂方程或范围计算", "简单笔算"]
+        or problem in ["电路综合", "力学综合", "跨模块综合"]
+        or variable in ["图像函数关系", "多变量耦合关系"]
+        or experiment in ["控制变量或故障分析", "方案设计或误差评价"]
+    ):
+        reasons.append("双状态且伴随真实物理建模")
+    if calc in ["多公式联立", "复杂方程或范围计算"]:
+        reasons.append(f'计算需要"{calc}"')
+    if cross == "跨模块综合" and has_real_integration(features, data):
+        reasons.append("跨模块且存在实质综合")
+    if graph in ["多组比较归纳", "图像反推或外推"]:
+        reasons.append("需要图表信息处理")
+
+    standard_experiment_medium_keywords = [
+        "电磁铁磁性强弱", "液体压强", "压强计", "平均速度", "滑动摩擦力", "摩擦力大小",
+        "杠杆平衡", "电流与电阻", "电流与电压", "重力与质量", "凸透镜成像", "熔化实验",
+        "沸腾实验", "比热容", "焦耳定律", "光的反射定律", "串联电路电压"
+    ]
+    if features.get("problem_structure") == "实验探究" and features.get("experiment_requirement") in ["控制变量或故障分析", "基础操作或读数"] and contains_any(text, standard_experiment_medium_keywords):
+        reasons.append("标准实验探究题，涉及控制变量或实验归纳，至少中等题")
+    return reasons
+
+
+def should_upgrade_medium_to_hard(features: Dict[str, Any], data: Dict[str, Any]) -> tuple:
+    stem = data.get("stem", "") or ""
+    text = full_text_of(data)
+
+    if is_project_or_innovation_final_case(features, data):
+        return True, ["项目式/创新设计题，存在可行性、边界或安全约束分析"]
+
+    if is_parallel_choice_or_independent_points(data, features) and not is_hidden_process_hard_case(features, data):
+        return False, ["并列知识点/独立选项，不按真正综合升拔高"]
+
+    if is_common_medium_circuit_or_experiment(features, data):
+        return False, ["常规电学/实验题，模型清楚，按中等保护"]
+
+    core, support = [], []
+    if features.get("step_count") in ["6-8步", "9-12步", "12步以上"]:
+        support.append("步骤数达到较难题要求")
+    if features.get("formula_count") in ["4-6个", "7个以上"]:
+        support.append("公式链较长")
+    if features.get("knowledge_count") == "4个及以上":
+        support.append("知识点数量较多")
+    if features.get("cross_module") == "跨模块综合":
+        support.append("跨章节综合")
+    if features.get("calculation_complexity") == "复杂方程或范围计算":
+        core.append("复杂方程或范围计算")
+    elif features.get("calculation_complexity") == "多公式联立" and features.get("formula_count") in ["2-3个", "4-6个", "7个以上"]:
+        core.append("需要方程联立或多公式联动")
+    if features.get("reasoning_chain") == "逆向推理或临界分析":
+        core.append("逆向推理或临界分析")
+    if features.get("state_count") in ["多状态", "连续变化或临界状态"]:
+        core.append("包含多状态或临界状态")
+    if features.get("state_count") == "双状态" and features.get("problem_structure") in ["电路综合", "力学综合", "跨模块综合"] and has_real_integration(features, data):
+        core.append("双状态综合模型")
+    if features.get("constraint_count") == "多约束":
+        core.append("多约束")
+    if features.get("variable_relation") == "多变量耦合关系":
+        core.append("多变量耦合")
+    if features.get("experiment_requirement") == "方案设计或误差评价":
+        core.append("方案设计或误差评价")
+    if features.get("graph_table_requirement") == "图像反推或外推":
+        core.append("图像反推或外推")
+    if contains_any(text, ["隐含", "临界", "极值", "取值范围", "比例", "差值", "方程组", "几何关系", "分类讨论", "不等式", "误差", "评价", "可行", "安全筛选"]):
+        core.append("存在隐含条件、范围极值、几何转化或评价要求")
+    if is_real_multi_object_modeling(features, data):
+        core.append("真正多对象建模")
+
+    force_hard = False
+    if is_hidden_process_hard_case(features, data):
+        core.append("半陌生情境中的隐含条件/过程顺序/几何转化")
+        force_hard = True
+    if len(stem) > 300 and features.get("experiment_requirement") in ["控制变量或故障分析", "方案设计或误差评价"] and features.get("graph_table_requirement") in ["多组比较归纳", "图像反推或外推"] and has_real_integration(features, data):
+        core.append("长实验题且需要实验分析与图表处理")
+        force_hard = True
+    if len(stem) > 300 and contains_any(stem, ["阅读", "材料", "装置", "项目", "实践", "挑战"]) and features.get("variable_relation") in ["图像函数关系", "多变量耦合关系"]:
+        core.append("长材料题且需要变量关系分析")
+        force_hard = True
+    if features.get("problem_structure") in ["光学声学综合", "图像表格分析", "跨模块综合"] and features.get("reasoning_chain") in ["多层因果推理", "逆向推理或临界分析"] and contains_any(stem, ["反推", "旋转", "移动", "变化", "距离变化", "光斑", "反射方向", "成像区域", "物距", "像距", "几何关系"]):
+        core.append("图像/几何/光路动态反推")
+        force_hard = True
+
+    triggers = core + support
+    return force_hard or (len(set(core)) >= 1 and len(set(triggers)) >= 2), triggers
+
+
+def should_downgrade_hard_to_medium(features: Dict[str, Any], data: Dict[str, Any]) -> bool:
+    """V6：拔高降中等必须非常谨慎，避免误伤较难/困难。"""
+    if is_project_or_innovation_final_case(features, data):
+        return False
+    if has_high_level_project_or_control_signal(data):
+        return False
+    if is_hidden_process_hard_case(features, data):
+        return False
+    if is_real_multi_object_modeling(features, data) and features.get("reasoning_chain") in ["多层因果推理", "逆向推理或临界分析"]:
+        return False
+    # 高阶特征出现两个及以上，不降。
+    high_count = 0
+    for cond in [
+        features.get("constraint_count") == "多约束",
+        features.get("state_count") in ["多状态", "连续变化或临界状态"],
+        features.get("variable_relation") == "多变量耦合关系",
+        features.get("calculation_complexity") == "复杂方程或范围计算",
+        features.get("reasoning_chain") == "逆向推理或临界分析",
+        features.get("graph_table_requirement") == "图像反推或外推",
+    ]:
+        if cond:
+            high_count += 1
+    if high_count >= 2:
+        return False
+    return is_common_medium_circuit_or_experiment(features, data)
+
+
+def should_upgrade_hard_to_final(features: Dict[str, Any], data: Dict[str, Any]) -> tuple:
+    if is_project_or_innovation_final_case(features, data):
+        return True, ["项目式创新/自动控制/方案可行性验证达到压轴特征"]
+    # 其余沿用 V5 逻辑核心。
+    ok_continuous, continuous_reasons = should_upgrade_continuous_buoyancy_to_final(features, data)
+    if ok_continuous:
+        return True, continuous_reasons
+    stem = data.get("stem", "") or ""
+    text = full_text_of(data)
+    if is_common_dynamic_circuit_not_final(features, data) and not has_high_level_project_or_control_signal(data):
+        return False, ["常规动态电路/传感器电路，未达到压轴复杂度"]
+    high, core = [], []
+    if features.get("step_count") in ["9-12步", "12步以上"]:
+        high.append("9步以上复杂推理")
+    if features.get("formula_count") in ["4-6个", "7个以上"]:
+        high.append("公式链较长")
+    if features.get("knowledge_count") == "4个及以上":
+        high.append("4个及以上知识点")
+    if features.get("cross_module") == "跨模块综合":
+        high.append("跨模块综合")
+    if features.get("calculation_complexity") == "复杂方程或范围计算":
+        core.append("复杂方程或范围计算")
+    if features.get("reasoning_chain") == "逆向推理或临界分析":
+        core.append("逆向推理或临界分析")
+    if features.get("state_count") in ["多状态", "连续变化或临界状态"]:
+        core.append(features.get("state_count"))
+    if features.get("constraint_count") == "多约束":
+        core.append("多约束")
+    if features.get("variable_relation") == "多变量耦合关系":
+        core.append("多变量耦合")
+    if features.get("graph_table_requirement") == "图像反推或外推":
+        core.append("图像反推或外推")
+    if features.get("experiment_requirement") == "方案设计或误差评价":
+        core.append("方案设计或误差评价")
+    if contains_any(text, ["不等式", "分类讨论", "多解", "筛选", "黑箱", "非线性", "I-U", "U-I", "多开关", "满偏", "自主设计", "可行性", "挑战赛", "改装", "创新"]):
+        core.append("分类讨论/创新设计/复杂筛选信号")
+    return len(set(core)) >= 3 and len(set(high + core)) >= 5, high + core
+
+
+def should_downgrade_final_to_hard(features: Dict[str, Any], data: Dict[str, Any]) -> bool:
+    if is_project_or_innovation_final_case(features, data):
+        return False
+    if has_high_level_project_or_control_signal(data) and features.get("constraint_count") == "多约束":
+        return False
+    # 非项目式常规动态电路仍可降。
+    if is_common_dynamic_circuit_not_final(features, data) and not has_high_level_project_or_control_signal(data):
+        return True
+    text = full_text_of(data)
+    if "密度计" in text and not contains_any(text, ["弹簧", "杠杆", "液面变化", "连续变化", "多状态", "极值", "范围", "分类讨论", "可行"]):
+        return True
+    keep_keywords = ["不等式", "分类讨论", "多解", "筛选", "黑箱", "非线性", "I-U", "U-I", "多开关", "满偏", "自主设计", "可行性", "创新"]
+    high_features = 0
+    if features.get("step_count") in ["9-12步", "12步以上"]:
+        high_features += 1
+    if features.get("formula_count") in ["4-6个", "7个以上"]:
+        high_features += 1
+    if features.get("knowledge_count") == "4个及以上":
+        high_features += 1
+    if features.get("calculation_complexity") == "复杂方程或范围计算":
+        high_features += 1
+    if features.get("reasoning_chain") == "逆向推理或临界分析":
+        high_features += 1
+    if features.get("state_count") in ["多状态", "连续变化或临界状态"]:
+        high_features += 1
+    if features.get("constraint_count") == "多约束":
+        high_features += 1
+    if features.get("variable_relation") == "多变量耦合关系":
+        high_features += 1
+    if features.get("graph_table_requirement") == "图像反推或外推":
+        high_features += 1
+    if contains_any(text, keep_keywords):
+        high_features += 1
+    return high_features < 3
+
+
 # -------------------------- 4. 构建网络调用 --------------------------
 def construct_question_content(data: Dict[str, Any]) -> str:
     """将数据记录拼装成标准的打标输入文本"""
