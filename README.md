@@ -1,47 +1,83 @@
-# 初中物理难度打标 Prompt 自动化测试工具
+# 初中物理难度打标评测工具
 
-该工具用于从 `physics_sampled_5000_per_difficulty.jsonl` 中自动抽取物理题目，调用大模型（使用 `初中物理难度打标提示词.txt` 作为系统提示词），从而快速直观地测试、验证 Prompt 的准确率和输出效果。
+本项目用于：读取题目 JSONL，调用服务器上的 OpenAI-compatible Responses API，输出模型难度评级，并与老师人工标签进行对比。
 
-## ⚙️ 快速使用步骤
+## 数据分层
 
-### 1. 安装依赖
-请确保系统已安装 Python 3，然后安装依赖库：
-```bash
-pip install -r requirements.txt
+```text
+data/
+├── labeled/                         老师人工标注数据（评测基准）
+│   ├── physics_difficulty_tiku_data_0714_1000.jsonl
+│   └── physics_teacher_labels_0714.csv
+├── physics_difficulty_tiku_data_v2.jsonl       历史评测输入
+├── physics_difficulty_tiku_rated_v2_results.jsonl  历史模型结果
+└── physics_sampled_5000_per_difficulty*.jsonl  大规模抽样题库
+
+outputs/
+└── model_runs/                      模型实验结果，不作为输入数据
+
+prompts/                             模型提示词
+src/                                 正式评级和渲染脚本
+tests/                               单题、视觉和对比实验脚本
+archive/                             历史脚本，仅供追溯
+docs/                                分档标准文档
 ```
 
-### 2. 配置 API Key
-将当前文件夹下的 `.env.example` 复制并重命名为 `.env`：
+重要字段区分：
+
+- 题目 JSONL 中的 `stem`、`options`、`analysis`、`sub_questions` 和图片 URL 是题目内容。
+- 老师真实标签来自 `data/labeled/physics_teacher_labels_0714.csv`：`ID` 对应 `question_id`，`难度` 是人工标签。
+- 模型结果中的 `difficulty_rating.difficulty_level` 是模型评级。
+- 不要使用题目 JSONL 中的 `difficulty` 字段作为最新老师标签；最新评测应以 CSV 为准。
+
+教师标签映射为：容易=送分题，较易=基础题，中等=中等题，较难=拔高题，困难=压轴题。
+
+## 配置
+
 ```bash
 cp .env.example .env
 ```
-然后编辑 `.env` 文件，填写您的模型提供商参数（如 API_KEY, BASE_URL 等）：
+
+`.env` 示例：
+
 ```ini
-API_KEY=your_real_api_key
-BASE_URL=https://api.deepseek.com/v1 # 或您的本地/其他服务商地址
-MODEL_NAME=deepseek-chat
-# 可选：仅在模型支持时配置，例如 doubao-2.0-mini 可尝试设为 0
-TEMPERATURE=0
+API_KEY=not-needed
+BASE_URL=http://172.22.0.35:4466/v1
+MODEL_NAME=doubao-seed-2.0-lite
+# 仅在模型实际支持时配置；留空表示不发送 temperature
+TEMPERATURE=
 ```
 
-### 3. 运行测试
+真实模型调用需要在服务器的 venv 中执行，本机只适合做静态检查。
 
-*   **测试任意难度的前 3 道题**：
-    ```bash
-    python test_prompt.py
-    ```
+## 评测命令
 
-*   **指定测试 4 档（拔高题）的 5 道题目**：
-    ```bash
-    python test_prompt.py --difficulty 4 --num 5
-    ```
+从最新老师标注题目抽取固定样本、禁用缓存并运行：
 
-*   **随机抽取 2 道 5 档（压轴题）的题目进行测试**：
-    ```bash
-    python test_prompt.py --difficulty 5 --num 2 --random
-    ```
+```bash
+source venv/bin/activate
+python src/physics_difficulty_rating_with_cache.py \
+  -i data/labeled/physics_difficulty_tiku_data_0714_1000.jsonl \
+  -o outputs/model_runs/lite_default_100.jsonl \
+  -e outputs/model_runs/lite_default_100_errors.jsonl \
+  -p prompts/初中物理难度打标提示词.txt \
+  -c 20 -n 100 --seed 20260714 --no-cache
+```
 
-## 📋 测试结果解读
-脚本运行后，控制台会输出：
-1.  题目的题干预览及大模型打标过程中返回的 JSON。
-2.  自动提取 JSON 中的 `difficulty_level` 并与原库中的 `difficulty` 真实标注进行横向对比，若一致则显示 `匹配成功 (PASS)`，若不一致则显示 `存在偏离 (FAIL)`，帮助您迅速排查打标偏差。
+参数说明：
+
+- `--seed` 固定抽样结果，便于重复实验；
+- `--no-cache` 不使用前缀缓存，适合稳定性对照；
+- `-c` 控制并发数，服务器出现 429 时应调低；
+- 输出结果中的 `difficulty_rating.difficulty_level_raw` 是模型原始评级，`difficulty_level` 是后处理后的评级，`postprocess_actions` 记录后处理动作。
+
+## 代码约束
+
+`src/physics_difficulty_rating_with_cache.py` 保持以下兼容性：
+
+- Responses API、缓存、并发、重试、断点续跑和 JSONL 输入输出；
+- 五档 `difficulty_level` 字符串；
+- 18 个 `features` 字段及其合法枚举；
+- `coarse_difficulty` 和四个 `reasoning` 字段。
+
+评级规则统一维护在物理 Prompt 和该脚本的单一后处理实现中，不再保留 V5/V6/V7 同名函数覆盖层。
