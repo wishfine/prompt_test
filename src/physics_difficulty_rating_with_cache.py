@@ -370,31 +370,12 @@ def is_textbook_easy_diagram_or_direct_fill(data: Dict[str, Any], features: Dict
 
 
 def should_downgrade_basic_to_easy(features: Dict[str, str], data: Dict[str, Any]) -> bool:
-    """送分只接受完整的低复杂度证据，避免把基础应用误降。"""
-    strict = {
-        "step_count": "1-2步",
-        "formula_count": "0-1个",
-        "calculation_complexity": "口算或直接判断",
-        "reasoning_chain": "直接套用",
-        "knowledge_count": "1个",
-        "knowledge_diff": "低",
-        "state_count": "单状态",
-        "constraint_count": "无约束",
-        "experiment_requirement": "无",
-        "graph_table_requirement": "无",
-    }
-    if any(features.get(field) != value for field, value in strict.items()):
-        return False
-    text = visible_text_of(data)
-    if has_formula_intent(text) or features.get("reality_question") == "是":
-        return False
-    if features.get("information_carrier") not in {"纯文字", "单图识别"}:
-        return False
-    if features.get("subquestion_dependency") != "无多问":
-        return False
-    if contains_any(text, ["完整", "画出", "作出", "连接", "受力", "电路", "实验", "探究"]):
-        return False
-    return True
+    """不以弱特征把模型的基础题自动降送分。
+
+    这类降档在 133 题回归中把“地理方位判断”等空间图示题误降为送分。
+    送分边界交给 Prompt 的真实语义判断；后处理只负责阻止明显错误升档。
+    """
+    return False
 
 
 def should_upgrade_easy_to_basic(features: Dict[str, str], data: Dict[str, Any]) -> List[str]:
@@ -402,9 +383,14 @@ def should_upgrade_easy_to_basic(features: Dict[str, str], data: Dict[str, Any])
     text = visible_text_of(data)
     if has_formula_intent(text): reasons.append("需要公式或物理量计算")
     if features.get("subquestion_dependency") == "多问且层层递进": reasons.append("多问构成递进推理链")
-    if contains_any(text, ["作图", "画出", "连接", "受力", "电路", "平面镜", "透镜", "螺线管", "实验"]): reasons.append("涉及规范作图、实验或模型分析")
-    if features.get("knowledge_count") != "1个": reasons.append("涉及多个知识点")
-    if features.get("reasoning_chain") != "直接套用": reasons.append("需要简单推理")
+    # 只识别明确的任务动作，不能因“透镜”“电路”等学科名词就否定送分。
+    if contains_any(text, ["画出", "作出", "作图", "连接完整", "连接电路", "实验步骤", "探究过程"]):
+        reasons.append("涉及规范作图、连接或实验过程")
+    if features.get("experiment_requirement") != "无": reasons.append("需要实验操作或分析")
+    if features.get("knowledge_count") != "1个" and features.get("reasoning_chain") != "直接套用":
+        reasons.append("多个知识点构成应用推理")
+    if features.get("reality_question") == "是" and features.get("reasoning_chain") != "直接套用":
+        reasons.append("生活情境需要物理映射")
     return reasons
 
 
@@ -420,21 +406,17 @@ def core_high_signals(features: Dict[str, str], data: Dict[str, Any]) -> List[st
     if features.get("calculation_complexity") == "复杂方程或范围计算": signals.append("复杂方程或范围计算")
     if features.get("variable_relation") == "多变量耦合关系": signals.append("多变量耦合")
     if features.get("subquestion_dependency") == "多问且层层递进": signals.append("多问层层递进")
-    if features.get("problem_structure") in ["力学综合", "电路综合", "跨模块综合"] and features.get("state_count") == "双状态": signals.append("双状态真实建模")
     return signals
 
 
 def strong_migration_signals(features: Dict[str, str], data: Dict[str, Any]) -> List[str]:
     """中等升拔高所需的强迁移信号；不用题干长度或装置名凑信号。"""
     signals: List[str] = []
-    if features.get("state_count") in ["多状态", "连续变化或临界状态"]: signals.append("多状态或临界变化")
     if features.get("cross_module") == "跨模块综合": signals.append("真实跨模块迁移")
     if features.get("reasoning_chain") == "逆向推理或临界分析": signals.append("逆向或临界推理")
-    if features.get("experiment_requirement") == "方案设计或误差评价": signals.append("方案设计或误差评价")
     if features.get("graph_table_requirement") == "图像反推或外推": signals.append("图像反推或外推")
     if features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"]: signals.append("多式联立或复杂计算")
     if features.get("variable_relation") == "多变量耦合关系": signals.append("多变量耦合")
-    if features.get("subquestion_dependency") == "多问且层层递进": signals.append("递进式推理链")
     return signals
 
 
@@ -464,13 +446,25 @@ def has_strong_project_validation(data: Dict[str, Any], features: Dict[str, str]
 def should_upgrade_basic_to_medium(features: Dict[str, str], data: Dict[str, Any]) -> List[str]:
     if is_parallel_choice_or_independent_points(data, features) and features.get("subquestion_dependency") != "多问且层层递进":
         return []
+    # 单图方向标注、知识结构补空、基础连接题等，即使模型把步骤写成 3-5 步，
+    # 也不能仅凭“知识点数 + 读图”升为中等。
+    direct_visual = (
+        features.get("information_carrier") == "单图识别"
+        and features.get("formula_count") == "0-1个"
+        and features.get("calculation_complexity") == "口算或直接判断"
+        and features.get("reasoning_chain") in ["直接套用", "简单因果推理"]
+        and features.get("experiment_requirement") == "无"
+        and features.get("graph_table_requirement") in ["无", "直接读数"]
+    )
+    if direct_visual:
+        return []
     strong: List[str] = []
     weak: List[str] = []
     if features.get("experiment_requirement") == "控制变量或故障分析": strong.append("控制变量或故障分析")
     if features.get("graph_table_requirement") == "多组比较归纳": strong.append("多组数据归纳")
     if features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"]: strong.append("多公式联立")
     if features.get("graph_table_requirement") == "图像反推或外推": strong.append("图像反推或外推")
-    if features.get("reasoning_chain") == "多层因果推理" and features.get("state_count") in ["双状态", "多状态", "连续变化或临界状态"]:
+    if features.get("reasoning_chain") == "多层因果推理" and features.get("state_count") in ["多状态", "连续变化或临界状态"]:
         strong.append("两个连续物理过程")
     if features.get("subquestion_dependency") == "多问且层层递进": strong.append("多问层层递进")
     if features.get("cross_module") == "跨模块综合": strong.append("真实跨模块综合")
@@ -480,7 +474,12 @@ def should_upgrade_basic_to_medium(features: Dict[str, str], data: Dict[str, Any
     if features.get("variable_relation") == "简单正反比": weak.append("简单正反比")
     if features.get("experiment_requirement") == "基础操作或读数": weak.append("基础实验操作或读数")
     if features.get("graph_table_requirement") == "直接读数": weak.append("简单图表读数")
-    return strong + weak if strong or len(weak) >= 2 else []
+    # 至少一个强信号，或两个弱信号且确有多层连续推理；弱特征本身不触发升档。
+    if strong:
+        return strong + weak
+    if len(weak) >= 2 and features.get("reasoning_chain") == "多层因果推理":
+        return weak
+    return []
 
 
 def should_downgrade_medium_to_basic(features: Dict[str, str], data: Dict[str, Any]) -> bool:
@@ -494,6 +493,7 @@ def should_upgrade_medium_to_hard(features: Dict[str, str], data: Dict[str, Any]
     strong = strong_migration_signals(features, data)
     step_count = features.get("step_count")
     if step_count == "3-5步":
+        # 3-5 步的“多状态/多约束”常见于常规控制电路；必须另有真正迁移信号。
         ok = len(set(signals)) >= 2 and bool(strong)
     elif step_count == "6-8步":
         ok = len(set(signals)) >= 1

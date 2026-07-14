@@ -84,6 +84,44 @@ class PhysicsPostprocessTests(unittest.TestCase):
         )
         self.assertEqual(output["difficulty_level"], "基础题")
 
+    def test_textbook_lens_recognition_is_not_upgraded_by_subject_word(self) -> None:
+        output = self.postprocess("送分题", "照相机镜头相当于什么透镜？")
+        self.assertEqual(output["difficulty_level"], "送分题")
+
+    def test_spatial_diagram_basic_is_not_automatically_downgraded(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "根据条形磁铁静止方向，在图中标出地理方位。",
+            information_carrier="单图识别",
+            reasoning_chain="简单因果推理",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_common_multistate_control_circuit_stays_medium(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "电热水壶主加热、保温和干烧保护的电路判断。",
+            step_count="3-5步",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            state_count="多状态",
+            constraint_count="多约束",
+            knowledge_count="2-3个",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_standard_experiment_design_at_three_to_five_steps_stays_medium(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "测量海螺壳密度，完成常规实验过程、方法交流与误差评价。",
+            step_count="3-5步",
+            problem_structure="实验探究",
+            subquestion_dependency="多问且层层递进",
+            experiment_requirement="方案设计或误差评价",
+            knowledge_count="2-3个",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
     def test_glass_tube_process_can_remain_hard(self) -> None:
         output = self.postprocess(
             "拔高题",
