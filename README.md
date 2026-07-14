@@ -27,7 +27,8 @@ docs/                                分档标准文档
 
 - 题目 JSONL 中的 `stem`、`options`、`analysis`、`sub_questions` 和图片 URL 是题目内容。
 - 老师真实标签来自 `data/labeled/physics_teacher_labels_0714.csv`：`ID` 对应 `question_id`，`难度` 是人工标签。
-- 模型结果中的 `difficulty_rating.difficulty_level` 是模型评级。
+- 模型结果中的 `difficulty_rating_raw` 是模型原始 JSON；`difficulty_rating.difficulty_level` 是后处理后的评级。
+- 输出顶层的 `difficulty_level_raw`、`postprocess_actions` 用于审计；输入原 `difficulty` 会被改名为 `source_difficulty_untrusted`。
 - 不要使用题目 JSONL 中的 `difficulty` 字段作为最新老师标签；最新评测应以 CSV 为准。
 
 教师标签映射为：容易=送分题，较易=基础题，中等=中等题，较难=拔高题，困难=压轴题。
@@ -69,7 +70,9 @@ python src/physics_difficulty_rating_with_cache.py \
 - `--seed` 固定抽样结果，便于重复实验；
 - `--no-cache` 不使用前缀缓存，适合稳定性对照；
 - `-c` 控制并发数，服务器出现 429 时应调低；
-- 输出结果中的 `difficulty_rating.difficulty_level_raw` 是模型原始评级，`difficulty_level` 是后处理后的评级，`postprocess_actions` 记录后处理动作。
+- 输出顶层 `difficulty_level_raw` 是模型原始评级，`difficulty_rating.difficulty_level` 是后处理后的评级，`postprocess_actions` 记录后处理动作。
+
+完整的数据口径、few-shot 表、后处理规则和 200 题分层回归命令见 [PHYSICS_RATING_REVISION.md](PHYSICS_RATING_REVISION.md)。
 
 ## 代码约束
 

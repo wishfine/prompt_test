@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import hashlib
 import json
 import os
@@ -368,31 +369,39 @@ def is_textbook_easy_diagram_or_direct_fill(data: Dict[str, Any], features: Dict
     return features.get("knowledge_count") == "1个" and features.get("reasoning_chain") == "直接套用" and features.get("experiment_requirement") == "无" and features.get("constraint_count") == "无约束"
 
 
-def is_pure_recognition_easy_question(data: Dict[str, Any], features: Dict[str, str]) -> bool:
-    text = visible_text_of(data)
-    if is_textbook_easy_diagram_or_direct_fill(data, features):
-        return True
-    if has_formula_intent(text) or count_subquestions(data) > 1:
-        return False
-    if features.get("knowledge_count") != "1个" or features.get("state_count") != "单状态" or features.get("constraint_count") != "无约束":
-        return False
-    blocked = ["根据图", "如图", "实验", "探究", "电路", "受力", "作图", "画出", "下列说法", "解释", "分析", "为什么"]
-    return not contains_any(text, blocked) and features.get("reasoning_chain") == "直接套用"
-
-
-def is_simple_picture_or_context_easy_question(data: Dict[str, Any], features: Dict[str, str]) -> bool:
-    return is_textbook_easy_diagram_or_direct_fill(data, features) and not contains_any(visible_text_of(data), ["作图", "连接", "分析", "解释"])
-
-
 def should_downgrade_basic_to_easy(features: Dict[str, str], data: Dict[str, Any]) -> bool:
-    return is_pure_recognition_easy_question(data, features) or is_simple_picture_or_context_easy_question(data, features)
+    """送分只接受完整的低复杂度证据，避免把基础应用误降。"""
+    strict = {
+        "step_count": "1-2步",
+        "formula_count": "0-1个",
+        "calculation_complexity": "口算或直接判断",
+        "reasoning_chain": "直接套用",
+        "knowledge_count": "1个",
+        "knowledge_diff": "低",
+        "state_count": "单状态",
+        "constraint_count": "无约束",
+        "experiment_requirement": "无",
+        "graph_table_requirement": "无",
+    }
+    if any(features.get(field) != value for field, value in strict.items()):
+        return False
+    text = visible_text_of(data)
+    if has_formula_intent(text) or features.get("reality_question") == "是":
+        return False
+    if features.get("information_carrier") not in {"纯文字", "单图识别"}:
+        return False
+    if features.get("subquestion_dependency") != "无多问":
+        return False
+    if contains_any(text, ["完整", "画出", "作出", "连接", "受力", "电路", "实验", "探究"]):
+        return False
+    return True
 
 
 def should_upgrade_easy_to_basic(features: Dict[str, str], data: Dict[str, Any]) -> List[str]:
     reasons: List[str] = []
     text = visible_text_of(data)
     if has_formula_intent(text): reasons.append("需要公式或物理量计算")
-    if count_subquestions(data) > 1: reasons.append("包含多个小问")
+    if features.get("subquestion_dependency") == "多问且层层递进": reasons.append("多问构成递进推理链")
     if contains_any(text, ["作图", "画出", "连接", "受力", "电路", "平面镜", "透镜", "螺线管", "实验"]): reasons.append("涉及规范作图、实验或模型分析")
     if features.get("knowledge_count") != "1个": reasons.append("涉及多个知识点")
     if features.get("reasoning_chain") != "直接套用": reasons.append("需要简单推理")
@@ -415,15 +424,30 @@ def core_high_signals(features: Dict[str, str], data: Dict[str, Any]) -> List[st
     return signals
 
 
+def strong_migration_signals(features: Dict[str, str], data: Dict[str, Any]) -> List[str]:
+    """中等升拔高所需的强迁移信号；不用题干长度或装置名凑信号。"""
+    signals: List[str] = []
+    if features.get("state_count") in ["多状态", "连续变化或临界状态"]: signals.append("多状态或临界变化")
+    if features.get("cross_module") == "跨模块综合": signals.append("真实跨模块迁移")
+    if features.get("reasoning_chain") == "逆向推理或临界分析": signals.append("逆向或临界推理")
+    if features.get("experiment_requirement") == "方案设计或误差评价": signals.append("方案设计或误差评价")
+    if features.get("graph_table_requirement") == "图像反推或外推": signals.append("图像反推或外推")
+    if features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"]: signals.append("多式联立或复杂计算")
+    if features.get("variable_relation") == "多变量耦合关系": signals.append("多变量耦合")
+    if features.get("subquestion_dependency") == "多问且层层递进": signals.append("递进式推理链")
+    return signals
+
+
 def strong_final_signals(data: Dict[str, Any], features: Dict[str, str]) -> List[str]:
     text = full_text_of(data)
     signals: List[str] = []
-    if contains_any(text, ["分类讨论", "多解", "筛选有效解"]): signals.append("分类讨论/多解筛选")
-    if contains_any(text, ["不等式", "取值范围", "边界覆盖"]): signals.append("不等式/边界范围")
-    if contains_any(text, ["极值", "最大值和最小值", "临界值"]): signals.append("临界极值")
-    if features.get("experiment_requirement") == "方案设计或误差评价" and contains_any(text, ["可行性", "方案比较", "改进方案", "验证范围"]): signals.append("开放方案或可行性验证")
+    if contains_any(text, ["分类讨论", "多解", "筛选有效解", "有效解"]): signals.append("分类讨论/多解筛选")
+    if "不等式" in text: signals.append("不等式")
+    if contains_any(text, ["边界覆盖", "边界条件", "可行性验证", "可行性"]): signals.append("边界覆盖或可行性验证")
+    if "极值" in text or (features.get("reasoning_chain") == "逆向推理或临界分析" and features.get("constraint_count") == "多约束"):
+        signals.append("临界极值或物理条件筛选")
+    if features.get("experiment_requirement") == "方案设计或误差评价" and contains_any(text, ["方案比较", "标尺", "量程设计"]): signals.append("开放设计的方案比较/量程设计")
     if features.get("variable_relation") == "多变量耦合关系" and features.get("calculation_complexity") == "复杂方程或范围计算": signals.append("复杂多变量耦合")
-    if features.get("reasoning_chain") == "逆向推理或临界分析" and features.get("constraint_count") == "多约束": signals.append("物理条件筛选有效解")
     return signals
 
 
@@ -433,19 +457,30 @@ def is_project_or_control_case(data: Dict[str, Any]) -> bool:
 
 def has_strong_project_validation(data: Dict[str, Any], features: Dict[str, str]) -> bool:
     text = full_text_of(data)
-    return bool(strong_final_signals(data, features)) and features.get("experiment_requirement") == "方案设计或误差评价"
+    allowed = ["可行性", "边界覆盖", "分类讨论", "多解", "不等式", "方案比较", "标尺", "量程设计", "筛选有效解", "有效解"]
+    return contains_any(text, allowed)
 
 
 def should_upgrade_basic_to_medium(features: Dict[str, str], data: Dict[str, Any]) -> List[str]:
-    if is_parallel_choice_or_independent_points(data, features) and features.get("reasoning_chain") == "直接套用":
+    if is_parallel_choice_or_independent_points(data, features) and features.get("subquestion_dependency") != "多问且层层递进":
         return []
-    reasons: List[str] = []
-    if features.get("step_count") in ["3-5步", "6-8步"]: reasons.append("有效推理达到中等区间")
-    if features.get("knowledge_count") in ["2-3个", "4个及以上"] and features.get("reasoning_chain") != "直接套用": reasons.append("存在关联知识点推理")
-    if features.get("state_count") != "单状态": reasons.append("存在状态变化")
-    if features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"]: reasons.append("需要多步计算")
-    if features.get("experiment_requirement") != "无" or features.get("graph_table_requirement") in ["多组比较归纳", "图像反推或外推"]: reasons.append("需要实验或图表分析")
-    return reasons
+    strong: List[str] = []
+    weak: List[str] = []
+    if features.get("experiment_requirement") == "控制变量或故障分析": strong.append("控制变量或故障分析")
+    if features.get("graph_table_requirement") == "多组比较归纳": strong.append("多组数据归纳")
+    if features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"]: strong.append("多公式联立")
+    if features.get("graph_table_requirement") == "图像反推或外推": strong.append("图像反推或外推")
+    if features.get("reasoning_chain") == "多层因果推理" and features.get("state_count") in ["双状态", "多状态", "连续变化或临界状态"]:
+        strong.append("两个连续物理过程")
+    if features.get("subquestion_dependency") == "多问且层层递进": strong.append("多问层层递进")
+    if features.get("cross_module") == "跨模块综合": strong.append("真实跨模块综合")
+    if features.get("step_count") == "3-5步": weak.append("3-5步")
+    if features.get("knowledge_count") == "2-3个": weak.append("2-3个关联知识点")
+    if features.get("state_count") == "双状态": weak.append("双状态")
+    if features.get("variable_relation") == "简单正反比": weak.append("简单正反比")
+    if features.get("experiment_requirement") == "基础操作或读数": weak.append("基础实验操作或读数")
+    if features.get("graph_table_requirement") == "直接读数": weak.append("简单图表读数")
+    return strong + weak if strong or len(weak) >= 2 else []
 
 
 def should_downgrade_medium_to_basic(features: Dict[str, str], data: Dict[str, Any]) -> bool:
@@ -456,36 +491,55 @@ def should_downgrade_medium_to_basic(features: Dict[str, str], data: Dict[str, A
 
 def should_upgrade_medium_to_hard(features: Dict[str, str], data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     signals = core_high_signals(features, data)
-    # 3-5 步可能覆盖教师的 5 步，但必须至少有两个真实核心信号。
-    if features.get("step_count") == "3-5步":
-        ok = len(set(signals)) >= 2
+    strong = strong_migration_signals(features, data)
+    step_count = features.get("step_count")
+    if step_count == "3-5步":
+        ok = len(set(signals)) >= 2 and bool(strong)
+    elif step_count == "6-8步":
+        ok = len(set(signals)) >= 1
     else:
         ok = len(set(signals)) >= 2
     if is_parallel_choice_or_independent_points(data, features) and features.get("subquestion_dependency") != "多问且层层递进":
         ok = False
-    return ok, signals
+    return ok, signals + strong
 
 
 def should_downgrade_hard_to_medium(features: Dict[str, str], data: Dict[str, Any]) -> bool:
     signals = core_high_signals(features, data)
-    return len(signals) < 2 and features.get("step_count") in ["3-5步", "6-8步"] and not has_strong_project_validation(data, features)
+    if features.get("step_count") == "1-2步":
+        return len(signals) == 0
+    if features.get("step_count") == "3-5步":
+        return len(signals) == 0 and not strong_migration_signals(features, data)
+    return False
 
 
 def should_upgrade_hard_to_final(features: Dict[str, str], data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     signals = core_high_signals(features, data)
     strong = strong_final_signals(data, features)
-    # 6-8 步只算弱步骤信号，必须同时有至少 3 个核心信号和 1 个强压轴信号。
-    step_candidate = features.get("step_count") in ["6-8步", "9-12步", "12步以上"]
-    if not step_candidate or len(set(signals)) < 3 or not strong:
+    step_count = features.get("step_count")
+    if step_count not in ["6-8步", "9-12步", "12步以上"] or len(set(signals)) < 3 or not strong:
         return False, signals + strong
-    if is_project_or_control_case(data) and not has_strong_project_validation(data, features):
+    if is_project_or_control_case(data):
+        high_model_count = len(set(signals))
+        complex_or_critical = features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"] or features.get("reasoning_chain") == "逆向推理或临界分析" or step_count in ["6-8步", "9-12步", "12步以上"]
+        if not (has_strong_project_validation(data, features) and high_model_count >= 2 and complex_or_critical):
+            return False, signals + strong
+    if is_parallel_choice_or_independent_points(data, features) and features.get("subquestion_dependency") != "多问且层层递进":
         return False, signals + strong
     return True, signals + strong
 
 
 def should_downgrade_final_to_hard(features: Dict[str, str], data: Dict[str, Any]) -> bool:
-    ok, _ = should_upgrade_hard_to_final(features, data)
-    return not ok
+    """“不够升压轴”不等于“原判压轴必降”，独立使用降档证据。"""
+    signal_count = len(set(core_high_signals(features, data)))
+    has_strong = bool(strong_final_signals(data, features))
+    step_count = features.get("step_count")
+    if step_count in ["1-2步", "3-5步"]:
+        return signal_count < 3 and not has_strong
+    if step_count == "6-8步":
+        return signal_count < 2 and not has_strong
+    # 9 步以上原则上尊重模型原判，除非上游特征明显自相矛盾；规范化后不猜测矛盾。
+    return False
 
 
 def sync_coarse_difficulty(result: Dict[str, Any]) -> None:
@@ -558,6 +612,20 @@ def postprocess_physics_difficulty(rating_result: Dict[str, Any], data: Dict[str
 
 
 # -------------------------- Input / API / output --------------------------
+def sanitize_question_data(data: Dict[str, Any]) -> Dict[str, Any]:
+    """隔离历史 JSONL 的 difficulty，确保它不进入模型、规则或评估流程。"""
+    return {key: value for key, value in data.items() if key != "difficulty"}
+
+
+def make_output_base(data: Dict[str, Any]) -> Dict[str, Any]:
+    """保留来源字段但显式标记为不可信，避免下游误作教师真值。"""
+    output = dict(data)
+    source_difficulty = output.pop("difficulty", None)
+    if source_difficulty is not None:
+        output["source_difficulty_untrusted"] = source_difficulty
+    return output
+
+
 def construct_question_content(data: Dict[str, Any]) -> str:
     parts: List[str] = []
     for label, key in [("题干", "stem"), ("选项", "options"), ("解析", "analysis")]:
@@ -651,18 +719,29 @@ async def append_jsonl(path: str, data: Dict[str, Any]) -> None:
 
 async def process_single_question(data: Dict[str, Any], session: aiohttp.ClientSession, semaphore: Semaphore, output_path: str, error_path: str, retries: int, timeout_sec: int) -> None:
     async with semaphore:
+        safe_data = sanitize_question_data(data)
         try:
-            result, elapsed, prompt_tokens, completion_tokens, total_tokens = await call_model_with_cache(construct_question_content(data), session, retries, timeout_sec)
-            result = postprocess_physics_difficulty(result, data)
-            output = dict(data)
-            output.update({"difficulty_rating": result, "api_time_use": round(elapsed, 2), "api_prompt_tokens": prompt_tokens, "api_completion_tokens": completion_tokens, "api_total_tokens": total_tokens})
+            result, elapsed, prompt_tokens, completion_tokens, total_tokens = await call_model_with_cache(construct_question_content(safe_data), session, retries, timeout_sec)
+            raw_result = copy.deepcopy(result)
+            result = postprocess_physics_difficulty(result, safe_data)
+            output = make_output_base(data)
+            output.update({
+                "difficulty_rating_raw": raw_result,
+                "difficulty_level_raw": raw_result.get("difficulty_level") if isinstance(raw_result, dict) else None,
+                "postprocess_actions": result.get("postprocess_actions", []) if isinstance(result, dict) else [],
+                "difficulty_rating": result,
+                "api_time_use": round(elapsed, 2),
+                "api_prompt_tokens": prompt_tokens,
+                "api_completion_tokens": completion_tokens,
+                "api_total_tokens": total_tokens,
+            })
             if result.get("difficulty_level"):
                 await append_jsonl(output_path, output)
             else:
                 output["rating_error"] = "模型返回数据为空或格式错误"
                 await append_jsonl(error_path, output)
         except Exception as exc:
-            output = dict(data)
+            output = make_output_base(data)
             output["rating_error"] = str(exc)
             await append_jsonl(error_path, output)
 
