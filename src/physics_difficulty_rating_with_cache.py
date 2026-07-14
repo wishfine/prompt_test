@@ -47,6 +47,7 @@ CACHE_EXPIRE_SECONDS = CACHE_EXPIRE_DAYS * 24 * 3600
 DIFFICULTY_RATING_PROMPT_PREFIX = ""
 DIFFICULTY_RATING_PROMPT_SUFFIX = ""
 CACHE_FILE_PATH = "physics_prompt_cache.json"
+USE_CACHE = True
 
 # 难度数值映射
 LEVEL_MAP = {
@@ -3494,20 +3495,26 @@ async def call_model_with_cache(
     timeout_sec: int
 ) -> tuple:
     """获取缓存并执行 API 接口调用"""
-    response_id = await get_or_create_cache(session, retries, timeout_sec)
-    if not response_id:
-        print("警告: 无法获取有效缓存 ID，终止单题请求")
-        return {}, 0.0, 0, 0, 0
+    response_id = None
+    if USE_CACHE:
+        response_id = await get_or_create_cache(session, retries, timeout_sec)
+        if not response_id:
+            print("警告: 无法获取有效缓存 ID，终止单题请求")
+            return {}, 0.0, 0, 0, 0
 
     dynamic_content = f"{question_content}{DIFFICULTY_RATING_PROMPT_SUFFIX}"
     
     for retry in range(retries):
         payload = {
             "model": MODEL_NAME,
-            "previous_response_id": response_id,
-            "input": [{"role": "user", "content": dynamic_content}],
+            "input": [{
+                "role": "user",
+                "content": dynamic_content if response_id else f"{DIFFICULTY_RATING_PROMPT_PREFIX}\n\n{dynamic_content}",
+            }],
             "thinking": {"type": "disabled"}
         }
+        if response_id:
+            payload["previous_response_id"] = response_id
         if TEMPERATURE is not None:
             payload["temperature"] = TEMPERATURE
 
@@ -3552,7 +3559,7 @@ async def call_model_with_cache(
                     print(f"API请求失败 (状态码: {response.status}): {error_text[:200]}")
 
                     # 缓存丢失错误 -> 重建缓存
-                    if "InvalidParameter.PreviousResponseNotFound" in error_text:
+                    if USE_CACHE and "InvalidParameter.PreviousResponseNotFound" in error_text:
                         print("检测到服务器缓存丢失，正在重建缓存...")
                         new_response_id = await create_prefix_cache(session, retries, timeout_sec)
                         if not new_response_id:
@@ -3584,10 +3591,11 @@ async def call_model_with_cache(
             print(f"运行过程中请求异常: {e}")
             if retry == retries - 1:
                 return {}, 0.0, 0, 0, 0
-            print("尝试重新建构缓存后再次请求...")
-            new_response_id = await create_prefix_cache(session, retries, timeout_sec)
-            if new_response_id:
-                response_id = new_response_id
+            if USE_CACHE:
+                print("尝试重新建构缓存后再次请求...")
+                new_response_id = await create_prefix_cache(session, retries, timeout_sec)
+                if new_response_id:
+                    response_id = new_response_id
             await asyncio.sleep(1)
             continue
 
@@ -3674,6 +3682,7 @@ def get_processed_question_ids(output_path: str) -> set:
 
 # -------------------------- 6. 主执行流 --------------------------
 async def main_batch_run():
+    global USE_CACHE
     parser = argparse.ArgumentParser(description="初中物理难度评级多线程并发批量打标脚本 (带 Cache 优化)")
     parser.add_argument("-p", "--prompt", type=str, default="../prompts/初中物理难度打标提示词.txt",
                         help="物理打标提示词文件路径")
@@ -3691,8 +3700,18 @@ async def main_batch_run():
                         help="失败最大重试次数，默认 3")
     parser.add_argument("-n", "--num", type=int, default=None,
                         help="测试打标的限制数量（留空表示全部打标）")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="固定随机抽样/打乱种子；指定后可重复抽到同一批题目")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="不使用前缀缓存，每次请求发送完整提示词")
     
     args = parser.parse_args()
+    USE_CACHE = not args.no_cache
+    if args.seed is not None:
+        random.seed(args.seed)
+        print(f"固定随机种子: {args.seed}")
+    if not USE_CACHE:
+        print("已禁用前缀缓存：每次请求将发送完整提示词")
 
     # 1. 动态加载并分配提示词缓存
     load_prompt_config(args.prompt)
@@ -3740,7 +3759,8 @@ async def main_batch_run():
     connector = aiohttp.TCPConnector(limit=args.concurrency * 2)
     async with aiohttp.ClientSession(connector=connector) as session:
         # 获取/新建前缀缓存
-        await get_or_create_cache(session, args.retries, args.timeout)
+        if USE_CACHE:
+            await get_or_create_cache(session, args.retries, args.timeout)
         
         tasks = []
         for data in to_process:
