@@ -20,6 +20,8 @@ cp .env.example .env
 API_KEY=your_real_api_key
 BASE_URL=https://api.deepseek.com/v1 # 或您的本地/其他服务商地址
 MODEL_NAME=deepseek-chat
+# 可选：仅在模型支持时配置，例如 doubao-2.0-mini 可尝试设为 0
+TEMPERATURE=0
 ```
 
 ### 3. 运行测试

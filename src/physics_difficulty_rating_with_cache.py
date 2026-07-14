@@ -31,6 +31,8 @@ BASE_URL = os.getenv("BASE_URL", "http://172.22.0.35:4466/v1")
 if not BASE_URL.endswith("/"):
     BASE_URL += "/"
 MODEL_NAME = os.getenv("MODEL_NAME", "doubao-seed-2.0-lite")
+_temperature_raw = os.getenv("TEMPERATURE", "").strip()
+TEMPERATURE = float(_temperature_raw) if _temperature_raw else None
 
 # 全局锁
 FILE_LOCK = Lock()
@@ -127,7 +129,7 @@ def is_cache_valid(cache_entry: Dict[str, Any], current_time: int) -> bool:
         return False
     expected_hash = compute_text_hash(DIFFICULTY_RATING_PROMPT_PREFIX)
     actual_hash = cache_entry.get('prefix_hash', '')
-    return expected_hash == actual_hash
+    return expected_hash == actual_hash and cache_entry.get('model_name') == MODEL_NAME
 
 async def get_valid_cache() -> Optional[Dict[str, Any]]:
     """获取缓存"""
@@ -145,6 +147,7 @@ async def set_cache(response_id: str, expire_at: int) -> None:
         'response_id': response_id,
         'expire_at': expire_at,
         'prefix_hash': compute_text_hash(DIFFICULTY_RATING_PROMPT_PREFIX),
+        'model_name': MODEL_NAME,
         'created_at': int(time.time())
     }
     cache_data['prompt_prefix_cache'] = cache_entry
@@ -3505,6 +3508,8 @@ async def call_model_with_cache(
             "input": [{"role": "user", "content": dynamic_content}],
             "thinking": {"type": "disabled"}
         }
+        if TEMPERATURE is not None:
+            payload["temperature"] = TEMPERATURE
 
         t1 = time.time()
         try:
