@@ -1286,6 +1286,11 @@ def postprocess_v7_stable(
         and features.get("cross_module") == "同一模块内部"
         and features.get("experiment_requirement") == "无"
         and features.get("graph_table_requirement") == "无"
+        # 实测中这条宽泛降档会误伤高密度概念辨析。只有单知识点、
+        # 直接或简单因果且低易错的概念题，才保留保护性降档。
+        and features.get("knowledge_count") == "1个"
+        and features.get("reasoning_chain") in ["直接套用", "简单因果推理"]
+        and features.get("error_risk") in ["无明显易错点", "轻微易错点"]
         # 六个以上的同概念高密度辨析，可能在考充分/必要条件和反例，
         # 不再当作普通四选一概念题保护性降档。
         and option_count < 6

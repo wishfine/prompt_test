@@ -59,20 +59,32 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertRegex(prefix, r"完整受力图、凸透镜光线作图[^。]{0,80}至少基础题")
         self.assertRegex(prefix, r"跨不同知识点[^。]{0,100}至少基础题")
 
-    def test_production_prompt_uses_empirical_task_structure_rubric(self) -> None:
+    def test_production_prompt_uses_five_dimension_anchor_with_task_structure_check(self) -> None:
         prefix = self.load_prefix()
-        self.assertNotIn("教师五维定档主标准", prefix)
+        self.assertIn("教师五维定档主标准", prefix)
         self.assertIn("真实解题任务结构", prefix)
         for dimension in ["直接识别", "显性应用", "常规分析", "决定性转换", "全链耦合"]:
             self.assertIn(dimension, prefix)
         self.assertIn("步骤数不是档位门槛", prefix)
+
+    def test_production_prompt_does_not_treat_choice_count_or_simple_application_as_easy(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("四个选项本身既不升档也不降档", prefix)
+        self.assertIn("需要把生活情境映射到物理规律", prefix)
+        self.assertNotIn("四个短选项或一步因果；只要", prefix)
+        self.assertNotIn("一步生活原型对应，不必然排除送分", prefix)
+
+    def test_production_prompt_allows_single_question_internal_chain_to_be_final(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("不以存在多个小问或前问结果复用为必要条件", prefix)
+        self.assertIn("单个设问内部", prefix)
 
     def test_production_prompt_contains_sample_derived_boundary_corrections(self) -> None:
         prefix = self.load_prefix()
         self.assertIn("四个选项不会自动排除送分题", prefix)
         self.assertIn("高密度概念辨析", prefix)
         self.assertIn("一个决定性转换", prefix)
-        self.assertIn("整题的完整递进链", prefix)
+        self.assertIn("整题的完整推理链", prefix)
 
     def test_production_prompt_has_no_unavailable_score_rate_variable(self) -> None:
         prefix = self.load_prefix()

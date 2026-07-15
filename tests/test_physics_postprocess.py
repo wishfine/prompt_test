@@ -411,6 +411,33 @@ class V7StablePostprocessTests(unittest.TestCase):
         self.assertEqual(output["difficulty_level_raw"], "中等题")
         self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_medium_to_basic_low_structure")
 
+    def test_four_option_multilayer_conceptual_medium_is_not_downgraded(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="多层因果推理",
+            problem_structure="概念判断",
+            subquestion_dependency="无多问",
+            knowledge_count="2-3个",
+            state_count="单状态",
+            constraint_count="无约束",
+            cross_module="同一模块内部",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+            error_risk="明显易错点",
+        )
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {
+                "question_id": "v7-stable-four-option-multilayer",
+                "stem": "围绕同一物理过程，用四个选项联合辨析多个易错规律。",
+                "options": [f"说法{i}" for i in range(4)],
+            },
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
     def test_high_density_concept_discrimination_stays_medium(self) -> None:
         raw = result(
             "中等题",
