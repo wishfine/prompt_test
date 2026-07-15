@@ -42,6 +42,9 @@ class PhysicsPostprocessTests(unittest.TestCase):
     def postprocess(self, level: str, stem: str, **feature_values: str) -> dict:
         return rating.postprocess_physics_difficulty(result(level, **feature_values), {"question_id": "test", "stem": stem})
 
+    def test_v7_stable_profile_is_available(self) -> None:
+        self.assertIn("v7_stable", rating.VALID_RATING_PROFILES)
+
     def test_direct_single_concept_stays_easy(self) -> None:
         output = self.postprocess("送分题", "声音的音调由什么决定？")
         self.assertEqual(output["difficulty_level"], "送分题")
@@ -338,6 +341,178 @@ class V7CompatPostprocessTests(unittest.TestCase):
         self.assertEqual(output["difficulty_level"], "压轴题")
         self.assertEqual(output["difficulty_level_raw"], "拔高题")
         self.assertTrue(output["postprocess_actions"])
+
+
+class V7StablePostprocessTests(unittest.TestCase):
+    """旧 V7 主体不变，只修正已复现的稳定边界和规则波动。"""
+
+    def setUp(self) -> None:
+        self.original_profile = rating.RATING_PROFILE
+        rating.RATING_PROFILE = "v7_stable"
+
+    def tearDown(self) -> None:
+        rating.RATING_PROFILE = self.original_profile
+
+    def postprocess(self, level: str, stem: str, sub_questions: list | None = None, **feature_values: str) -> dict:
+        return rating.postprocess_physics_difficulty(
+            result(level, **feature_values),
+            {"question_id": "v7-stable-test", "stem": stem, "sub_questions": sub_questions or []},
+        )
+
+    def test_routine_two_level_heater_is_medium(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "家用电热水壶有加热挡和保温挡，先求吸热量、功率，再按明确电路计算两段电热丝长度。",
+            sub_questions=[{"stem": "求吸热量。"}, {"stem": "求保温功率。"}, {"stem": "补全电路并计算长度。"}],
+            step_count="6-8步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="跨模块综合",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="2-3个",
+            cross_module="跨模块综合",
+            state_count="双状态",
+            constraint_count="单一约束",
+            variable_relation="简单正反比",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(len(output["postprocess_actions"]), 1)
+        self.assertEqual(output["postprocess_actions"][0]["rule"], "v7_stable_routine_heater_guard")
+
+    def test_standard_circuit_connection_stays_basic(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "根据电路图将实物连接完整，并为电压表选择量程。",
+            step_count="3-5步",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            additional_structure="电路约束",
+            information_carrier="电路图",
+            knowledge_count="2-3个",
+            constraint_count="单一约束",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_round_trip_material_question_reaches_medium(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "雷达料位器记录电磁波往返时间，先识别波段，再计算液面高度并判断罐底液体压强变化。",
+            sub_questions=[{"stem": "识别波段。"}, {"stem": "计算液面高度。"}, {"stem": "判断压强变化。"}],
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="简单因果推理",
+            problem_structure="跨模块综合",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="2-3个",
+            cross_module="跨模块综合",
+            variable_relation="简单正反比",
+            graph_table_requirement="直接读数",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_two_independent_direct_calculations_stay_basic(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "太阳能热水器中分别直接计算能量转化效率和额定电流，据此选择空气开关。",
+            sub_questions=[{"stem": "求效率。"}, {"stem": "求额定电流并选择空气开关。"}],
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="多层因果推理",
+            problem_structure="跨模块综合",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="2-3个",
+            cross_module="跨模块综合",
+            state_count="单状态",
+            constraint_count="单一约束",
+            variable_relation="简单正反比",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_four_standard_experiments_reach_medium(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "四个实验分别涉及杠杆平衡调节、托里拆利实验误差、扩散观察和分子间隙解释。",
+            sub_questions=[{"stem": str(i)} for i in range(4)],
+            step_count="1-2步",
+            reasoning_chain="简单因果推理",
+            problem_structure="实验探究",
+            information_carrier="多图表综合",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="4个及以上",
+            cross_module="跨模块综合",
+            experiment_requirement="基础操作或读数",
+            graph_table_requirement="直接读数",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_simple_buoyancy_state_change_stays_basic(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "悬浮的鹦鹉螺把海水吸进气室后将怎样运动？",
+            step_count="1-2步",
+            reasoning_chain="简单因果推理",
+            problem_structure="力学综合",
+            knowledge_count="1个",
+            state_count="双状态",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_explicit_multistate_control_choice_stays_medium(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "电热水壶沸腾时主加热盘停止，降温后副加热盘保温，干烧时全部断开，选择符合要求的电路。",
+            step_count="3-5步",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            information_carrier="电路图",
+            knowledge_count="2-3个",
+            state_count="多状态",
+            constraint_count="多约束",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_magnetic_direction_diagram_stays_basic(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "根据小磁针N极指向画出磁感线方向，并标出电源正极。",
+            step_count="3-5步",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            information_carrier="单图识别",
+            knowledge_count="2-3个",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_cross_module_parallel_choice_stays_basic(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "火箭升空形成神箭凌日，四个选项分别判断重力势能、热机效率、运动相对性和光的直线传播。",
+            step_count="1-2步",
+            reasoning_chain="简单因果推理",
+            problem_structure="力学综合",
+            information_carrier="单图识别",
+            knowledge_count="2-3个",
+            cross_module="跨模块综合",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_two_mode_changeover_circuit_reaches_medium(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "用太阳能板、可充电电池、单刀双掷开关和电动机设计电路：供电时电动机工作，充电时电动机不工作。",
+            step_count="3-5步",
+            reasoning_chain="简单因果推理",
+            problem_structure="电路综合",
+            additional_structure="电路约束",
+            information_carrier="电路图",
+            knowledge_count="1个",
+            state_count="单状态",
+            constraint_count="单一约束",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
 
 
 class FusedPostprocessTests(unittest.TestCase):

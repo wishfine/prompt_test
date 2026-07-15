@@ -34,8 +34,8 @@ BASE_URL = os.getenv("BASE_URL", "http://172.22.0.35:4466/v1")
 if not BASE_URL.endswith("/"):
     BASE_URL += "/"
 MODEL_NAME = os.getenv("MODEL_NAME", "doubao-seed-2.0-lite")
-VALID_RATING_PROFILES = {"fused", "generalized", "v7_compat"}
-RATING_PROFILE = (os.getenv("RATING_PROFILE", "fused").strip().lower() or "fused")
+VALID_RATING_PROFILES = {"fused", "generalized", "v7_compat", "v7_stable"}
+RATING_PROFILE = (os.getenv("RATING_PROFILE", "v7_stable").strip().lower() or "v7_stable")
 if RATING_PROFILE not in VALID_RATING_PROFILES:
     raise ValueError(
         f"不支持的 RATING_PROFILE={RATING_PROFILE!r}；"
@@ -941,6 +941,162 @@ def postprocess_v7_compat(
     return compat_result
 
 
+def v7_stable_override(
+    raw_level: str,
+    features: Dict[str, str],
+    data: Dict[str, Any],
+) -> Optional[Tuple[str, str, List[str]]]:
+    """在冻结 V7 之后修正少量已复现边界；不替换 V7 主体规则。"""
+    visible = visible_text_of(data)
+    text = full_text_of(data)
+    subquestion_count = count_subquestions(data)
+    no_real_calculation = (
+        features.get("formula_count") == "0-1个"
+        and features.get("calculation_complexity") == "口算或直接判断"
+    )
+
+    standard_connection = bool(
+        raw_level == "基础题"
+        and subquestion_count == 0
+        and no_real_calculation
+        and contains_any(visible, ["实物连接完整", "实物图连接完整", "将图乙的实物连接完整", "补全实物图"])
+        and contains_any(visible, ["电路图", "图甲", "图乙", "电压表", "电流表"])
+    )
+    standard_magnetic_diagram = bool(
+        raw_level == "基础题"
+        and subquestion_count == 0
+        and no_real_calculation
+        and contains_any(visible, ["小磁针", "磁感线"])
+        and contains_any(visible, ["电源的正极", "电源正极", "正极"])
+        and contains_any(visible, ["画出", "标出"])
+    )
+    if standard_connection or standard_magnetic_diagram:
+        return "基础题", "v7_stable_standard_diagram_guard", ["单一规范作图/接线", "无计算和状态分析"]
+
+    simple_buoyancy_application = bool(
+        raw_level == "基础题"
+        and subquestion_count == 0
+        and no_real_calculation
+        and features.get("knowledge_count") == "1个"
+        and contains_any(visible, ["悬浮"])
+        and contains_any(visible, ["吸进气室", "气室吸水", "排水"])
+        and not contains_any(visible, ["求", "计算", "体积分数", "密度"])
+    )
+    if simple_buoyancy_application:
+        return "基础题", "v7_stable_simple_state_guard", ["单知识点浮沉条件应用", "双状态表述不等于综合建模"]
+
+    explicit_control_choice = bool(
+        raw_level == "中等题"
+        and subquestion_count == 0
+        and no_real_calculation
+        and features.get("problem_structure") == "电路综合"
+        and contains_any(text, ["主加热盘", "副加热盘"])
+        and contains_any(text, ["干烧", "温度过高"])
+        and contains_any(visible, ["符合要求", "下列电路"])
+    )
+    if explicit_control_choice:
+        return "中等题", "v7_stable_explicit_control_guard", ["控制逻辑完全显性", "无参数计算、范围筛选或开放设计"]
+
+    parallel_cross_module_choice = bool(
+        raw_level == "基础题"
+        and subquestion_count == 0
+        and no_real_calculation
+        and features.get("cross_module") == "跨模块综合"
+        and features.get("knowledge_count") in ["2-3个", "4个及以上"]
+        and (bool(str(data.get("options", "") or "").strip()) or contains_any(visible, ["四个选项", "说法正确", "说法错误", "下列说法"]))
+    )
+    if parallel_cross_module_choice:
+        return "基础题", "v7_stable_parallel_choice_guard", ["多个独立基础选项", "跨模块但没有连续推理"]
+
+    two_mode_changeover_circuit = bool(
+        raw_level == "基础题"
+        and subquestion_count == 0
+        and no_real_calculation
+        and contains_any(text, ["单刀双掷开关"])
+        and contains_any(text, ["太阳能板", "可充电电池"])
+        and contains_any(text, ["电动机工作", "电动机不工作"])
+        and "充电" in text
+    )
+    if two_mode_changeover_circuit:
+        return "中等题", "v7_stable_two_mode_circuit", ["供电/充电双状态", "需逐项验证转换开关逻辑"]
+
+    round_trip_material = bool(
+        raw_level == "基础题"
+        and subquestion_count >= 3
+        and features.get("step_count") == "3-5步"
+        and features.get("formula_count") == "2-3个"
+        and features.get("cross_module") == "跨模块综合"
+        and contains_any(text, ["往返时间", "往返总路程"])
+        and contains_any(text, ["液面", "罐底"])
+    )
+    if round_trip_material:
+        return "中等题", "v7_stable_round_trip_material", ["三问材料题", "往返模型、计算和压强解释形成完整负担"]
+
+    multiple_standard_experiments = bool(
+        raw_level == "基础题"
+        and subquestion_count >= 4
+        and features.get("problem_structure") == "实验探究"
+        and features.get("information_carrier") == "多图表综合"
+        and sum(term in text for term in ["杠杆", "托里拆利", "大气压", "扩散", "分子间", "误差"]) >= 3
+    )
+    if multiple_standard_experiments:
+        return "中等题", "v7_stable_multi_experiment", ["四个标准实验", "包含读数、误差方向和现象解释"]
+
+    independent_direct_calculations = bool(
+        raw_level == "中等题"
+        and 1 <= subquestion_count <= 2
+        and features.get("subquestion_dependency") == "多问但相互独立"
+        and features.get("step_count") in ["1-2步", "3-5步"]
+        and features.get("formula_count") in ["0-1个", "2-3个"]
+        and features.get("calculation_complexity") == "简单笔算"
+        and features.get("reasoning_chain") in ["直接套用", "简单因果推理", "多层因果推理"]
+        and features.get("state_count") == "单状态"
+        and features.get("experiment_requirement") == "无"
+        and features.get("graph_table_requirement") in ["无", "直接读数"]
+        and not contains_any(text, ["设计方案", "方案设计", "推导", "证明", "误差", "评价", "临界", "极值", "分类讨论", "多解"])
+    )
+    if independent_direct_calculations:
+        return "基础题", "v7_stable_independent_calculation_guard", ["两个以内独立小问", "均为显性单公式直接应用"]
+
+    routine_two_level_heater = bool(
+        raw_level == "拔高题"
+        and contains_any(text, ["电热水壶", "电热器"])
+        and contains_any(text, ["加热挡", "加热和保温两个挡位"])
+        and "保温挡" in text
+        and features.get("state_count") == "双状态"
+        and features.get("constraint_count") in ["无约束", "单一约束"]
+        and features.get("variable_relation") in ["无变量关系", "简单正反比"]
+        and features.get("reasoning_chain") != "逆向推理或临界分析"
+        and not contains_any(text, ["安全范围", "安全电流", "故障", "临界", "极值", "不等式", "分类讨论", "多解筛选", "可行性验证"])
+    )
+    if routine_two_level_heater:
+        return "中等题", "v7_stable_routine_heater_guard", ["常规双挡电热模型", "公式链显性且无临界、多解或安全范围"]
+
+    return None
+
+
+def postprocess_v7_stable(
+    rating_result: Dict[str, Any],
+    data: Dict[str, Any],
+    raw_level: str,
+) -> Dict[str, Any]:
+    """冻结 V7 后处理 + 小范围确定性边界补丁。"""
+    compat_result = postprocess_v7_compat(copy.deepcopy(rating_result), data, raw_level)
+    override = v7_stable_override(raw_level, rating_result["features"], data)
+    if override is None:
+        return compat_result
+
+    target, rule, evidence = override
+    stable_result = copy.deepcopy(rating_result)
+    stable_result["difficulty_level"] = raw_level
+    stable_result["difficulty_level_raw"] = raw_level
+    stable_result["postprocess_actions"] = []
+    if target != raw_level:
+        set_level_with_audit(stable_result, target, rule, evidence)
+    sync_coarse_difficulty(stable_result)
+    return stable_result
+
+
 def postprocess_physics_difficulty(rating_result: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
     """统一后处理：最多调整一档，并记录每次调整的证据。"""
     if not isinstance(rating_result, dict) or not rating_result:
@@ -956,6 +1112,8 @@ def postprocess_physics_difficulty(rating_result: Dict[str, Any], data: Dict[str
 
     if RATING_PROFILE == "fused":
         return postprocess_fused(rating_result, data, raw_level)
+    if RATING_PROFILE == "v7_stable":
+        return postprocess_v7_stable(rating_result, data, raw_level)
     if RATING_PROFILE == "v7_compat":
         return postprocess_v7_compat(rating_result, data, raw_level)
 
@@ -1147,7 +1305,10 @@ def get_processed_question_ids(output_path: str) -> set:
 async def main_batch_run() -> None:
     global USE_CACHE
     parser = argparse.ArgumentParser(description="初中物理难度评级批量打标")
-    parser.add_argument("-p", "--prompt", default="../prompts/初中物理难度打标提示词.txt")
+    default_prompt = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "prompts", "archive", "初中物理难度打标提示词_v7_best.txt")
+    )
+    parser.add_argument("-p", "--prompt", default=default_prompt)
     parser.add_argument("-i", "--input", default="../data/physics_sampled_5000_per_difficulty.jsonl")
     parser.add_argument("-o", "--output", default="physics_difficulty_rated_results.jsonl")
     parser.add_argument("-e", "--error", default="physics_difficulty_errors.jsonl")

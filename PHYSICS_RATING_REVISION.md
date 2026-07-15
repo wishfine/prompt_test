@@ -17,6 +17,8 @@ CSV 的 `ID` 和 JSONL 的 `question_id` 均在脚本中按字符串处理。原
 
 ## Prompt 修订
 
+当前生产默认重新使用 `prompts/archive/初中物理难度打标提示词_v7_best.txt`，文件内容保持旧 V7 原样；以下 9 个样例整理属于保留的融合实验 Prompt，不再作为默认运行输入。
+
 - 明确要求完整合法 JSON，而非仅输出等级名称。
 - 模板中每个 feature 仅使用一个合法示例值；完整示例可由 `json.loads()` 解析。
 - 保留 18 个 feature 和原有 `step_count` 五个枚举。
@@ -64,15 +66,16 @@ CSV 的 `ID` 和 JSONL 的 `question_id` 均在脚本中按字符串处理。原
 
 ## 验证与回归
 
-### 最终融合版与历史 V7 基线
+### V7 稳定版与历史实验对照
 
-默认配置为 `fused`。`generalized` 和冻结的 `v7_compat` 仅用于历史对照；兼容模式仍使用归档 Prompt 与旧语义层，外围 API、缓存、并发、重试、Lite 温度固定为 1、`difficulty` 隔离和审计字段均由当前主脚本负责。
+默认配置为 `v7_stable`：使用归档 V7 Prompt，先调用冻结 V7 语义层，再执行小范围确定性稳定补丁。`v7_compat` 是未加补丁的旧 V7 原样对照；`fused` 和 `generalized` 仅保留用于历史实验。外围 API、缓存、并发、重试、Lite 温度固定为 1、`difficulty` 隔离和审计字段均由当前主脚本负责。
 
 133 题结果：
 
 | 路径 | 完全一致 | MAE | 严重偏差 |
 | --- | ---: | ---: | ---: |
 | V7 Prompt 三次在线结果 + 旧兼容后处理 | 114 / 123 / 122（平均 89.97%） | — | — |
+| 同三组 V7 原始输出 + `v7_stable` 回放 | 123 / 128 / 130（平均 95.49%） | — | 0 / 0 / 0 |
 | 过度压缩融合 Prompt 三次在线原始结果 | 89 / 89 / 87（平均 66.42%） | — | 1 / 2 / 2 |
 | 过度压缩融合 Prompt + 当时后处理 | 102 / 101 / 101（平均 76.19%） | — | 2 / 2 / 2 |
 | 同三组 `difficulty_rating_raw` + 修订后处理 | 106 / 106 / 104（平均 79.20%） | — | 2 / 1 / 2 |
@@ -82,12 +85,12 @@ CSV 的 `ID` 和 JSONL 的 `question_id` 均在脚本中按字符串处理。原
 复跑命令：
 
 ```bash
-RATING_PROFILE=fused MODEL_NAME=doubao-seed-2.0-lite TEMPERATURE=1 \
+RATING_PROFILE=v7_stable MODEL_NAME=doubao-seed-2.0-lite TEMPERATURE=1 \
 python src/physics_difficulty_rating_with_cache.py \
   -i data/labeled/physics_difficulty_tiku_data_v2.jsonl \
-  -o outputs/model_runs/lite_physics_v2_fused_balanced_run1.jsonl \
-  -e outputs/model_runs/lite_physics_v2_fused_balanced_run1_errors.jsonl \
-  -p prompts/初中物理难度打标提示词.txt \
+  -o outputs/model_runs/lite_physics_v2_v7_stable_run1.jsonl \
+  -e outputs/model_runs/lite_physics_v2_v7_stable_run1_errors.jsonl \
+  -p prompts/archive/初中物理难度打标提示词_v7_best.txt \
   -c 30 --no-cache
 ```
 
@@ -99,7 +102,7 @@ python -m unittest discover -s tests -v
 python tests/teacher_label_regression.py
 ```
 
-融合版专项测试覆盖教材原型、生活应用、照片估测、标准作图/接线、独立计算、多实验综合、雷达材料、压力秤、显性控制链、餐盘隐含杠杆、玻璃管操作顺序、空调安全设计、控温项目、表达式与结构调整、项目边界验证及非项目压轴；全套离线测试还覆盖通用与 V7 兼容路径。
+V7 稳定版专项测试覆盖常规双挡电热器、规范接线、雷达往返材料题、独立直接计算、多个标准实验、简单浮沉状态变化、显性多状态控制、电磁作图、跨模块并列选项和双状态转换开关；全套离线测试仍覆盖融合、通用与 V7 原样兼容路径。
 
 固定生成五档各 40 题的 200 题样本（样本中没有教师标签和旧 `difficulty`）：
 
