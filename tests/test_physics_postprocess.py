@@ -258,5 +258,80 @@ class PhysicsPostprocessTests(unittest.TestCase):
         self.assertEqual(output["source_difficulty_untrusted"], 3)
 
 
+class V7CompatPostprocessTests(unittest.TestCase):
+    """锁定历史 120/133 版本最关键的语义保护行为。"""
+
+    def setUp(self) -> None:
+        self.original_profile = getattr(rating, "RATING_PROFILE", None)
+        self.assertIsNotNone(self.original_profile, "脚本必须提供 RATING_PROFILE")
+        rating.RATING_PROFILE = "v7_compat"
+
+    def tearDown(self) -> None:
+        if self.original_profile is not None:
+            rating.RATING_PROFILE = self.original_profile
+
+    def postprocess(self, level: str, stem: str, **feature_values: str) -> dict:
+        return rating.postprocess_physics_difficulty(
+            result(level, **feature_values),
+            {"question_id": "v7-compat-test", "stem": stem},
+        )
+
+    def test_low_calculation_high_modeling_reaches_hard(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "用手端起餐盘并保持水平静止，画出受力并分析支点、力臂和动力变化。",
+            step_count="3-5步",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            additional_structure="力学约束",
+            knowledge_count="2-3个",
+            error_risk="明显易错点",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+
+    def test_regular_pressure_scale_stays_medium(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "普通压敏电阻压力秤，依据 R-F 图像、欧姆定律和电表量程求最大测量压力。",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            information_carrier="图像或表格",
+            knowledge_count="2-3个",
+            state_count="双状态",
+            graph_table_requirement="直接读数",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_project_validation_keeps_final_channel(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "项目挑战：将托盘天平改装成液体密度测量仪，设计标尺并验证量程能否覆盖全部待测液体。",
+            step_count="6-8步",
+            formula_count="4-6个",
+            calculation_complexity="复杂方程或范围计算",
+            reasoning_chain="逆向推理或临界分析",
+            problem_structure="跨模块综合",
+            additional_structure="实验探究",
+            information_carrier="多图表综合",
+            reality_question="是",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="4个及以上",
+            knowledge_diff="高",
+            cross_module="跨模块综合",
+            state_count="多状态",
+            constraint_count="多约束",
+            variable_relation="多变量耦合关系",
+            experiment_requirement="方案设计或误差评价",
+            graph_table_requirement="图像反推或外推",
+            error_risk="高易错点",
+        )
+        self.assertEqual(output["difficulty_level"], "压轴题")
+        self.assertEqual(output["difficulty_level_raw"], "拔高题")
+        self.assertTrue(output["postprocess_actions"])
+
+
 if __name__ == "__main__":
     unittest.main()

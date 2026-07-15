@@ -16,8 +16,10 @@ data/
 outputs/
 └── model_runs/                      模型实验结果，不作为输入数据
 
-prompts/                             模型提示词
+prompts/                             当前模型提示词
+└── archive/                         已验证历史 Prompt（兼容回放）
 src/                                 正式评级和渲染脚本
+└── legacy/                          冻结的历史后处理参考实现
 tests/                               单题、视觉和对比实验脚本
 archive/                             历史脚本，仅供追溯
 docs/                                分档标准文档
@@ -47,13 +49,36 @@ BASE_URL=http://172.22.0.35:4466/v1
 MODEL_NAME=doubao-seed-2.0-lite
 # Lite 服务端固定为 1，脚本会忽略其他传入值并发送 1。
 TEMPERATURE=1
+# 默认使用当前通用规则；历史 V7 基线使用 v7_compat。
+RATING_PROFILE=generalized
 ```
 
 Mini 等支持调温度的模型仍会读取 `TEMPERATURE`；未配置时不发送该字段。
 
 真实模型调用需要在服务器的 venv 中执行，本机只适合做静态检查。
 
+## 评级配置
+
+- `generalized`：当前通用 Prompt 与收紧后的通用后处理，默认值。
+- `v7_compat`：调用冻结的旧 V7 边界语义层；配套使用归档 Prompt，可复现历史高准确率基线。API、缓存、并发、重试及审计输出仍全部走当前主脚本。
+
+在 133 题教师样本上，历史 V7 在线结果为 `120/133（90.23%）`。将当前 generalized 在线结果的原始模型 JSON 交给 V7 兼容层离线回放，可由 `89/133` 提升到 `108/133（81.20%）`；这说明剩余差距主要来自 Prompt 产生的原始特征与等级，而不是只靠后处理可以补齐。
+
 ## 评测命令
+
+先复跑历史 V7 基线（Lite 温度固定为 1）：
+
+```bash
+RATING_PROFILE=v7_compat MODEL_NAME=doubao-seed-2.0-lite TEMPERATURE=1 \
+python src/physics_difficulty_rating_with_cache.py \
+  -i data/labeled/physics_difficulty_tiku_data_v2.jsonl \
+  -o outputs/model_runs/lite_physics_v2_v7_compat_run1.jsonl \
+  -e outputs/model_runs/lite_physics_v2_v7_compat_run1_errors.jsonl \
+  -p prompts/archive/初中物理难度打标提示词_v7_best.txt \
+  -c 30 --no-cache
+```
+
+该输入只有 133 题，因此不要加 `-n`。Lite 的 `temperature` 服务端固定为 1；稳定性应通过同一输入连续跑三次比较，而不是设置 0。
 
 从最新老师标注题目抽取固定样本、禁用缓存并运行：
 
@@ -72,7 +97,7 @@ python src/physics_difficulty_rating_with_cache.py \
 - `--seed` 固定抽样结果，便于重复实验；
 - `--no-cache` 不使用前缀缓存，适合稳定性对照；
 - `-c` 控制并发数，服务器出现 429 时应调低；
-- 输出顶层 `difficulty_level_raw` 是模型原始评级，`difficulty_rating.difficulty_level` 是后处理后的评级，`postprocess_actions` 记录后处理动作。
+- 输出顶层 `rating_profile` 记录本次规则配置；`difficulty_level_raw` 是模型原始评级，`difficulty_rating.difficulty_level` 是后处理后的评级，`postprocess_actions` 记录后处理动作。
 
 完整的数据口径、few-shot 表、后处理规则和 200 题分层回归命令见 [PHYSICS_RATING_REVISION.md](PHYSICS_RATING_REVISION.md)。
 
@@ -85,4 +110,4 @@ python src/physics_difficulty_rating_with_cache.py \
 - 18 个 `features` 字段及其合法枚举；
 - `coarse_difficulty` 和四个 `reasoning` 字段。
 
-评级规则统一维护在物理 Prompt 和该脚本的单一后处理实现中，不再保留 V5/V6/V7 同名函数覆盖层。
+当前通用规则统一维护在物理 Prompt 和主脚本中；旧 V7 完整实现只冻结在 `src/legacy/`，由 `v7_compat` 显式调用，不参与默认路径。

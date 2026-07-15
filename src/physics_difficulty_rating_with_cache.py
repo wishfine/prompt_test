@@ -34,6 +34,13 @@ BASE_URL = os.getenv("BASE_URL", "http://172.22.0.35:4466/v1")
 if not BASE_URL.endswith("/"):
     BASE_URL += "/"
 MODEL_NAME = os.getenv("MODEL_NAME", "doubao-seed-2.0-lite")
+VALID_RATING_PROFILES = {"generalized", "v7_compat"}
+RATING_PROFILE = (os.getenv("RATING_PROFILE", "generalized").strip().lower() or "generalized")
+if RATING_PROFILE not in VALID_RATING_PROFILES:
+    raise ValueError(
+        f"不支持的 RATING_PROFILE={RATING_PROFILE!r}；"
+        f"可选值：{', '.join(sorted(VALID_RATING_PROFILES))}"
+    )
 
 
 def resolve_temperature(model_name: str, raw_value: str) -> Optional[float]:
@@ -602,6 +609,42 @@ def set_level_with_audit(result: Dict[str, Any], level: str, rule: str, evidence
     reasoning["core_basis"] = prefix + str(reasoning.get("core_basis", ""))
 
 
+def postprocess_v7_compat(
+    rating_result: Dict[str, Any],
+    data: Dict[str, Any],
+    raw_level: str,
+) -> Dict[str, Any]:
+    """调用历史 120/133 版本的最终 V7 语义层，并补齐当前审计字段。
+
+    旧模块仅作为冻结参考实现使用；API、缓存、并发和输出仍由当前脚本负责。
+    """
+    from legacy import physics_difficulty_rating_v7_reference as legacy_v7
+
+    compat_result = legacy_v7.postprocess_physics_difficulty(copy.deepcopy(rating_result), data)
+    if not isinstance(compat_result, dict):
+        compat_result = rating_result
+    final_level = compat_result.get("difficulty_level")
+    if final_level not in LEVEL_MAP:
+        final_level = raw_level
+        compat_result["difficulty_level"] = final_level
+
+    compat_result["difficulty_level_raw"] = raw_level
+    compat_result["postprocess_actions"] = []
+    if final_level != raw_level:
+        core_basis = str(compat_result.get("reasoning", {}).get("core_basis", "")).strip()
+        evidence = [core_basis.split("。", 1)[0]] if core_basis else ["历史 V7 边界语义规则命中"]
+        compat_result["postprocess_actions"].append(
+            {
+                "rule": "v7_compat_semantic_layer",
+                "from": raw_level,
+                "to": final_level,
+                "evidence": evidence,
+            }
+        )
+    sync_coarse_difficulty(compat_result)
+    return compat_result
+
+
 def postprocess_physics_difficulty(rating_result: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
     """统一后处理：最多调整一档，并记录每次调整的证据。"""
     if not isinstance(rating_result, dict) or not rating_result:
@@ -614,6 +657,10 @@ def postprocess_physics_difficulty(rating_result: Dict[str, Any], data: Dict[str
         rating_result["difficulty_level"] = raw_level
     rating_result["difficulty_level_raw"] = raw_level
     rating_result["postprocess_actions"] = []
+
+    if RATING_PROFILE == "v7_compat":
+        return postprocess_v7_compat(rating_result, data, raw_level)
+
     f = rating_result["features"]
     current = raw_level
 
@@ -763,6 +810,7 @@ async def process_single_question(data: Dict[str, Any], session: aiohttp.ClientS
             result = postprocess_physics_difficulty(result, safe_data)
             output = make_output_base(data)
             output.update({
+                "rating_profile": RATING_PROFILE,
                 "difficulty_rating_raw": raw_result,
                 "difficulty_level_raw": raw_result.get("difficulty_level") if isinstance(raw_result, dict) else None,
                 "postprocess_actions": result.get("postprocess_actions", []) if isinstance(result, dict) else [],
@@ -813,6 +861,7 @@ async def main_batch_run() -> None:
     parser.add_argument("--no-cache", action="store_true")
     args = parser.parse_args()
     USE_CACHE = not args.no_cache
+    print(f"评级配置: {RATING_PROFILE}")
     if args.seed is not None:
         random.seed(args.seed)
         print(f"固定随机种子: {args.seed}")

@@ -64,6 +64,32 @@ CSV 的 `ID` 和 JSONL 的 `question_id` 均在脚本中按字符串处理。原
 
 ## 验证与回归
 
+### 历史 V7 兼容基线
+
+为避免在追求泛化时丢失已经验证过的上限，项目新增两套显式配置：默认 `generalized` 和冻结的 `v7_compat`。兼容模式使用 `prompts/archive/初中物理难度打标提示词_v7_best.txt` 与 `src/legacy/physics_difficulty_rating_v7_reference.py`；外围 API、缓存、并发、重试、Lite 温度固定为 1、`difficulty` 隔离和审计字段仍由当前主脚本负责。
+
+133 题结果：
+
+| 路径 | 完全一致 | MAE | 严重偏差 |
+| --- | ---: | ---: | ---: |
+| 当前 generalized 在线原始模型结果 | 89/133（66.92%） | 0.3383 | 1 |
+| 上述原始结果 + V7 兼容后处理回放 | 108/133（81.20%） | 0.1955 | 1 |
+| 历史 V7 Prompt + V7 后处理在线结果 | 120/133（90.23%） | 0.0977 | 0 |
+
+兼容后处理在当前原始结果上触发 33 次；准确率提升 19 题。历史完整组合仍高 12 题，因此下一轮应先在线复跑完整 V7 组合，再基于三次重复结果逐项清理旧规则，不能只继续堆后处理。
+
+复跑命令：
+
+```bash
+RATING_PROFILE=v7_compat MODEL_NAME=doubao-seed-2.0-lite TEMPERATURE=1 \
+python src/physics_difficulty_rating_with_cache.py \
+  -i data/labeled/physics_difficulty_tiku_data_v2.jsonl \
+  -o outputs/model_runs/lite_physics_v2_v7_compat_run1.jsonl \
+  -e outputs/model_runs/lite_physics_v2_v7_compat_run1_errors.jsonl \
+  -p prompts/archive/初中物理难度打标提示词_v7_best.txt \
+  -c 30 --no-cache
+```
+
 ```bash
 source venv/bin/activate
 python -m py_compile src/physics_difficulty_rating_with_cache.py \
