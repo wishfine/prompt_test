@@ -68,6 +68,23 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("实际有效推理约 5-6 步", prefix)
         self.assertIn("实际有效推理 7 步以上", prefix)
 
+    def test_production_prompt_counts_full_student_solution_chain(self) -> None:
+        prefix = self.load_prefix()
+        self.assertNotIn("最短且完整的有效解题链", prefix)
+        self.assertIn("中等水平学生独立完成题目所需的规范解题过程", prefix)
+        self.assertIn("不得用专家压缩解法", prefix)
+        self.assertIn("不能只统计最后一问从已知答案出发的局部步骤", prefix)
+        self.assertIn("向上复核：防止专家视角压缩步骤", prefix)
+        self.assertIn("确定一个新的研究对象或独立状态", prefix)
+        self.assertIn("使用一个独立约束筛选范围", prefix)
+
+    def test_production_prompt_has_teacher_anchored_hard_and_final_examples(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("粗糙水平面上的物块与弹簧相连", prefix)
+        self.assertIn("多开关电路中包含小灯泡", prefix)
+        self.assertIn("多安全约束和功率边界筛选", prefix)
+        self.assertNotIn("将天平改装为液体密度测量仪", prefix)
+
     def test_production_prompt_does_not_use_features_as_postprocess_triggers(self) -> None:
         prefix = self.load_prefix()
         self.assertIn("18 个 features 只用于客观记录和审计", prefix)
