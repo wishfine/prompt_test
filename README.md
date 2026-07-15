@@ -45,9 +45,11 @@ cp .env.example .env
 API_KEY=not-needed
 BASE_URL=http://172.22.0.35:4466/v1
 MODEL_NAME=doubao-seed-2.0-lite
-# 仅在模型实际支持时配置；留空表示不发送 temperature
-TEMPERATURE=
+# Lite 服务端固定为 1，脚本会忽略其他传入值并发送 1。
+TEMPERATURE=1
 ```
+
+Mini 等支持调温度的模型仍会读取 `TEMPERATURE`；未配置时不发送该字段。
 
 真实模型调用需要在服务器的 venv 中执行，本机只适合做静态检查。
 

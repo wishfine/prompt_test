@@ -34,8 +34,17 @@ BASE_URL = os.getenv("BASE_URL", "http://172.22.0.35:4466/v1")
 if not BASE_URL.endswith("/"):
     BASE_URL += "/"
 MODEL_NAME = os.getenv("MODEL_NAME", "doubao-seed-2.0-lite")
-_temperature_raw = os.getenv("TEMPERATURE", "").strip()
-TEMPERATURE = float(_temperature_raw) if _temperature_raw else None
+
+
+def resolve_temperature(model_name: str, raw_value: str) -> Optional[float]:
+    """Lite 服务端固定使用 temperature=1，其他模型保留环境变量配置。"""
+    if "lite" in str(model_name).lower():
+        return 1.0
+    value = str(raw_value or "").strip()
+    return float(value) if value else None
+
+
+TEMPERATURE = resolve_temperature(MODEL_NAME, os.getenv("TEMPERATURE", ""))
 
 FILE_LOCK = Lock()
 CACHE_LOCK = Lock()
@@ -285,7 +294,7 @@ def canonicalize_feature_value(field: str, value: Any) -> str:
     if field == "cross_module": return "跨模块综合" if "跨" in v else "同一模块内部"
     if field == "state_count":
         if any(x in v for x in ["连续", "临界", "动态变化"]): return "连续变化或临界状态"
-        if "多状态" in v: return "多状态"
+        if any(x in v for x in ["多状态", "三状态", "3状态", "三个状态", "3个状态"]): return "多状态"
         if any(x in v for x in ["双状态", "两状态", "两个"]): return "双状态"
         return "单状态"
     if field == "constraint_count": return "多约束" if "多" in v else ("单一约束" if "约束" in v else "无约束")
@@ -357,6 +366,27 @@ def is_parallel_choice_or_independent_points(data: Dict[str, Any], features: Dic
     independent = features.get("subquestion_dependency") == "多问但相互独立"
     choice = bool(data.get("options")) and features.get("reasoning_chain") in ["直接套用", "简单因果推理"] and features.get("state_count") in ["单状态", "双状态"]
     return independent or (choice and features.get("constraint_count") in ["无约束", "单一约束"] and features.get("variable_relation") in ["无变量关系", "简单正反比"] and len(text) < 500)
+
+
+def is_standard_rule_diagram_task(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    """教材规则完全显性的单一作图/标注任务，保护在基础档。
+
+    不依赖具体章节或装置名，只判断任务结构是否为无计算、无实验数据、
+    无状态/约束分析的顺向规则应用。
+    """
+    text = visible_text_of(data)
+    has_diagram_action = contains_any(text, ["画出", "作出", "作图", "标出", "连接", "补全", "方向"])
+    if not has_diagram_action or count_subquestions(data) > 1 or has_formula_intent(text):
+        return False
+    return (
+        features.get("formula_count") == "0-1个"
+        and features.get("calculation_complexity") == "口算或直接判断"
+        and features.get("state_count") == "单状态"
+        and features.get("constraint_count") == "无约束"
+        and features.get("variable_relation") == "无变量关系"
+        and features.get("experiment_requirement") == "无"
+        and features.get("graph_table_requirement") in ["无", "直接读数"]
+    )
 
 
 def is_textbook_easy_diagram_or_direct_fill(data: Dict[str, Any], features: Dict[str, str]) -> bool:
@@ -444,7 +474,7 @@ def has_strong_project_validation(data: Dict[str, Any], features: Dict[str, str]
 
 
 def should_upgrade_basic_to_medium(features: Dict[str, str], data: Dict[str, Any]) -> List[str]:
-    if is_parallel_choice_or_independent_points(data, features) and features.get("subquestion_dependency") != "多问且层层递进":
+    if is_standard_rule_diagram_task(data, features):
         return []
     # 单图方向标注、知识结构补空、基础连接题等，即使模型把步骤写成 3-5 步，
     # 也不能仅凭“知识点数 + 读图”升为中等。
@@ -467,16 +497,23 @@ def should_upgrade_basic_to_medium(features: Dict[str, str], data: Dict[str, Any
     if features.get("reasoning_chain") == "多层因果推理" and features.get("state_count") in ["多状态", "连续变化或临界状态"]:
         strong.append("两个连续物理过程")
     if features.get("subquestion_dependency") == "多问且层层递进": strong.append("多问层层递进")
-    if features.get("cross_module") == "跨模块综合": strong.append("真实跨模块综合")
+    cross_module_candidate = features.get("cross_module") == "跨模块综合"
     if features.get("step_count") == "3-5步": weak.append("3-5步")
     if features.get("knowledge_count") == "2-3个": weak.append("2-3个关联知识点")
     if features.get("state_count") == "双状态": weak.append("双状态")
     if features.get("variable_relation") == "简单正反比": weak.append("简单正反比")
     if features.get("experiment_requirement") == "基础操作或读数": weak.append("基础实验操作或读数")
     if features.get("graph_table_requirement") == "直接读数": weak.append("简单图表读数")
+    # “跨模块”容易被模型用于并列基础概念。只有同时有多个过程支撑信号，
+    # 或已经存在其他强语义证据时，才认定为“真实跨模块综合”。
+    if cross_module_candidate and (strong or len(weak) >= 3):
+        strong.append("真实跨模块综合")
     # 至少一个强信号，或两个弱信号且确有多层连续推理；弱特征本身不触发升档。
+    # V7 顺序：实验归纳、控制变量等强语义保护先于“独立小问”拦截。
     if strong:
         return strong + weak
+    if is_parallel_choice_or_independent_points(data, features) and features.get("subquestion_dependency") != "多问且层层递进":
+        return []
     if len(weak) >= 2 and features.get("reasoning_chain") == "多层因果推理":
         return weak
     return []
@@ -508,8 +545,8 @@ def should_downgrade_hard_to_medium(features: Dict[str, str], data: Dict[str, An
     signals = core_high_signals(features, data)
     if features.get("step_count") == "1-2步":
         return len(signals) == 0
-    if features.get("step_count") == "3-5步":
-        return len(signals) == 0 and not strong_migration_signals(features, data)
+    # V7 原则：只有出现明确的常规中等结构才降档；
+    # 不能因模型未抽取到高阶特征，就否定 3-5 步的低计算高建模原判。
     return False
 
 

@@ -59,6 +59,56 @@ class PhysicsPostprocessTests(unittest.TestCase):
         )
         self.assertEqual(output["difficulty_level"], "基础题")
 
+    def test_standard_experiment_strong_signal_overrides_independent_subquestions(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "在探究液体压强实验中，根据多组表格数据归纳规律。",
+            step_count="3-5步",
+            reasoning_chain="简单因果推理",
+            problem_structure="实验探究",
+            information_carrier="图像或表格",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="2-3个",
+            experiment_requirement="控制变量或故障分析",
+            graph_table_requirement="多组比较归纳",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_standard_rule_diagram_is_not_upgraded_by_weak_signals(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "根据小磁针N极指向，画出磁感线方向并标出电源正极。",
+            step_count="3-5步",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            information_carrier="电路图",
+            knowledge_count="2-3个",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_shallow_cross_module_points_stay_basic(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "多个小问分别判断物态变化、质量和一个基础力学概念。",
+            reasoning_chain="简单因果推理",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="2-3个",
+            cross_module="跨模块综合",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_cross_module_with_multiple_supporting_signals_reaches_medium(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "阅读材料后提取信息，建立简单比例关系并完成跨模块分析。",
+            step_count="3-5步",
+            reasoning_chain="简单因果推理",
+            knowledge_count="2-3个",
+            cross_module="跨模块综合",
+            variable_relation="简单正反比",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
     def test_regular_pressure_scale_stays_medium(self) -> None:
         output = self.postprocess(
             "中等题",
@@ -134,6 +184,28 @@ class PhysicsPostprocessTests(unittest.TestCase):
             knowledge_count="2-3个",
         )
         self.assertEqual(output["difficulty_level"], "拔高题")
+
+    def test_three_to_five_step_hidden_model_is_not_downgraded_from_hard(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "曳引式电梯中上下钢丝绳质量变化，需建立隐含受力模型判断运行状态。",
+            step_count="3-5步",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            knowledge_count="2-3个",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+
+    def test_three_states_normalizes_to_multiple_states(self) -> None:
+        normalized = rating.normalize_features({"state_count": "三状态"})
+        self.assertEqual(normalized["state_count"], "多状态")
+
+    def test_lite_temperature_is_fixed_to_one(self) -> None:
+        resolver = getattr(rating, "resolve_temperature", None)
+        self.assertIsNotNone(resolver)
+        if resolver is not None:
+            self.assertEqual(resolver("doubao-seed-2.0-lite", "0"), 1.0)
+            self.assertEqual(resolver("doubao-seed-2.0-mini", "0"), 0.0)
 
     def test_project_without_validation_is_not_final(self) -> None:
         output = self.postprocess(
