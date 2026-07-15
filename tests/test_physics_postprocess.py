@@ -466,7 +466,7 @@ class FusedPostprocessTests(unittest.TestCase):
         )
         self.assertEqual(output["difficulty_level"], "基础题")
 
-    def test_routine_two_mode_heater_is_medium_not_hard(self) -> None:
+    def test_routine_two_mode_heater_is_not_force_downgraded_from_hard(self) -> None:
         output = self.postprocess(
             "拔高题",
             "家用电热水壶有加热和保温两个挡位，电路结构明确，计算吸热量、功率并按给定规格确定两段电热丝长度。",
@@ -483,9 +483,9 @@ class FusedPostprocessTests(unittest.TestCase):
             constraint_count="单一约束",
             variable_relation="简单正反比",
         )
-        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["difficulty_level"], "拔高题")
 
-    def test_independent_direct_calculations_can_downgrade_to_basic(self) -> None:
+    def test_independent_direct_calculations_do_not_force_medium_to_basic(self) -> None:
         output = self.postprocess(
             "中等题",
             "太阳能热水器包含两个相互独立的小问。",
@@ -505,7 +505,7 @@ class FusedPostprocessTests(unittest.TestCase):
             constraint_count="单一约束",
             variable_relation="简单正反比",
         )
-        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(output["difficulty_level"], "中等题")
 
     def test_cross_module_material_with_round_trip_model_reaches_medium(self) -> None:
         output = self.postprocess(
@@ -618,6 +618,20 @@ class FusedPostprocessTests(unittest.TestCase):
         )
         self.assertEqual(output["difficulty_level"], "中等题")
 
+    def test_standard_reflection_experiment_reaches_medium_despite_feature_drift(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "在探究光的反射定律实验中，多次改变入射角，分析表格数据、纸板折转现象和光路可逆性。",
+            step_count="1-2步",
+            reasoning_chain="简单因果推理",
+            problem_structure="实验探究",
+            information_carrier="单图识别",
+            knowledge_count="2-3个",
+            experiment_requirement="基础操作或读数",
+            graph_table_requirement="直接读数",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
     def test_pressure_scale_stays_medium_despite_step_and_constraint_drift(self) -> None:
         output = self.postprocess(
             "中等题",
@@ -673,6 +687,127 @@ class FusedPostprocessTests(unittest.TestCase):
             state_count="双状态",
             constraint_count="多约束",
             variable_relation="多变量耦合关系",
+        )
+        self.assertEqual(output["difficulty_level"], "压轴题")
+
+    def test_plate_hidden_lever_model_reaches_hard(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "用手端起餐盘并保持水平静止，先画受力，再判断支点、力臂和动力如何变化。",
+            sub_questions=[{"stem": "画受力。"}, {"stem": "分析支点、力臂和动力。"}],
+            step_count="3-5步",
+            reasoning_chain="简单因果推理",
+            problem_structure="力学综合",
+            information_carrier="单图识别",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="2-3个",
+            knowledge_diff="低",
+            variable_relation="简单正反比",
+            error_risk="轻微易错点",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+
+    def test_glass_tube_process_reaches_hard_despite_state_feature_drift(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "用两端开口的长玻璃管从桶中汲水，从压紧或松开管口、快速上提或下移中选择正确操作顺序。",
+            step_count="3-5步",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            reality_question="是",
+            state_count="双状态",
+            error_risk="明显易错点",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+
+    def test_air_conditioner_safety_design_reaches_hard_without_feature_luck(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "学校给教室加装两台空调，同学们参与线路的设计并完成电路连接，结合空气开关和导线载流量判断安全方案。",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="简单因果推理",
+            problem_structure="跨模块综合",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="4个及以上",
+            cross_module="跨模块综合",
+            constraint_count="单一约束",
+            experiment_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+
+    def test_routine_heat_chain_is_not_downgraded_from_medium(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "燃气热水器把水加热，已知质量、温升、效率和热值，依次求吸热量及天然气体积。",
+            sub_questions=[{"stem": "求吸热量。"}, {"stem": "求天然气体积。"}],
+            step_count="1-2步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="简单因果推理",
+            problem_structure="热学综合",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="2-3个",
+            variable_relation="简单正反比",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_validated_project_hard_reaches_final_despite_feature_drift(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "项目式自动饮水装置需要设计控制与加热电路，依据传感器图像、安全电流和温度范围筛选方案，并判断是否可行。",
+            step_count="3-5步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="跨模块综合",
+            information_carrier="多图表综合",
+            reality_question="是",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="4个及以上",
+            cross_module="跨模块综合",
+            state_count="单状态",
+            constraint_count="单一约束",
+            variable_relation="简单正反比",
+            graph_table_requirement="直接读数",
+        )
+        self.assertEqual(output["difficulty_level"], "压轴题")
+
+    def test_project_temperature_control_medium_reaches_hard_semantically(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "【项目要求】制作电加热装置并自动控温，使用热敏电阻、电磁继电器和电热丝，结合安全工作电流、温度范围并说明第二种方案是否满足自动控温要求。",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="简单因果推理",
+            problem_structure="跨模块综合",
+            knowledge_count="2-3个",
+            cross_module="跨模块综合",
+            constraint_count="单一约束",
+            variable_relation="简单正反比",
+            graph_table_requirement="直接读数",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+
+    def test_complex_expression_and_adjustment_hard_reaches_final(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "自动饮水装置含压敏电阻图像和进水控制机构，前三问完成电路计算与受力分析，再用物理量符号写出表达式，最后说明怎样调整结构。",
+            sub_questions=[{"stem": "压强。"}, {"stem": "传感电路。"}, {"stem": "用物理量符号写出表达式。"}, {"stem": "怎样调整结构。"}],
+            step_count="3-5步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="跨模块综合",
+            information_carrier="多图表综合",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="4个及以上",
+            cross_module="跨模块综合",
+            constraint_count="单一约束",
+            variable_relation="简单正反比",
+            graph_table_requirement="直接读数",
         )
         self.assertEqual(output["difficulty_level"], "压轴题")
 

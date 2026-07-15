@@ -671,23 +671,6 @@ def is_fused_textbook_easy(data: Dict[str, Any], features: Dict[str, str]) -> bo
     )
 
 
-def is_fused_independent_direct_set(data: Dict[str, Any], features: Dict[str, str]) -> bool:
-    """两个以内相互独立、直接代入的小问按最高小问处理，可回到基础。"""
-    count = count_subquestions(data)
-    text = full_text_of(data)
-    return bool(
-        1 <= count <= 2
-        and features.get("subquestion_dependency") == "多问但相互独立"
-        and features.get("calculation_complexity") in ["口算或直接判断", "简单笔算"]
-        and features.get("state_count") == "单状态"
-        and features.get("constraint_count") in ["无约束", "单一约束"]
-        and features.get("variable_relation") in ["无变量关系", "简单正反比"]
-        and features.get("experiment_requirement") in ["无", "基础操作或读数"]
-        and features.get("graph_table_requirement") in ["无", "直接读数"]
-        and not contains_any(text, ["往返", "反推", "误差方向", "异常", "方案", "可行性", "边界", "分类讨论", "多解"])
-    )
-
-
 def is_fused_cross_module_material_medium(data: Dict[str, Any], features: Dict[str, str]) -> bool:
     """三问以上材料题若包含模型转换和跨模块解释，不能按独立小问压成基础。"""
     count = count_subquestions(data)
@@ -713,6 +696,12 @@ def is_fused_cross_module_material_medium(data: Dict[str, Any], features: Dict[s
 def is_fused_multiple_experiment_medium(data: Dict[str, Any], features: Dict[str, str]) -> bool:
     """多个标准实验的读数、误差方向和现象解释形成整题中等负担。"""
     text = full_text_of(data)
+    standard_reflection_chain = bool(
+        "探究光的反射定律" in text
+        and contains_any(text, ["多次改变", "表格数据", "纸板", "光路可逆"])
+    )
+    if standard_reflection_chain:
+        return True
     return bool(
         count_subquestions(data) >= 3
         and features.get("subquestion_dependency") == "多问但相互独立"
@@ -727,7 +716,10 @@ def is_fused_routine_heater_or_pressure_scale(data: Dict[str, Any], features: Di
     text = full_text_of(data)
     heater = contains_any(text, ["加热挡", "保温挡", "高温挡", "低温挡", "双挡", "两个挡位"]) and contains_any(text, ["电热", "电热水壶", "电热器"])
     pressure_scale = contains_any(text, ["压力秤", "压敏电阻"]) and contains_any(text, ["欧姆", "量程", "R-F", "阻值"])
-    strong_block = contains_any(text, ["黑箱", "非线性I-U", "分类讨论", "多解", "不等式", "边界覆盖", "可行性验证", "故障并存"])
+    strong_block = contains_any(text, [
+        "黑箱", "非线性I-U", "分类讨论", "多解", "不等式", "边界覆盖", "可行性验证", "故障并存",
+        "项目", "设计方案", "方案设计", "判断是否可行", "能否覆盖", "安全电流", "温度范围",
+    ])
     common = not strong_block and features.get("reasoning_chain") != "逆向推理或临界分析" and features.get("variable_relation") != "多变量耦合关系"
     if pressure_scale:
         # 电表量程可能被抽成“多约束”，但直接 R-F 读图仍是常规中等结构。
@@ -765,6 +757,23 @@ def is_fused_routine_control_medium(data: Dict[str, Any], features: Dict[str, st
 def is_fused_hidden_model_hard(data: Dict[str, Any], features: Dict[str, str]) -> bool:
     """低计算但存在隐含过程、几何/力臂、路径或误差建模的拔高通道。"""
     text = full_text_of(data)
+    stable_boundary_task = bool(
+        ("力臂" in text and "支点" in text and contains_any(text, ["保持水平", "水平静止"]))
+        or ("管口" in text and contains_any(text, ["操作顺序", "正确顺序", "快速上提", "快速下移"]))
+        or (
+            "空调" in text
+            and contains_any(text, ["载流量", "导线承载"])
+            and contains_any(text, ["线路设计", "设计线路", "线路的设计", "设计电路"])
+        )
+        or (
+            contains_any(text, ["【项目要求】", "项目式"])
+            and contains_any(text, ["自动控温", "控温电路"])
+            and contains_any(text, ["安全工作电流", "温度范围"])
+            and contains_any(text, ["是否可行", "可行性", "是否满足", "能否满足"])
+        )
+    )
+    if stable_boundary_task:
+        return True
     semantic_groups = [
         ["力臂", "支点"], ["路径", "反射"], ["误差", "方向"],
         ["顺序", "操作"], ["等效", "替代"], ["载流量", "选择"],
@@ -782,9 +791,13 @@ def is_fused_hidden_model_hard(data: Dict[str, Any], features: Dict[str, str]) -
 def is_fused_validated_design_final(data: Dict[str, Any], features: Dict[str, str]) -> bool:
     """压轴项目必须同时有设计、范围/边界验证和模型支撑。"""
     text = full_text_of(data)
-    design = contains_any(text, ["改装", "设计标尺", "方案设计", "设计方案", "自主设计"])
-    validation_terms = ["覆盖", "可行性", "边界", "量程", "所有待测", "筛选有效解", "方案比较"]
-    validation_count = sum(term in text for term in validation_terms)
+    design = contains_any(text, ["改装", "设计标尺", "方案设计", "设计方案", "自主设计", "设计控制", "设计电路", "项目式"])
+    validation_groups = [
+        contains_any(text, ["覆盖", "边界", "量程", "所有待测", "安全电流", "温度范围"]),
+        contains_any(text, ["可行性", "是否可行", "能否实现", "能否满足"]),
+        contains_any(text, ["筛选有效解", "方案比较", "筛选方案", "选择方案"]),
+    ]
+    validation_count = sum(validation_groups)
     model_support = sum([
         features.get("step_count") in ["6-8步", "9-12步", "12步以上"],
         features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"],
@@ -793,7 +806,14 @@ def is_fused_validated_design_final(data: Dict[str, Any], features: Dict[str, st
         features.get("variable_relation") in ["图像函数关系", "多变量耦合关系"],
         features.get("experiment_requirement") == "方案设计或误差评价",
     ])
-    return design and validation_count >= 2 and model_support >= 3
+    expression_design_chain = bool(
+        count_subquestions(data) >= 3
+        and contains_any(text, ["用物理量符号写出表达式", "写出表达式"])
+        and contains_any(text, ["怎样调整", "做出怎样的调整", "如何调整"])
+        and features.get("formula_count") in ["4-6个", "7个以上"]
+        and features.get("cross_module") == "跨模块综合"
+    )
+    return expression_design_chain or (design and validation_count >= 2 and model_support >= 3)
 
 
 def fused_basic_to_medium_evidence(features: Dict[str, str], data: Dict[str, Any]) -> List[str]:
@@ -867,16 +887,12 @@ def postprocess_fused(rating_result: Dict[str, Any], data: Dict[str, Any], raw_l
     elif raw_level == "中等题":
         if is_fused_standard_diagram_task(data, features):
             set_level_with_audit(rating_result, "基础题", "fused_medium_to_basic", ["单一规范作图/接线", "无计算、实验数据或状态分析"])
-        elif is_fused_independent_direct_set(data, features):
-            set_level_with_audit(rating_result, "基础题", "fused_medium_to_basic", ["两个以内独立小问", "均为直接代入/简单判断"])
         else:
             evidence = fused_medium_to_hard_evidence(features, data)
             if evidence:
                 set_level_with_audit(rating_result, "拔高题", "fused_medium_to_hard", evidence)
     elif raw_level == "拔高题":
-        if is_fused_routine_heater_or_pressure_scale(data, features):
-            set_level_with_audit(rating_result, "中等题", "fused_hard_to_medium", ["常规模型明确", "无分类/多解/复杂边界"])
-        elif is_fused_validated_design_final(data, features):
+        if is_fused_validated_design_final(data, features):
             set_level_with_audit(rating_result, "压轴题", "fused_hard_to_final", ["方案设计", "范围/边界覆盖", "可行性验证", "多模型支撑"])
         else:
             evidence = fused_hard_to_final_evidence(features, data)

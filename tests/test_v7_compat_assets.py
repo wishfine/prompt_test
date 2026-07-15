@@ -33,6 +33,16 @@ class V7CompatAssetTests(unittest.TestCase):
 
 
 class FusedPromptAssetTests(unittest.TestCase):
+    def test_final_prompt_keeps_moderate_v7_calibration_depth(self) -> None:
+        path = ROOT / "prompts" / "初中物理难度打标提示词.txt"
+        namespace: dict[str, str] = {}
+        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), {}, namespace)
+        prefix = namespace["DIFFICULTY_RATING_PROMPT_PREFIX"]
+        self.assertGreaterEqual(len(prefix), 14000)
+        self.assertLess(len(prefix), 21000)
+        self.assertIn("教师口径与相邻档优先级", prefix)
+        self.assertGreaterEqual(prefix.count("代表性锚点"), 5)
+
     def test_final_prompt_has_nine_non_versioned_calibration_examples(self) -> None:
         path = ROOT / "prompts" / "初中物理难度打标提示词.txt"
         namespace: dict[str, str] = {}

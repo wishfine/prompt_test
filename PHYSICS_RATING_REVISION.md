@@ -21,7 +21,7 @@ CSV 的 `ID` 和 JSONL 的 `question_id` 均在脚本中按字符串处理。原
 - 模板中每个 feature 仅使用一个合法示例值；完整示例可由 `json.loads()` 解析。
 - 保留 18 个 feature 和原有 `step_count` 五个枚举。
 - 增加相邻档复核、独立/递进多问、作图、多空、项目/自动控制的边界说明。
-- 将旧 V7 的 26 个重复边界示例压缩为 9 个互补校准示例；Prompt 从 53,260 字节缩至 15,378 字节，保留可泛化边界，不保留版本补丁和题目专属关键词。
+- 将旧 V7 的 26 个重复边界示例整理为 9 个互补校准示例；第一版压到约 15 KB 后出现明显低档偏置，因此修订版恢复到约 35 KB，保留完整教师口径、五档检核、特征判定和低计算高建模锚点，同时仍删除版本补丁式重复和题目专属关键词。
 - 采用 9 个 CSV—JSONL 匹配的真实题目 few-shot，不读取 JSONL 原 `difficulty`。
 
 ### few-shot 选择表
@@ -73,10 +73,11 @@ CSV 的 `ID` 和 JSONL 的 `question_id` 均在脚本中按字符串处理。原
 | 路径 | 完全一致 | MAE | 严重偏差 |
 | --- | ---: | ---: | ---: |
 | V7 Prompt 三次在线结果 + 旧兼容后处理 | 114 / 123 / 122（平均 89.97%） | — | — |
-| 同三组原始模型结果 + fused 后处理回放 | 122 / 128 / 128（平均 94.74%） | — | — |
-| fused 三次多数票 | 127/133（95.49%） | — | — |
+| 过度压缩融合 Prompt 三次在线原始结果 | 89 / 89 / 87（平均 66.42%） | — | 1 / 2 / 2 |
+| 过度压缩融合 Prompt + 当时后处理 | 102 / 101 / 101（平均 76.19%） | — | 2 / 2 / 2 |
+| 同三组 `difficulty_rating_raw` + 修订后处理 | 106 / 106 / 104（平均 79.20%） | — | 2 / 1 / 2 |
 
-三组数据中，原始等级有波动的题为 18 道，融合后最终等级有波动的题为 15 道。旧兼容规则存在 5 道“原始等级不变但后处理结果波动”，融合版降为 0 道。三次后处理均为净改善，且最终动作最多改变一档。上述数字是同一批在线原始 JSON 的离线后处理回放；融合 Prompt 本身仍需服务器在线连续跑三次验收。
+必须使用 `difficulty_rating_raw` 回放后处理，不能把已经过旧规则处理的 `difficulty_rating` 再次作为原始结果。此前 `122/128/128` 的数字属于错误的叠加回放，现已废弃并更正。修订后处理在三组真正原始结果上分别改对 19、18、18 次，改错 0 次；原始等级波动 20 道降为最终波动 14 道，“原始等级不变但后处理造成波动”为 0。新约 35 KB Prompt 尚未在线运行，不能用后处理回放数字冒充新 Prompt 的最终准确率。
 
 复跑命令：
 
@@ -84,8 +85,8 @@ CSV 的 `ID` 和 JSONL 的 `question_id` 均在脚本中按字符串处理。原
 RATING_PROFILE=fused MODEL_NAME=doubao-seed-2.0-lite TEMPERATURE=1 \
 python src/physics_difficulty_rating_with_cache.py \
   -i data/labeled/physics_difficulty_tiku_data_v2.jsonl \
-  -o outputs/model_runs/lite_physics_v2_fused_run1.jsonl \
-  -e outputs/model_runs/lite_physics_v2_fused_run1_errors.jsonl \
+  -o outputs/model_runs/lite_physics_v2_fused_balanced_run1.jsonl \
+  -e outputs/model_runs/lite_physics_v2_fused_balanced_run1_errors.jsonl \
   -p prompts/初中物理难度打标提示词.txt \
   -c 30 --no-cache
 ```
@@ -98,7 +99,7 @@ python -m unittest discover -s tests -v
 python tests/teacher_label_regression.py
 ```
 
-融合版的专项测试覆盖教材原型、生活应用、照片估测、标准作图/接线、独立计算、多实验综合、雷达材料、压力秤、双挡电热、显性控制链、低计算高建模、项目边界验证及非项目压轴，共 20 个融合规则用例；全套离线测试还覆盖通用与 V7 兼容路径。
+融合版专项测试覆盖教材原型、生活应用、照片估测、标准作图/接线、独立计算、多实验综合、雷达材料、压力秤、显性控制链、餐盘隐含杠杆、玻璃管操作顺序、空调安全设计、控温项目、表达式与结构调整、项目边界验证及非项目压轴；全套离线测试还覆盖通用与 V7 兼容路径。
 
 固定生成五档各 40 题的 200 题样本（样本中没有教师标签和旧 `difficulty`）：
 
