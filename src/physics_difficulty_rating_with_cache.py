@@ -1323,7 +1323,29 @@ def postprocess_v7_stable(
         or features.get("graph_table_requirement") == "图像反推或外推"
     )
 
-    if low_structure_medium:
+    easy_structure_conflicts: List[str] = []
+    if raw_level == "送分题":
+        if features.get("formula_count") != "0-1个" or features.get("calculation_complexity") != "口算或直接判断":
+            easy_structure_conflicts.append("存在公式链或真实笔算")
+        if features.get("experiment_requirement") != "无":
+            easy_structure_conflicts.append("存在实验操作、读数或分析")
+        if features.get("graph_table_requirement") in ["多组比较归纳", "图像反推或外推"]:
+            easy_structure_conflicts.append("存在多组归纳或图像反推")
+        if features.get("subquestion_dependency") == "多问且层层递进":
+            easy_structure_conflicts.append("多问形成递进链")
+        if features.get("state_count") != "单状态" or features.get("constraint_count") != "无约束":
+            easy_structure_conflicts.append("存在状态转换或约束筛选")
+        if features.get("variable_relation") != "无变量关系":
+            easy_structure_conflicts.append("需要处理变量关系")
+
+    if easy_structure_conflicts:
+        set_level_with_audit(
+            stable_result,
+            "基础题",
+            "teacher_easy_to_basic_structure_guard",
+            easy_structure_conflicts,
+        )
+    elif low_structure_medium:
         set_level_with_audit(
             stable_result,
             "基础题",

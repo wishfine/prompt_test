@@ -58,16 +58,17 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("单个静止物体的教材原型受力图", prefix)
         self.assertIn("一条凸透镜特殊光线", prefix)
         self.assertRegex(prefix, r"复杂受力分析[^。]{0,100}至少基础题")
-        self.assertIn("同一小节的多个直接识记空", prefix)
+        self.assertIn("同一知识骨架中的两个基础节点", prefix)
         self.assertRegex(prefix, r"跨不同知识点[^。]{0,100}至少基础题")
 
-    def test_production_prompt_uses_direct_retrieval_bundle_easy_boundary(self) -> None:
+    def test_production_prompt_limits_multi_blank_easy_boundary_without_shortcut_label(self) -> None:
         prefix = self.load_prefix()
-        self.assertIn("直接检索束", prefix)
-        self.assertIn("每个空或选项都能独立由教材事实直接作答", prefix)
-        self.assertIn("不需要共同物理过程、规律选择或条件联动", prefix)
+        self.assertNotIn("直接检索束", prefix)
+        self.assertIn("不能把多个独立的一步题合并包装成送分题", prefix)
+        self.assertIn("三个及以上相互独立的空", prefix)
+        self.assertIn("实验操作、仪器读数、规律应用或公式应用", prefix)
         self.assertIn("分子动理论知识结构图", prefix)
-        self.assertIn("多个空不等于多个应用步骤", prefix)
+        self.assertIn("静止在水平地面上的篮球", prefix)
 
     def test_production_prompt_uses_five_dimension_anchor_with_task_structure_check(self) -> None:
         prefix = self.load_prefix()

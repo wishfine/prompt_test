@@ -393,6 +393,38 @@ class V7StablePostprocessTests(unittest.TestCase):
                 self.assertEqual(output["difficulty_level_raw"], level)
                 self.assertEqual(output["postprocess_actions"], [])
 
+    def test_easy_with_experiment_task_is_guarded_to_basic(self) -> None:
+        output = self.postprocess(
+            "送分题",
+            "根据实验装置完成基础操作并读数。",
+            problem_structure="实验探究",
+            information_carrier="实验装置图",
+            experiment_requirement="基础操作或读数",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(output["difficulty_level_raw"], "送分题")
+        self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_easy_to_basic_structure_guard")
+
+    def test_easy_with_real_calculation_is_guarded_to_basic(self) -> None:
+        output = self.postprocess(
+            "送分题",
+            "代入一个公式完成简单笔算。",
+            calculation_complexity="简单笔算",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_easy_to_basic_structure_guard")
+
+    def test_textbook_prototype_easy_still_passes_through(self) -> None:
+        output = self.postprocess(
+            "送分题",
+            "画出静止在水平地面上的篮球所受重力和支持力。",
+            problem_structure="概念判断",
+            reasoning_chain="直接套用",
+            knowledge_count="1个",
+        )
+        self.assertEqual(output["difficulty_level"], "送分题")
+        self.assertEqual(output["postprocess_actions"], [])
+
     def test_low_structure_conceptual_medium_is_calibrated_to_basic(self) -> None:
         output = self.postprocess(
             "中等题",
