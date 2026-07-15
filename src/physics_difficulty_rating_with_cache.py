@@ -1248,6 +1248,13 @@ def postprocess_v7_stable(
         core_basis,
     )
     explicit_step_lower_bound = int(step_match.group(1)) if step_match else 0
+    options = data.get("options")
+    if isinstance(options, (list, tuple, dict)):
+        option_count = len(options)
+    elif isinstance(options, str):
+        option_count = len(set(re.findall(r"(?:^|\s)([A-O])[\.\u3001\uff0e:\uff1a]", options)))
+    else:
+        option_count = 0
     high_signals: List[str] = []
     if features.get("state_count") in ["多状态", "连续变化或临界状态"]:
         high_signals.append("多状态或临界状态")
@@ -1279,6 +1286,24 @@ def postprocess_v7_stable(
         and features.get("cross_module") == "同一模块内部"
         and features.get("experiment_requirement") == "无"
         and features.get("graph_table_requirement") == "无"
+        # 六个以上的同概念高密度辨析，可能在考充分/必要条件和反例，
+        # 不再当作普通四选一概念题保护性降档。
+        and option_count < 6
+    )
+    decisive_graph_state_transform = bool(
+        raw_level == "中等题"
+        and features.get("step_count") in ["3-5步", "6-8步"]
+        and features.get("problem_structure") in [
+            "电路综合",
+            "力学综合",
+            "热学综合",
+            "光学声学综合",
+            "跨模块综合",
+        ]
+        and features.get("state_count") in ["双状态", "多状态", "连续变化或临界状态"]
+        and features.get("formula_count") in ["2-3个", "4-6个", "7个以上"]
+        and features.get("reasoning_chain") in ["多层因果推理", "逆向推理或临界分析"]
+        and features.get("graph_table_requirement") == "图像反推或外推"
     )
     has_modeling_signal = bool(
         features.get("state_count") in ["多状态", "连续变化或临界状态"]
@@ -1299,6 +1324,13 @@ def postprocess_v7_stable(
             "基础题",
             "teacher_medium_to_basic_low_structure",
             ["单状态无约束", "无实验或图表任务", "同类概念直接判断"],
+        )
+    elif decisive_graph_state_transform:
+        set_level_with_audit(
+            stable_result,
+            "拔高题",
+            "teacher_medium_to_hard_decisive_transform",
+            ["综合模型", "双状态以上", "图像反推", "多公式连续转换"],
         )
     elif (
         raw_level == "中等题"

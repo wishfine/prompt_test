@@ -59,14 +59,25 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertRegex(prefix, r"完整受力图、凸透镜光线作图[^。]{0,80}至少基础题")
         self.assertRegex(prefix, r"跨不同知识点[^。]{0,100}至少基础题")
 
-    def test_production_prompt_uses_teacher_five_dimension_rubric(self) -> None:
+    def test_production_prompt_uses_empirical_task_structure_rubric(self) -> None:
         prefix = self.load_prefix()
-        self.assertIn("教师五维定档主标准", prefix)
-        for dimension in ["知识量", "过程/对象", "数学工具", "情境", "思维层次"]:
+        self.assertNotIn("教师五维定档主标准", prefix)
+        self.assertIn("真实解题任务结构", prefix)
+        for dimension in ["直接识别", "显性应用", "常规分析", "决定性转换", "全链耦合"]:
             self.assertIn(dimension, prefix)
-        self.assertIn("实际有效推理约 3-4 步", prefix)
-        self.assertIn("实际有效推理约 5-6 步", prefix)
-        self.assertIn("实际有效推理 7 步以上", prefix)
+        self.assertIn("步骤数不是档位门槛", prefix)
+
+    def test_production_prompt_contains_sample_derived_boundary_corrections(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("四个选项不会自动排除送分题", prefix)
+        self.assertIn("高密度概念辨析", prefix)
+        self.assertIn("一个决定性转换", prefix)
+        self.assertIn("整题的完整递进链", prefix)
+
+    def test_production_prompt_has_no_unavailable_score_rate_variable(self) -> None:
+        prefix = self.load_prefix()
+        self.assertNotIn("得分率", prefix)
+        self.assertNotRegex(prefix, r"(?<![A-Za-z])P(?:≥|<|时)")
 
     def test_production_prompt_uses_stable_adjacent_boundary_table(self) -> None:
         prefix = self.load_prefix()
@@ -78,9 +89,10 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("步骤数只作支持证据，不作为单独门槛", prefix)
         self.assertNotIn("向上复核：防止专家视角压缩步骤", prefix)
 
-    def test_production_prompt_has_teacher_anchored_hard_and_final_examples(self) -> None:
+    def test_production_prompt_has_sample_anchored_hard_and_final_examples(self) -> None:
         prefix = self.load_prefix()
-        self.assertIn("粗糙水平面上的物块与弹簧相连", prefix)
+        self.assertIn("两条关系线", prefix)
+        self.assertIn("反推图线身份", prefix)
         self.assertIn("多开关电路中包含小灯泡", prefix)
         self.assertIn("多安全约束和功率边界筛选", prefix)
         self.assertNotIn("将天平改装为液体密度测量仪", prefix)

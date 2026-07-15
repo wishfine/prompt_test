@@ -411,6 +411,52 @@ class V7StablePostprocessTests(unittest.TestCase):
         self.assertEqual(output["difficulty_level_raw"], "中等题")
         self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_medium_to_basic_low_structure")
 
+    def test_high_density_concept_discrimination_stays_medium(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            calculation_complexity="口算或直接判断",
+            problem_structure="概念判断",
+            subquestion_dependency="无多问",
+            knowledge_count="1个",
+            state_count="单状态",
+            constraint_count="无约束",
+            cross_module="同一模块内部",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+            error_risk="明显易错点",
+        )
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {
+                "question_id": "v7-stable-dense-concepts",
+                "stem": "围绕同一物理概念辨析多个充分条件、必要条件和反例。",
+                "options": [f"说法{i}" for i in range(8)],
+            },
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_decisive_graph_state_transformation_reaches_hard(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "结合物理图像反推两个状态的对应关系，再串联公式求未知量。",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            information_carrier="图像或表格",
+            knowledge_count="2-3个",
+            state_count="双状态",
+            constraint_count="单一约束",
+            graph_table_requirement="图像反推或外推",
+            error_risk="明显易错点",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(output["difficulty_level_raw"], "中等题")
+        self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_medium_to_hard_decisive_transform")
+
     def test_medium_with_three_independent_high_signals_reaches_hard(self) -> None:
         output = self.postprocess(
             "中等题",
