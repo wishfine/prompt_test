@@ -370,7 +370,7 @@ class V7CompatPostprocessTests(unittest.TestCase):
 
 
 class V7StablePostprocessTests(unittest.TestCase):
-    """正式教师标准版只归一化与审计，不用历史规则改写模型等级。"""
+    """正式教师标准版仅按多特征联合证据做相邻一档校准。"""
 
     def setUp(self) -> None:
         self.original_profile = rating.RATING_PROFILE
@@ -385,21 +385,124 @@ class V7StablePostprocessTests(unittest.TestCase):
             {"question_id": "v7-stable-test", "stem": stem, "sub_questions": sub_questions or []},
         )
 
-    def test_all_five_raw_levels_pass_through_without_actions(self) -> None:
+    def test_all_five_raw_levels_pass_through_without_joint_signals(self) -> None:
         for level in ["送分题", "基础题", "中等题", "拔高题", "压轴题"]:
             with self.subTest(level=level):
-                output = self.postprocess(
-                    level,
-                    "题干中包含多状态、传感器、最大范围、隐含条件和实验评价等词语。",
-                    step_count="6-8步",
-                    knowledge_count="4个及以上",
-                    state_count="多状态",
-                    constraint_count="多约束",
-                    reasoning_chain="逆向推理或临界分析",
-                )
+                output = self.postprocess(level, "不包含联合高阶结构的常规题。")
                 self.assertEqual(output["difficulty_level"], level)
                 self.assertEqual(output["difficulty_level_raw"], level)
                 self.assertEqual(output["postprocess_actions"], [])
+
+    def test_low_structure_conceptual_medium_is_calibrated_to_basic(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "四个选项均为同类教材概念的直接判断。",
+            step_count="3-5步",
+            calculation_complexity="口算或直接判断",
+            problem_structure="概念判断",
+            subquestion_dependency="无多问",
+            state_count="单状态",
+            constraint_count="无约束",
+            cross_module="同一模块内部",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(output["difficulty_level_raw"], "中等题")
+        self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_medium_to_basic_low_structure")
+
+    def test_medium_with_three_independent_high_signals_reaches_hard(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "不依赖题型关键词的联合结构测试。",
+            step_count="3-5步",
+            knowledge_count="4个及以上",
+            state_count="多状态",
+            constraint_count="多约束",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(output["difficulty_level_raw"], "中等题")
+        self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_medium_to_hard_joint_structure")
+
+    def test_medium_with_explicit_five_step_chain_reaches_hard(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            state_count="双状态",
+            reasoning_chain="多层因果推理",
+        )
+        raw["reasoning"]["core_basis"] = "最高难小问的实际有效推理约5步，需要连续完成状态转换。"
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {"question_id": "v7-stable-five-step", "stem": "五步连续物理过程。"},
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_medium_to_hard_joint_structure")
+
+    def test_unrelated_number_five_does_not_trigger_step_calibration(self) -> None:
+        raw = result("中等题", step_count="3-5步", state_count="双状态", problem_structure="直接计算")
+        raw["reasoning"]["core_basis"] = "题目给出5N的力，但实际有效推理约3步。"
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {"question_id": "v7-stable-unrelated-five", "stem": "已知力为5N。"},
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_medium_with_only_two_high_signals_stays_medium(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "只有两个高阶结构信号。",
+            step_count="3-5步",
+            state_count="多状态",
+            constraint_count="多约束",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_hard_with_five_independent_high_signals_reaches_final(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "多状态、多约束、递进设问和复杂计算共同出现。",
+            step_count="6-8步",
+            knowledge_count="4个及以上",
+            state_count="多状态",
+            constraint_count="多约束",
+            subquestion_dependency="多问且层层递进",
+            calculation_complexity="多公式联立",
+        )
+        self.assertEqual(output["difficulty_level"], "压轴题")
+        self.assertEqual(output["difficulty_level_raw"], "拔高题")
+        self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_hard_to_final_joint_structure")
+
+    def test_hard_with_only_four_high_signals_stays_hard(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "四个高阶结构仍不足以自动升压轴。",
+            step_count="6-8步",
+            knowledge_count="4个及以上",
+            state_count="多状态",
+            constraint_count="多约束",
+            calculation_complexity="多公式联立",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_medium_with_many_high_signals_moves_only_one_level(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "即使联合信号很多也最多调整一档。",
+            step_count="6-8步",
+            knowledge_count="4个及以上",
+            cross_module="跨模块综合",
+            state_count="多状态",
+            constraint_count="多约束",
+            calculation_complexity="复杂方程或范围计算",
+            reasoning_chain="逆向推理或临界分析",
+            subquestion_dependency="多问且层层递进",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(len(output["postprocess_actions"]), 1)
 
     def test_routine_two_level_heater_keeps_raw_level(self) -> None:
         output = self.postprocess(

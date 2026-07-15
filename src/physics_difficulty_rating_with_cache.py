@@ -1231,17 +1231,106 @@ def postprocess_v7_stable(
     data: Dict[str, Any],
     raw_level: str,
 ) -> Dict[str, Any]:
-    """正式教师标准版：只归一化和审计，不改写模型原始等级。
+    """按教师样本中跨三次稳定的联合结构做相邻档校准。
 
-    1000 题教师标签回归表明，历史语义层和窄规则在中间档上的误改多于改对。
-    正式 Prompt 已直接对齐教师五维标准，因此该 profile 保留归一化、
-    difficulty_level_raw 和 postprocess_actions 审计字段，不再依赖易漂移的
-    features 或题型关键词执行升降档。历史复现仍可显式使用 v7_compat。
+    不使用题目关键词，不允许单个 feature 触发，也不连续执行两条规则。
+    这样保留模型的语义判断，只修正稳定的中间档收缩和低结构概念题抬档。
     """
     stable_result = copy.deepcopy(rating_result)
     stable_result["difficulty_level"] = raw_level
     stable_result["difficulty_level_raw"] = raw_level
     stable_result["postprocess_actions"] = []
+
+    features = stable_result.get("features", {})
+    core_basis = str(stable_result.get("reasoning", {}).get("core_basis", "") or "")
+    step_match = re.search(
+        r"实际有效推理(?:约|为|大约)?\s*(\d+)(?:\s*[-—至到]\s*(\d+))?\s*步",
+        core_basis,
+    )
+    explicit_step_lower_bound = int(step_match.group(1)) if step_match else 0
+    high_signals: List[str] = []
+    if features.get("state_count") in ["多状态", "连续变化或临界状态"]:
+        high_signals.append("多状态或临界状态")
+    if features.get("constraint_count") == "多约束":
+        high_signals.append("多约束")
+    if features.get("knowledge_count") == "4个及以上":
+        high_signals.append("4个及以上知识点")
+    if features.get("cross_module") == "跨模块综合":
+        high_signals.append("真实跨模块综合")
+    if features.get("subquestion_dependency") == "多问且层层递进":
+        high_signals.append("多问层层递进")
+    if features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"]:
+        high_signals.append("多公式或复杂范围计算")
+    if features.get("reasoning_chain") == "逆向推理或临界分析":
+        high_signals.append("逆向推理或临界分析")
+    if features.get("experiment_requirement") == "方案设计或误差评价":
+        high_signals.append("方案设计或误差评价")
+    if features.get("graph_table_requirement") == "图像反推或外推":
+        high_signals.append("图像反推或外推")
+
+    low_structure_medium = bool(
+        raw_level == "中等题"
+        and features.get("step_count") == "3-5步"
+        and features.get("calculation_complexity") == "口算或直接判断"
+        and features.get("problem_structure") == "概念判断"
+        and features.get("subquestion_dependency") == "无多问"
+        and features.get("state_count") == "单状态"
+        and features.get("constraint_count") == "无约束"
+        and features.get("cross_module") == "同一模块内部"
+        and features.get("experiment_requirement") == "无"
+        and features.get("graph_table_requirement") == "无"
+    )
+    has_modeling_signal = bool(
+        features.get("state_count") in ["多状态", "连续变化或临界状态"]
+        or features.get("constraint_count") == "多约束"
+        or features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"]
+        or features.get("reasoning_chain") == "逆向推理或临界分析"
+        or features.get("graph_table_requirement") == "图像反推或外推"
+    )
+    has_final_reasoning_signal = bool(
+        features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"]
+        or features.get("reasoning_chain") == "逆向推理或临界分析"
+        or features.get("graph_table_requirement") == "图像反推或外推"
+    )
+
+    if low_structure_medium:
+        set_level_with_audit(
+            stable_result,
+            "基础题",
+            "teacher_medium_to_basic_low_structure",
+            ["单状态无约束", "无实验或图表任务", "同类概念直接判断"],
+        )
+    elif (
+        raw_level == "中等题"
+        and features.get("step_count") in ["3-5步", "6-8步", "9-12步", "12步以上"]
+        and (
+            (len(high_signals) >= 3 and has_modeling_signal)
+            or explicit_step_lower_bound >= 5
+        )
+    ):
+        medium_evidence = list(high_signals)
+        if explicit_step_lower_bound >= 5:
+            medium_evidence.append(f"core_basis明确实际{explicit_step_lower_bound}步以上")
+        set_level_with_audit(
+            stable_result,
+            "拔高题",
+            "teacher_medium_to_hard_joint_structure",
+            medium_evidence,
+        )
+    elif (
+        raw_level == "拔高题"
+        and features.get("step_count") in ["6-8步", "9-12步", "12步以上"]
+        and len(high_signals) >= 5
+        and features.get("constraint_count") == "多约束"
+        and has_final_reasoning_signal
+    ):
+        set_level_with_audit(
+            stable_result,
+            "压轴题",
+            "teacher_hard_to_final_joint_structure",
+            high_signals,
+        )
+
     sync_coarse_difficulty(stable_result)
     return stable_result
 

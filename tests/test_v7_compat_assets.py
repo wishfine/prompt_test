@@ -68,15 +68,15 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("实际有效推理约 5-6 步", prefix)
         self.assertIn("实际有效推理 7 步以上", prefix)
 
-    def test_production_prompt_counts_full_student_solution_chain(self) -> None:
+    def test_production_prompt_uses_stable_adjacent_boundary_table(self) -> None:
         prefix = self.load_prefix()
         self.assertNotIn("最短且完整的有效解题链", prefix)
-        self.assertIn("中等水平学生独立完成题目所需的规范解题过程", prefix)
-        self.assertIn("不得用专家压缩解法", prefix)
         self.assertIn("不能只统计最后一问从已知答案出发的局部步骤", prefix)
-        self.assertIn("向上复核：防止专家视角压缩步骤", prefix)
-        self.assertIn("确定一个新的研究对象或独立状态", prefix)
-        self.assertIn("使用一个独立约束筛选范围", prefix)
+        self.assertIn("相邻档位稳定决策表", prefix)
+        self.assertIn("3-5步本身不能证明达到中等题", prefix)
+        self.assertIn("6-8步也可以判压轴题", prefix)
+        self.assertIn("步骤数只作支持证据，不作为单独门槛", prefix)
+        self.assertNotIn("向上复核：防止专家视角压缩步骤", prefix)
 
     def test_production_prompt_has_teacher_anchored_hard_and_final_examples(self) -> None:
         prefix = self.load_prefix()
