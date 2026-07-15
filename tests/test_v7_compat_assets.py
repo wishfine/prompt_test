@@ -59,6 +59,22 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertRegex(prefix, r"完整受力图、凸透镜光线作图[^。]{0,80}至少基础题")
         self.assertRegex(prefix, r"跨不同知识点[^。]{0,100}至少基础题")
 
+    def test_production_prompt_uses_teacher_five_dimension_rubric(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("教师五维定档主标准", prefix)
+        for dimension in ["知识量", "过程/对象", "数学工具", "情境", "思维层次"]:
+            self.assertIn(dimension, prefix)
+        self.assertIn("实际有效推理约 3-4 步", prefix)
+        self.assertIn("实际有效推理约 5-6 步", prefix)
+        self.assertIn("实际有效推理 7 步以上", prefix)
+
+    def test_production_prompt_does_not_use_features_as_postprocess_triggers(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("18 个 features 只用于客观记录和审计", prefix)
+        self.assertIn("不得根据单个 feature 机械升降档", prefix)
+        self.assertNotIn("凡是需要物理公式代入", prefix)
+        self.assertNotIn("同时出现 9 步以上复杂推理", prefix)
+
     def test_batch_script_defaults_to_production_prompt(self) -> None:
         source = (ROOT / "src" / "physics_difficulty_rating_with_cache.py").read_text(encoding="utf-8")
         self.assertIn('"prompts", "初中物理难度打标提示词.txt"', source)

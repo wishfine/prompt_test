@@ -1231,19 +1231,17 @@ def postprocess_v7_stable(
     data: Dict[str, Any],
     raw_level: str,
 ) -> Dict[str, Any]:
-    """冻结 V7 后处理 + 小范围确定性边界补丁。"""
-    compat_result = postprocess_v7_compat(copy.deepcopy(rating_result), data, raw_level)
-    override = v7_stable_override(raw_level, rating_result["features"], data)
-    if override is None:
-        return compat_result
+    """正式教师标准版：只归一化和审计，不改写模型原始等级。
 
-    target, rule, evidence = override
+    1000 题教师标签回归表明，历史语义层和窄规则在中间档上的误改多于改对。
+    正式 Prompt 已直接对齐教师五维标准，因此该 profile 保留归一化、
+    difficulty_level_raw 和 postprocess_actions 审计字段，不再依赖易漂移的
+    features 或题型关键词执行升降档。历史复现仍可显式使用 v7_compat。
+    """
     stable_result = copy.deepcopy(rating_result)
     stable_result["difficulty_level"] = raw_level
     stable_result["difficulty_level_raw"] = raw_level
     stable_result["postprocess_actions"] = []
-    if target != raw_level:
-        set_level_with_audit(stable_result, target, rule, evidence)
     sync_coarse_difficulty(stable_result)
     return stable_result
 

@@ -370,7 +370,7 @@ class V7CompatPostprocessTests(unittest.TestCase):
 
 
 class V7StablePostprocessTests(unittest.TestCase):
-    """旧 V7 主体不变，只修正已复现的稳定边界和规则波动。"""
+    """正式教师标准版只归一化与审计，不用历史规则改写模型等级。"""
 
     def setUp(self) -> None:
         self.original_profile = rating.RATING_PROFILE
@@ -385,7 +385,23 @@ class V7StablePostprocessTests(unittest.TestCase):
             {"question_id": "v7-stable-test", "stem": stem, "sub_questions": sub_questions or []},
         )
 
-    def test_routine_two_level_heater_is_medium(self) -> None:
+    def test_all_five_raw_levels_pass_through_without_actions(self) -> None:
+        for level in ["送分题", "基础题", "中等题", "拔高题", "压轴题"]:
+            with self.subTest(level=level):
+                output = self.postprocess(
+                    level,
+                    "题干中包含多状态、传感器、最大范围、隐含条件和实验评价等词语。",
+                    step_count="6-8步",
+                    knowledge_count="4个及以上",
+                    state_count="多状态",
+                    constraint_count="多约束",
+                    reasoning_chain="逆向推理或临界分析",
+                )
+                self.assertEqual(output["difficulty_level"], level)
+                self.assertEqual(output["difficulty_level_raw"], level)
+                self.assertEqual(output["postprocess_actions"], [])
+
+    def test_routine_two_level_heater_keeps_raw_level(self) -> None:
         output = self.postprocess(
             "拔高题",
             "家用电热水壶有加热挡和保温挡，先求吸热量、功率，再按明确电路计算两段电热丝长度。",
@@ -402,9 +418,9 @@ class V7StablePostprocessTests(unittest.TestCase):
             constraint_count="单一约束",
             variable_relation="简单正反比",
         )
-        self.assertEqual(output["difficulty_level"], "中等题")
-        self.assertEqual(len(output["postprocess_actions"]), 1)
-        self.assertEqual(output["postprocess_actions"][0]["rule"], "v7_stable_routine_heater_guard")
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(output["difficulty_level_raw"], "拔高题")
+        self.assertEqual(output["postprocess_actions"], [])
 
     def test_standard_circuit_connection_stays_basic(self) -> None:
         output = self.postprocess(
@@ -420,7 +436,7 @@ class V7StablePostprocessTests(unittest.TestCase):
         )
         self.assertEqual(output["difficulty_level"], "基础题")
 
-    def test_round_trip_material_question_reaches_medium(self) -> None:
+    def test_round_trip_material_question_keeps_raw_level(self) -> None:
         output = self.postprocess(
             "基础题",
             "雷达料位器记录电磁波往返时间，先识别波段，再计算液面高度并判断罐底液体压强变化。",
@@ -436,9 +452,9 @@ class V7StablePostprocessTests(unittest.TestCase):
             variable_relation="简单正反比",
             graph_table_requirement="直接读数",
         )
-        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["difficulty_level"], "基础题")
 
-    def test_two_independent_direct_calculations_stay_basic(self) -> None:
+    def test_two_independent_direct_calculations_keep_raw_level(self) -> None:
         output = self.postprocess(
             "中等题",
             "太阳能热水器中分别直接计算能量转化效率和额定电流，据此选择空气开关。",
@@ -455,9 +471,9 @@ class V7StablePostprocessTests(unittest.TestCase):
             constraint_count="单一约束",
             variable_relation="简单正反比",
         )
-        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(output["difficulty_level"], "中等题")
 
-    def test_four_standard_experiments_reach_medium(self) -> None:
+    def test_four_standard_experiments_keep_raw_level(self) -> None:
         output = self.postprocess(
             "基础题",
             "四个实验分别涉及杠杆平衡调节、托里拆利实验误差、扩散观察和分子间隙解释。",
@@ -472,7 +488,7 @@ class V7StablePostprocessTests(unittest.TestCase):
             experiment_requirement="基础操作或读数",
             graph_table_requirement="直接读数",
         )
-        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["difficulty_level"], "基础题")
 
     def test_simple_buoyancy_state_change_stays_basic(self) -> None:
         output = self.postprocess(
@@ -525,7 +541,7 @@ class V7StablePostprocessTests(unittest.TestCase):
         )
         self.assertEqual(output["difficulty_level"], "基础题")
 
-    def test_two_mode_changeover_circuit_reaches_medium(self) -> None:
+    def test_two_mode_changeover_circuit_keeps_raw_level(self) -> None:
         output = self.postprocess(
             "基础题",
             "用太阳能板、可充电电池、单刀双掷开关和电动机设计电路：供电时电动机工作，充电时电动机不工作。",
@@ -538,9 +554,9 @@ class V7StablePostprocessTests(unittest.TestCase):
             state_count="单状态",
             constraint_count="单一约束",
         )
-        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["difficulty_level"], "基础题")
 
-    def test_routine_bulb_measurement_table_is_medium(self) -> None:
+    def test_routine_bulb_measurement_table_keeps_raw_level(self) -> None:
         output = self.postprocess(
             "拔高题",
             "在测量小灯泡电阻的实验中，移动滑动变阻器，记录多组电压和电流数据，判断亮度、电阻和电功率变化。",
@@ -558,9 +574,9 @@ class V7StablePostprocessTests(unittest.TestCase):
             experiment_requirement="控制变量或故障分析",
             graph_table_requirement="多组比较归纳",
         )
-        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["difficulty_level"], "拔高题")
 
-    def test_routine_density_measurement_with_limited_error_comparison_is_medium(self) -> None:
+    def test_routine_density_measurement_with_limited_error_comparison_keeps_raw_level(self) -> None:
         output = self.postprocess(
             "拔高题",
             "测量海螺壳密度：先用天平测质量，再用排水等效测体积，计算密度；最后比较两种既定方案，说明物体沾水造成的误差方向。",
@@ -580,7 +596,7 @@ class V7StablePostprocessTests(unittest.TestCase):
             experiment_requirement="方案设计或误差评价",
             graph_table_requirement="直接读数",
         )
-        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["difficulty_level"], "拔高题")
 
     def test_anomaly_experiment_with_new_hypothesis_stays_hard(self) -> None:
         output = self.postprocess(
@@ -623,7 +639,7 @@ class V7StablePostprocessTests(unittest.TestCase):
         )
         self.assertEqual(output["difficulty_level"], "拔高题")
 
-    def test_hidden_dynamic_lever_is_hard_even_when_state_feature_drifts(self) -> None:
+    def test_hidden_dynamic_lever_keeps_raw_level(self) -> None:
         output = self.postprocess(
             "中等题",
             "人的头颈部可视为杠杆，拉力始终与力臂垂直；判断低头角度变化时重力力臂和肌肉拉力如何变化。",
@@ -641,7 +657,7 @@ class V7StablePostprocessTests(unittest.TestCase):
             variable_relation="简单正反比",
             error_risk="明显易错点",
         )
-        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(output["difficulty_level"], "中等题")
 
     def test_simple_source_polarity_and_causes_stay_basic_despite_feature_drift(self) -> None:
         output = self.postprocess(
@@ -664,7 +680,7 @@ class V7StablePostprocessTests(unittest.TestCase):
         )
         self.assertEqual(output["difficulty_level"], "基础题")
 
-    def test_single_state_routine_safety_calculation_is_medium(self) -> None:
+    def test_single_state_routine_safety_calculation_keeps_raw_level(self) -> None:
         output = self.postprocess(
             "拔高题",
             "探究电流与电压关系的串联电路中，给出电源、电表量程和滑动变阻器额定电流，求保证器材安全时变阻器接入的最小阻值。",
@@ -682,7 +698,7 @@ class V7StablePostprocessTests(unittest.TestCase):
             experiment_requirement="无",
             graph_table_requirement="无",
         )
-        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["difficulty_level"], "拔高题")
 
     def test_closed_material_experiment_stays_medium_when_one_feature_drifts(self) -> None:
         output = self.postprocess(
