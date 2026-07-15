@@ -45,6 +45,32 @@ class PhysicsPostprocessTests(unittest.TestCase):
     def test_v7_stable_profile_is_available(self) -> None:
         self.assertIn("v7_stable", rating.VALID_RATING_PROFILES)
 
+    def test_raw_level_can_be_recovered_from_misnested_reasoning(self) -> None:
+        raw = result("中等题")
+        raw["reasoning"]["difficulty_level"] = "拔高题"
+        raw.pop("difficulty_level")
+        snapshot = {**raw, "reasoning": dict(raw["reasoning"])}
+
+        self.assertTrue(hasattr(rating, "extract_raw_difficulty_level"))
+        self.assertEqual(rating.extract_raw_difficulty_level(raw), "拔高题")
+        self.assertEqual(raw, snapshot, "提取原始等级不得改写模型原始结果")
+
+    def test_top_level_raw_level_has_priority_over_misnested_value(self) -> None:
+        raw = result("基础题")
+        raw["reasoning"]["difficulty_level"] = "拔高题"
+
+        self.assertTrue(hasattr(rating, "extract_raw_difficulty_level"))
+        self.assertEqual(rating.extract_raw_difficulty_level(raw), "基础题")
+
+    def test_postprocess_uses_recovered_misnested_level(self) -> None:
+        raw = result("中等题")
+        raw["reasoning"]["difficulty_level"] = "拔高题"
+        raw.pop("difficulty_level")
+
+        output = rating.postprocess_physics_difficulty(raw, {"stem": "低计算但高建模的复杂过程题"})
+
+        self.assertEqual(output["difficulty_level_raw"], "拔高题")
+
     def test_direct_single_concept_stays_easy(self) -> None:
         output = self.postprocess("送分题", "声音的音调由什么决定？")
         self.assertEqual(output["difficulty_level"], "送分题")
@@ -513,6 +539,195 @@ class V7StablePostprocessTests(unittest.TestCase):
             constraint_count="单一约束",
         )
         self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_routine_bulb_measurement_table_is_medium(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "在测量小灯泡电阻的实验中，移动滑动变阻器，记录多组电压和电流数据，判断亮度、电阻和电功率变化。",
+            step_count="6-8步",
+            formula_count="2-3个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="实验探究",
+            additional_structure="图像表格",
+            information_carrier="电路图",
+            knowledge_count="2-3个",
+            state_count="连续变化或临界状态",
+            constraint_count="单一约束",
+            variable_relation="图像函数关系",
+            experiment_requirement="控制变量或故障分析",
+            graph_table_requirement="多组比较归纳",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_routine_density_measurement_with_limited_error_comparison_is_medium(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "测量海螺壳密度：先用天平测质量，再用排水等效测体积，计算密度；最后比较两种既定方案，说明物体沾水造成的误差方向。",
+            sub_questions=[{"stem": "天平读数"}, {"stem": "求体积"}, {"stem": "求密度"}, {"stem": "比较既定方案的误差"}],
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="多层因果推理",
+            problem_structure="实验探究",
+            additional_structure="实验探究",
+            information_carrier="实验装置图",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="2-3个",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="方案设计或误差评价",
+            graph_table_requirement="直接读数",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_anomaly_experiment_with_new_hypothesis_stays_hard(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "测量多种螺栓质量和体积，根据m-V图像分析偏离直线的异常点，评价微小气泡猜想并提出新猜想。",
+            sub_questions=[{"stem": "计算密度"}, {"stem": "评价异常点"}, {"stem": "提出新猜想"}],
+            step_count="6-8步",
+            formula_count="2-3个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="逆向推理或临界分析",
+            problem_structure="实验探究",
+            information_carrier="图像或表格",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="2-3个",
+            constraint_count="单一约束",
+            variable_relation="图像函数关系",
+            experiment_requirement="方案设计或误差评价",
+            graph_table_requirement="图像反推或外推",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+
+    def test_equivalent_volume_error_cancellation_stays_hard(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "用天平测量水果质量，再用等效补水法测量体积并计算密度；从杯中取出水果会带出部分水，判断密度结果偏大、偏小还是仍然准确。",
+            step_count="6-8步",
+            formula_count="2-3个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="实验探究",
+            additional_structure="实验探究",
+            information_carrier="实验装置图",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="2-3个",
+            state_count="双状态",
+            constraint_count="单一约束",
+            variable_relation="简单正反比",
+            experiment_requirement="方案设计或误差评价",
+            graph_table_requirement="直接读数",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+
+    def test_hidden_dynamic_lever_is_hard_even_when_state_feature_drifts(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "人的头颈部可视为杠杆，拉力始终与力臂垂直；判断低头角度变化时重力力臂和肌肉拉力如何变化。",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            additional_structure="力学约束",
+            information_carrier="单图识别",
+            reality_question="是",
+            knowledge_count="2-3个",
+            state_count="单状态",
+            constraint_count="单一约束",
+            variable_relation="简单正反比",
+            error_risk="明显易错点",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+
+    def test_simple_source_polarity_and_causes_stay_basic_despite_feature_drift(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "LED长引脚流入电流时发光。接在水果电池两端后判断正极，并写出两种水果电池电压不同的可能原因。",
+            step_count="3-5步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="多层因果推理",
+            problem_structure="实验探究",
+            information_carrier="实验装置图",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="2-3个",
+            knowledge_diff="低",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="控制变量或故障分析",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_single_state_routine_safety_calculation_is_medium(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "探究电流与电压关系的串联电路中，给出电源、电表量程和滑动变阻器额定电流，求保证器材安全时变阻器接入的最小阻值。",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            additional_structure="电路约束",
+            information_carrier="电路图",
+            knowledge_count="2-3个",
+            state_count="连续变化或临界状态",
+            constraint_count="多约束",
+            variable_relation="简单正反比",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_closed_material_experiment_stays_medium_when_one_feature_drifts(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "干冰研究包括物态变化直接判断、长方体密度计算，以及根据三次已给质量和体积差推导二氧化碳与空气密度表达式。",
+            sub_questions=[{"stem": "判断物态变化"}, {"stem": "计算固体密度"}, {"stem": "按既定步骤推导气体密度"}],
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="多层因果推理",
+            problem_structure="跨模块综合",
+            additional_structure="实验探究",
+            information_carrier="多图表综合",
+            reality_question="是",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="2-3个",
+            cross_module="跨模块综合",
+            state_count="单状态",
+            constraint_count="单一约束",
+            variable_relation="简单正反比",
+            experiment_requirement="方案设计或误差评价",
+            graph_table_requirement="直接读数",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_open_design_with_boundary_validation_is_not_suppressed(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "自主设计液体密度测量仪，建立标尺刻度与密度的函数关系，比较方案并验证量程能否覆盖全部边界。",
+            sub_questions=[{"stem": "设计标尺"}, {"stem": "验证量程边界"}],
+            step_count="6-8步",
+            formula_count="4-6个",
+            calculation_complexity="复杂方程或范围计算",
+            reasoning_chain="逆向推理或临界分析",
+            problem_structure="实验探究",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="4个及以上",
+            state_count="多状态",
+            constraint_count="多约束",
+            variable_relation="多变量耦合关系",
+            experiment_requirement="方案设计或误差评价",
+            graph_table_requirement="图像反推或外推",
+        )
+        self.assertIn(output["difficulty_level"], ["拔高题", "压轴题"])
+        self.assertNotEqual(output["difficulty_level"], "中等题")
 
 
 class FusedPostprocessTests(unittest.TestCase):

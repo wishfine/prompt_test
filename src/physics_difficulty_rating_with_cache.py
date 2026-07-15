@@ -62,6 +62,9 @@ CACHE_EXPIRE_SECONDS = 6 * 24 * 3600
 
 DIFFICULTY_RATING_PROMPT_PREFIX = ""
 DIFFICULTY_RATING_PROMPT_SUFFIX = ""
+DEFAULT_PROMPT_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "prompts", "初中物理难度打标提示词.txt")
+)
 
 LEVEL_MAP = {"送分题": 1, "基础题": 2, "中等题": 3, "拔高题": 4, "压轴题": 5}
 LEVEL_NAMES = set(LEVEL_MAP.values())
@@ -340,6 +343,24 @@ def normalize_reasoning_schema(result: Dict[str, Any]) -> None:
     if not isinstance(reasoning, dict):
         reasoning = {}
     result["reasoning"] = {k: str(reasoning.get(k, "")) for k in ["core_basis", "hard_point", "why_not_lower", "why_not_higher"]}
+
+
+def extract_raw_difficulty_level(result: Any) -> Optional[str]:
+    """读取模型原始等级，并兼容模型偶发地把等级放进 reasoning。
+
+    顶层字段始终优先；函数只读，不修改原始模型结果，便于保留完整审计证据。
+    """
+    if not isinstance(result, dict):
+        return None
+    top_level = result.get("difficulty_level")
+    if top_level in LEVEL_MAP:
+        return str(top_level)
+    reasoning = result.get("reasoning")
+    if isinstance(reasoning, dict):
+        nested = reasoning.get("difficulty_level")
+        if nested in LEVEL_MAP:
+            return str(nested)
+    return None
 
 
 def full_text_of(data: Dict[str, Any]) -> str:
@@ -941,6 +962,120 @@ def postprocess_v7_compat(
     return compat_result
 
 
+def has_open_high_order_experiment(text: str) -> bool:
+    """识别不能被“常规实验保护”覆盖的真正开放或反推结构。"""
+    return contains_any(
+        text,
+        [
+            "异常点", "偏离直线", "偏离图线", "评价猜想", "猜想是否合理", "提出新猜想", "新猜想",
+            "缺表法", "等效替代", "自主设计", "设计实验", "设计方案", "改进方案", "推导表达式",
+            "可行性验证", "边界覆盖", "量程设计", "标尺设计", "分类讨论", "多解筛选", "筛选有效解",
+        ],
+    )
+
+
+def is_routine_measurement_experiment(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    """常规测量、读表、计算及有限误差比较；不依赖某一道题的专属名词。"""
+    text = full_text_of(data)
+    visible = visible_text_of(data)
+    if features.get("problem_structure") != "实验探究" or has_open_high_order_experiment(text):
+        return False
+    # 附着/带出液体后的误差可能发生抵消，需要等效关系推理，不属于普通误差来源判断。
+    if contains_any(visible, ["带出", "附着", "沾水"]) and contains_any(visible, ["偏大", "偏小", "仍然准确", "是否准确"]):
+        return False
+    if features.get("step_count") not in ["3-5步", "6-8步"]:
+        return False
+    if features.get("calculation_complexity") == "复杂方程或范围计算":
+        return False
+    electrical_measurement = (
+        contains_any(text, ["测量", "伏安法", "探究电流与电压"])
+        and contains_any(text, ["电压", "电压表"])
+        and contains_any(text, ["电流", "电流表"])
+        and contains_any(text, ["滑动变阻器", "变阻器"])
+    )
+    density_measurement = (
+        "密度" in text
+        and contains_any(text, ["测量", "天平", "质量"])
+        and contains_any(text, ["体积", "排水", "浸没"])
+    )
+    return electrical_measurement or density_measurement
+
+
+def is_routine_single_boundary_circuit(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    """单一工作状态下按量程取一个端点的常规电路计算。"""
+    text = full_text_of(data)
+    if count_subquestions(data) != 0 or features.get("problem_structure") != "电路综合":
+        return False
+    if features.get("step_count") != "3-5步" or features.get("calculation_complexity") != "简单笔算":
+        return False
+    if features.get("formula_count") not in ["0-1个", "2-3个"]:
+        return False
+    if features.get("reasoning_chain") == "逆向推理或临界分析" or features.get("variable_relation") == "多变量耦合关系":
+        return False
+    if contains_any(text, ["多开关", "非线性", "I-U", "分类讨论", "多解", "黑箱", "可行性验证"]):
+        return False
+    return (
+        contains_any(text, ["量程", "额定电流", "器材的安全", "元件安全"])
+        and contains_any(text, ["滑动变阻器", "变阻器"])
+        and contains_any(text, ["至少", "最小阻值", "最大阻值", "最大允许电流"])
+    )
+
+
+def is_closed_measurement_material(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    """给定完整操作链、只要求读数/计算/表达式的封闭式材料实验。"""
+    text = full_text_of(data)
+    if count_subquestions(data) < 2 or features.get("step_count") != "3-5步":
+        return False
+    experiment_context = (
+        features.get("problem_structure") == "实验探究"
+        or features.get("additional_structure") == "实验探究"
+        or contains_any(text, ["实验操作", "实验步骤", "测量过程", "开展了以下研究"])
+    )
+    if not experiment_context:
+        return False
+    if features.get("calculation_complexity") not in ["口算或直接判断", "简单笔算"]:
+        return False
+    if features.get("constraint_count") not in ["无约束", "单一约束"]:
+        return False
+    if features.get("variable_relation") not in ["无变量关系", "简单正反比"]:
+        return False
+    if features.get("graph_table_requirement") not in ["无", "直接读数"] or has_open_high_order_experiment(text):
+        return False
+    closed_actions = contains_any(text, ["实验操作", "实验步骤", "记录", "读数", "计算", "表达式", "测量"])
+    measurement_relation = contains_any(text, ["质量", "体积", "密度", "电流", "电压", "压强"])
+    return closed_actions and measurement_relation
+
+
+def is_hidden_dynamic_lever(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    """用题目结构识别低计算、高建模的动态杠杆，不依赖 state_count。"""
+    text = full_text_of(data)
+    return bool(
+        features.get("problem_structure") == "力学综合"
+        and features.get("step_count") in ["3-5步", "6-8步"]
+        and features.get("calculation_complexity") in ["口算或直接判断", "简单笔算"]
+        and features.get("reasoning_chain") in ["多层因果推理", "逆向推理或临界分析"]
+        and contains_any(text, ["杠杆", "支点"])
+        and "力臂" in text
+        and contains_any(text, ["角度", "转动", "变化", "始终与", "垂直"])
+    )
+
+
+def is_simple_source_polarity_task(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    """电源极性顺向判断及简单原因列举，避免被实验 feature 漂移抬档。"""
+    text = full_text_of(data)
+    return bool(
+        features.get("formula_count") == "0-1个"
+        and features.get("calculation_complexity") == "口算或直接判断"
+        and features.get("knowledge_diff") == "低"
+        and features.get("constraint_count") == "无约束"
+        and features.get("variable_relation") == "无变量关系"
+        and features.get("graph_table_requirement") == "无"
+        and contains_any(text, ["发光二极管", "LED"])
+        and contains_any(text, ["正极", "负极"])
+        and not contains_any(text, ["测量数据", "数据表", "伏安特性", "设计实验", "控制变量法"])
+    )
+
+
 def v7_stable_override(
     raw_level: str,
     features: Dict[str, str],
@@ -954,6 +1089,22 @@ def v7_stable_override(
         features.get("formula_count") == "0-1个"
         and features.get("calculation_complexity") == "口算或直接判断"
     )
+
+    # 稳定规则只看可复核的题目结构，不让单个易漂移 feature 决定升降档。
+    if raw_level == "中等题" and is_hidden_dynamic_lever(data, features):
+        return "拔高题", "stable_hidden_dynamic_lever", ["动态力臂与角度关系", "低计算但需隐含几何建模"]
+
+    if raw_level == "基础题" and is_simple_source_polarity_task(data, features):
+        return "基础题", "stable_simple_source_polarity", ["顺向极性判断", "无数据归纳、计算或连续实验推理"]
+
+    if raw_level == "拔高题" and is_routine_measurement_experiment(data, features):
+        return "中等题", "stable_routine_measurement_experiment", ["标准测量流程", "无异常点反推、开放设计或边界验证"]
+
+    if raw_level == "拔高题" and is_routine_single_boundary_circuit(data, features):
+        return "中等题", "stable_routine_single_boundary_circuit", ["单状态量程端点计算", "无多状态、分类讨论或多解筛选"]
+
+    if raw_level == "中等题" and is_closed_measurement_material(data, features):
+        return "中等题", "stable_closed_measurement_material", ["操作链和所求关系均显性", "无开放设计、异常点反推或复杂边界"]
 
     standard_connection = bool(
         raw_level == "基础题"
@@ -1101,12 +1252,12 @@ def postprocess_physics_difficulty(rating_result: Dict[str, Any], data: Dict[str
     """统一后处理：最多调整一档，并记录每次调整的证据。"""
     if not isinstance(rating_result, dict) or not rating_result:
         return {}
+    raw_level = extract_raw_difficulty_level(rating_result)
     rating_result["features"] = normalize_features(rating_result.get("features"))
     normalize_reasoning_schema(rating_result)
-    raw_level = rating_result.get("difficulty_level")
     if raw_level not in LEVEL_MAP:
         raw_level = "中等题"
-        rating_result["difficulty_level"] = raw_level
+    rating_result["difficulty_level"] = raw_level
     rating_result["difficulty_level_raw"] = raw_level
     rating_result["postprocess_actions"] = []
 
@@ -1263,12 +1414,16 @@ async def process_single_question(data: Dict[str, Any], session: aiohttp.ClientS
         try:
             result, elapsed, prompt_tokens, completion_tokens, total_tokens = await call_model_with_cache(construct_question_content(safe_data), session, retries, timeout_sec)
             raw_result = copy.deepcopy(result)
-            result = postprocess_physics_difficulty(result, safe_data)
+            raw_level = extract_raw_difficulty_level(raw_result)
+            postprocess_input = copy.deepcopy(result)
+            if isinstance(postprocess_input, dict) and raw_level and postprocess_input.get("difficulty_level") not in LEVEL_MAP:
+                postprocess_input["difficulty_level"] = raw_level
+            result = postprocess_physics_difficulty(postprocess_input, safe_data)
             output = make_output_base(data)
             output.update({
                 "rating_profile": RATING_PROFILE,
                 "difficulty_rating_raw": raw_result,
-                "difficulty_level_raw": raw_result.get("difficulty_level") if isinstance(raw_result, dict) else None,
+                "difficulty_level_raw": raw_level,
                 "postprocess_actions": result.get("postprocess_actions", []) if isinstance(result, dict) else [],
                 "difficulty_rating": result,
                 "api_time_use": round(elapsed, 2),
@@ -1305,10 +1460,7 @@ def get_processed_question_ids(output_path: str) -> set:
 async def main_batch_run() -> None:
     global USE_CACHE
     parser = argparse.ArgumentParser(description="初中物理难度评级批量打标")
-    default_prompt = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "prompts", "archive", "初中物理难度打标提示词_v7_best.txt")
-    )
-    parser.add_argument("-p", "--prompt", default=default_prompt)
+    parser.add_argument("-p", "--prompt", default=DEFAULT_PROMPT_PATH)
     parser.add_argument("-i", "--input", default="../data/physics_sampled_5000_per_difficulty.jsonl")
     parser.add_argument("-o", "--output", default="physics_difficulty_rated_results.jsonl")
     parser.add_argument("-e", "--error", default="physics_difficulty_errors.jsonl")

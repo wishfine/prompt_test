@@ -32,30 +32,40 @@ class V7CompatAssetTests(unittest.TestCase):
         self.assertGreaterEqual(source.count("def postprocess_physics_difficulty"), 1)
 
 
-class FusedPromptAssetTests(unittest.TestCase):
-    def test_final_prompt_keeps_moderate_v7_calibration_depth(self) -> None:
+class ProductionPromptAssetTests(unittest.TestCase):
+    def load_prefix(self) -> str:
         path = ROOT / "prompts" / "初中物理难度打标提示词.txt"
         namespace: dict[str, str] = {}
         exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), {}, namespace)
-        prefix = namespace["DIFFICULTY_RATING_PROMPT_PREFIX"]
-        self.assertGreaterEqual(len(prefix), 14000)
-        self.assertLess(len(prefix), 21000)
-        self.assertIn("教师口径与相邻档优先级", prefix)
-        self.assertGreaterEqual(prefix.count("代表性锚点"), 5)
+        return namespace["DIFFICULTY_RATING_PROMPT_PREFIX"]
 
-    def test_final_prompt_has_nine_non_versioned_calibration_examples(self) -> None:
-        path = ROOT / "prompts" / "初中物理难度打标提示词.txt"
-        namespace: dict[str, str] = {}
-        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), {}, namespace)
-        prefix = namespace["DIFFICULTY_RATING_PROMPT_PREFIX"]
-        self.assertEqual(len(re.findall(r"【校准示例\d+】", prefix)), 9)
-        self.assertNotRegex(prefix, r"V[1-9]")
+    def test_production_prompt_keeps_old_baseline_depth_and_two_layer_examples(self) -> None:
+        prefix = self.load_prefix()
+        self.assertGreaterEqual(len(prefix), 17500)
+        self.assertLess(len(prefix), 23000)
+        self.assertGreaterEqual(prefix.count("### 代表性例题"), 5)
+        self.assertIn("## 相邻档位边界校准 few-shot", prefix)
+
+    def test_production_prompt_has_ten_non_versioned_boundary_examples(self) -> None:
+        prefix = self.load_prefix()
+        self.assertEqual(len(re.findall(r"【边界示例\d+】", prefix)), 10)
+        self.assertNotRegex(prefix, r"V5|V6|V7")
+        self.assertNotIn("回收中等保护", prefix)
+        self.assertNotIn("压轴保护恢复", prefix)
+
+    def test_production_prompt_resolves_diagram_and_multi_blank_conflicts(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("完整受力图、凸透镜光线作图", prefix)
+        self.assertRegex(prefix, r"完整受力图、凸透镜光线作图[^。]{0,80}至少基础题")
+        self.assertRegex(prefix, r"跨不同知识点[^。]{0,100}至少基础题")
+
+    def test_batch_script_defaults_to_production_prompt(self) -> None:
+        source = (ROOT / "src" / "physics_difficulty_rating_with_cache.py").read_text(encoding="utf-8")
+        self.assertIn('"prompts", "初中物理难度打标提示词.txt"', source)
+        self.assertNotIn('default_prompt =', source)
 
     def test_final_prompt_json_example_has_no_duplicate_keys(self) -> None:
-        path = ROOT / "prompts" / "初中物理难度打标提示词.txt"
-        namespace: dict[str, str] = {}
-        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), {}, namespace)
-        prefix = namespace["DIFFICULTY_RATING_PROMPT_PREFIX"]
+        prefix = self.load_prefix()
         marker = "合法 JSON 示例"
         start = prefix.index("{", prefix.index(marker))
 
@@ -78,6 +88,8 @@ class FusedPromptAssetTests(unittest.TestCase):
             "state_count", "constraint_count", "variable_relation", "experiment_requirement",
             "graph_table_requirement", "error_risk",
         })
+        self.assertIn(parsed["difficulty_level"], ["送分题", "基础题", "中等题", "拔高题", "压轴题"])
+        self.assertNotIn("difficulty_level", parsed["reasoning"])
 
 
 if __name__ == "__main__":
