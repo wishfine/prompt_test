@@ -32,6 +32,13 @@ def result(level: str, **overrides: str) -> dict:
 
 
 class PhysicsPostprocessTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.original_profile = rating.RATING_PROFILE
+        rating.RATING_PROFILE = "generalized"
+
+    def tearDown(self) -> None:
+        rating.RATING_PROFILE = self.original_profile
+
     def postprocess(self, level: str, stem: str, **feature_values: str) -> dict:
         return rating.postprocess_physics_difficulty(result(level, **feature_values), {"question_id": "test", "stem": stem})
 
@@ -331,6 +338,343 @@ class V7CompatPostprocessTests(unittest.TestCase):
         self.assertEqual(output["difficulty_level"], "压轴题")
         self.assertEqual(output["difficulty_level_raw"], "拔高题")
         self.assertTrue(output["postprocess_actions"])
+
+
+class FusedPostprocessTests(unittest.TestCase):
+    """融合最终版：稳定边界优先，禁止单个易波动 feature 触发升档。"""
+
+    def setUp(self) -> None:
+        self.original_profile = rating.RATING_PROFILE
+        self.assertIn("fused", rating.VALID_RATING_PROFILES)
+        rating.RATING_PROFILE = "fused"
+
+    def tearDown(self) -> None:
+        rating.RATING_PROFILE = self.original_profile
+
+    def postprocess(self, level: str, stem: str, sub_questions: list | None = None, **feature_values: str) -> dict:
+        return rating.postprocess_physics_difficulty(
+            result(level, **feature_values),
+            {"question_id": "fused-test", "stem": stem, "sub_questions": sub_questions or []},
+        )
+
+    def test_standard_circuit_connection_stays_basic(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "根据电路图将实物连接完整，并为电压表选择量程。",
+            step_count="3-5步",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            additional_structure="电路约束",
+            information_carrier="电路图",
+            knowledge_count="2-3个",
+            constraint_count="单一约束",
+            error_risk="明显易错点",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_standard_circuit_connection_can_correct_medium_to_basic(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "根据电路图将实物连接完整。",
+            step_count="3-5步",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            additional_structure="电路约束",
+            information_carrier="电路图",
+            knowledge_count="2-3个",
+            constraint_count="单一约束",
+            error_risk="明显易错点",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_textbook_quantity_estimate_stays_easy(self) -> None:
+        output = self.postprocess(
+            "送分题",
+            "关于公交车的说法，与实际相符的是：普通公交车长度约10m。",
+            reasoning_chain="简单因果推理",
+            knowledge_count="4个及以上",
+            error_risk="轻微易错点",
+        )
+        self.assertEqual(output["difficulty_level"], "送分题")
+
+    def test_photo_scale_estimate_stays_basic(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "由照片估测，凤蝶两翅展开的实际长度约为多少？",
+            reasoning_chain="简单因果推理",
+            information_carrier="单图识别",
+            knowledge_count="1个",
+            error_risk="轻微易错点",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_independent_device_facts_and_direct_calculation_stay_basic(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "电动晾衣装置：(1)判断电磁铁磁性；(2)判断电流方向；(3)匀速上升时求功和功率。",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="简单因果推理",
+            problem_structure="跨模块综合",
+            additional_structure="跨模块",
+            reality_question="是",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="2-3个",
+            cross_module="跨模块综合",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_four_standard_experiment_items_reach_medium_despite_knowledge_drift(self) -> None:
+        output = rating.postprocess_physics_difficulty(
+            result(
+                "基础题",
+                problem_structure="实验探究",
+                additional_structure="图像表格",
+                information_carrier="多图表综合",
+                subquestion_dependency="多问但相互独立",
+                knowledge_count="2-3个",
+                cross_module="同一模块内部",
+                experiment_requirement="基础操作或读数",
+                graph_table_requirement="直接读数",
+                error_risk="轻微易错点",
+            ),
+            {
+                "question_id": "test",
+                "stem": "四个独立实验。",
+                "sub_questions": [
+                    {"stem": "调节杠杆。"},
+                    {"stem": "托里拆利实验误差。"},
+                    {"stem": "扩散实验为什么不能搅拌？"},
+                    {"stem": "水和酒精混合实验。"},
+                ],
+            },
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_standard_magnetic_drawing_stays_basic_despite_feature_drift(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "根据小磁针N极指向，画出磁感线方向并标出电源正极。",
+            step_count="3-5步",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            additional_structure="电路约束",
+            information_carrier="电路图",
+            knowledge_count="2-3个",
+            constraint_count="单一约束",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_routine_two_mode_heater_is_medium_not_hard(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "家用电热水壶有加热和保温两个挡位，电路结构明确，计算吸热量、功率并按给定规格确定两段电热丝长度。",
+            step_count="6-8步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="跨模块综合",
+            additional_structure="跨模块",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="2-3个",
+            cross_module="跨模块综合",
+            state_count="双状态",
+            constraint_count="单一约束",
+            variable_relation="简单正反比",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_independent_direct_calculations_can_downgrade_to_basic(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "太阳能热水器包含两个相互独立的小问。",
+            sub_questions=[
+                {"stem": "直接代入比热容和效率公式计算效率。"},
+                {"stem": "由额定功率直接计算电流并选择空气开关。"},
+            ],
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="简单因果推理",
+            problem_structure="跨模块综合",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="2-3个",
+            cross_module="跨模块综合",
+            state_count="单状态",
+            constraint_count="单一约束",
+            variable_relation="简单正反比",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_cross_module_material_with_round_trip_model_reaches_medium(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "雷达料位器通过电磁波往返时间监测液面。",
+            sub_questions=[
+                {"stem": "根据波谱判断电磁波种类。"},
+                {"stem": "由往返时间求单程距离，再求液面高度。"},
+                {"stem": "解释液面下降时罐底压强变化。"},
+            ],
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="简单因果推理",
+            problem_structure="跨模块综合",
+            information_carrier="图像或表格",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="2-3个",
+            cross_module="跨模块综合",
+            variable_relation="简单正反比",
+            graph_table_requirement="直接读数",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_multiple_standard_experiment_analyses_reach_medium(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "请运用所学物理知识分析下列实验。",
+            sub_questions=[
+                {"stem": "判断杠杆是否平衡并调节平衡螺母。"},
+                {"stem": "读取水银柱并判断混入空气造成的误差方向。"},
+                {"stem": "说明扩散实验为什么不能搅动液体。"},
+                {"stem": "根据混合体积判断分子间存在间隙。"},
+            ],
+            step_count="1-2步",
+            reasoning_chain="简单因果推理",
+            problem_structure="实验探究",
+            additional_structure="实验探究",
+            information_carrier="多图表综合",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="4个及以上",
+            cross_module="跨模块综合",
+            experiment_requirement="基础操作或读数",
+            graph_table_requirement="直接读数",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_routine_automatic_kettle_stays_medium_when_one_feature_drifts(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "电热水壶包含加热、保温和干烧保护，开关状态和工作链均已明确，只判断各状态工作情况。",
+            step_count="3-5步",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            cross_module="跨模块综合",
+            state_count="多状态",
+            constraint_count="多约束",
+            knowledge_count="2-3个",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_project_with_range_coverage_keeps_final_despite_feature_drift(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "液体密度测量挑战赛：将天平改装为密度测量仪，设计标尺，并判断量程是否覆盖全部待测液体，验证方案可行性。",
+            step_count="6-8步",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="跨模块综合",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="4个及以上",
+            cross_module="跨模块综合",
+            state_count="多状态",
+            constraint_count="单一约束",
+            variable_relation="图像函数关系",
+            experiment_requirement="方案设计或误差评价",
+        )
+        self.assertEqual(output["difficulty_level"], "压轴题")
+
+    def test_single_object_textbook_force_diagram_can_stay_easy(self) -> None:
+        output = self.postprocess(
+            "送分题",
+            "画出静止在水平地面上篮球的受力示意图。",
+            information_carrier="单图识别",
+        )
+        self.assertEqual(output["difficulty_level"], "送分题")
+
+    def test_life_application_is_not_downgraded_to_easy(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "制作水瓶琴时，改变瓶内水量后判断音调变化。",
+            reasoning_chain="简单因果推理",
+            problem_structure="光学声学综合",
+            information_carrier="单图识别",
+            knowledge_count="2-3个",
+            error_risk="轻微易错点",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+
+    def test_standard_reflection_experiment_stays_medium(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "探究光的反射定律，依据实验步骤和多组数据解释并评估实验结论。",
+            step_count="3-5步",
+            reasoning_chain="多层因果推理",
+            problem_structure="实验探究",
+            subquestion_dependency="多问且层层递进",
+            experiment_requirement="控制变量或故障分析",
+            graph_table_requirement="多组比较归纳",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_pressure_scale_stays_medium_despite_step_and_constraint_drift(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "普通压力秤使用压敏电阻R-F图像、欧姆定律和电表量程求最大测量压力。",
+            step_count="6-8步",
+            formula_count="2-3个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            constraint_count="多约束",
+            variable_relation="图像函数关系",
+            graph_table_requirement="直接读数",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_process_sequence_hard_is_not_promoted_to_final(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "两端开口玻璃管汲水，判断压紧管口、快速上提和松开管口的正确操作顺序。",
+            step_count="6-8步",
+            reasoning_chain="逆向推理或临界分析",
+            state_count="多状态",
+            constraint_count="多约束",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+
+    def test_experiment_error_evaluation_hard_is_not_promoted_to_final(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "测量多种螺栓质量和体积，根据图像判断材料，并评价气泡猜想、提出新猜想。",
+            step_count="6-8步",
+            calculation_complexity="简单笔算",
+            reasoning_chain="多层因果推理",
+            problem_structure="实验探究",
+            subquestion_dependency="多问且层层递进",
+            constraint_count="单一约束",
+            variable_relation="图像函数关系",
+            experiment_requirement="方案设计或误差评价",
+            graph_table_requirement="图像反推或外推",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+
+    def test_non_project_nine_step_deep_coupling_reaches_final(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "多个起重工具共同作用，需要联立机械效率、功率、速度关系并根据多项条件完成筛选。",
+            step_count="9-12步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="逆向推理或临界分析",
+            problem_structure="力学综合",
+            knowledge_count="4个及以上",
+            state_count="双状态",
+            constraint_count="多约束",
+            variable_relation="多变量耦合关系",
+        )
+        self.assertEqual(output["difficulty_level"], "压轴题")
 
 
 if __name__ == "__main__":

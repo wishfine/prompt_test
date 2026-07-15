@@ -34,8 +34,8 @@ BASE_URL = os.getenv("BASE_URL", "http://172.22.0.35:4466/v1")
 if not BASE_URL.endswith("/"):
     BASE_URL += "/"
 MODEL_NAME = os.getenv("MODEL_NAME", "doubao-seed-2.0-lite")
-VALID_RATING_PROFILES = {"generalized", "v7_compat"}
-RATING_PROFILE = (os.getenv("RATING_PROFILE", "generalized").strip().lower() or "generalized")
+VALID_RATING_PROFILES = {"fused", "generalized", "v7_compat"}
+RATING_PROFILE = (os.getenv("RATING_PROFILE", "fused").strip().lower() or "fused")
 if RATING_PROFILE not in VALID_RATING_PROFILES:
     raise ValueError(
         f"不支持的 RATING_PROFILE={RATING_PROFILE!r}；"
@@ -609,6 +609,286 @@ def set_level_with_audit(result: Dict[str, Any], level: str, rule: str, evidence
     reasoning["core_basis"] = prefix + str(reasoning.get("core_basis", ""))
 
 
+def is_fused_standard_diagram_task(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    """规范作图/接线只算一次显性规则应用，不受步骤数措辞漂移影响。"""
+    text = visible_text_of(data)
+    action = contains_any(text, ["画出", "作出", "作图", "标出", "连接完整", "补充完整", "补全"])
+    analysis_request = contains_any(text, ["求", "计算", "说明理由", "分析变化", "设计方案", "评价"])
+    return bool(
+        action
+        and not analysis_request
+        and count_subquestions(data) == 0
+        and features.get("formula_count") == "0-1个"
+        and features.get("calculation_complexity") == "口算或直接判断"
+        and features.get("state_count") == "单状态"
+        and features.get("constraint_count") in ["无约束", "单一约束"]
+        and features.get("variable_relation") == "无变量关系"
+        and features.get("experiment_requirement") == "无"
+        and features.get("graph_table_requirement") == "无"
+    )
+
+
+def is_fused_textbook_easy(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    """只允许结构稳定的教材原型从基础降到送分。"""
+    text = visible_text_of(data)
+    if is_fused_standard_diagram_task(data, features):
+        # 仅保留两个完全显性的教材原型：单条特殊光线、水平面单物体二力图。
+        return contains_any(text, ["经透镜射出的光线", "凸透镜特殊光线"]) or (
+            contains_any(text, ["静止在水平地面", "静止在水平面"])
+            and contains_any(text, ["受力示意图", "受力图"])
+        )
+    if features.get("cross_module") == "跨模块综合" or features.get("problem_structure") not in ["概念判断", "光学声学综合"]:
+        return False
+    direct_estimate = bool(
+        contains_any(text, ["与实际相符", "估测", "估计值"])
+        and not contains_any(text, ["求", "计算", "推导"])
+        and features.get("information_carrier") == "纯文字"
+    )
+    if (has_formula_intent(text) and not direct_estimate) or count_subquestions(data) > 0:
+        return False
+    application_mapping = contains_any(text, ["制作", "制成", "改变", "变化", "每秒", "简谱", "音符", "主要利用"])
+    multiple_processes = text.count("这是") >= 2 or text.count("因为") >= 2
+    if application_mapping or multiple_processes:
+        return False
+    direct_semantic = bool(
+        direct_estimate
+        or contains_any(text, ["粒子与宇宙", "扩散"])
+        or (contains_any(text, ["树荫", "水中的鱼", "水中游鱼"]) and contains_any(text, ["光", "折射", "直线传播"]))
+        or (features.get("knowledge_count") == "1个" and contains_any(text, ["单位", "可再生", "不可再生", "熔化", "凝固", "汽化", "液化", "响度", "无线电波"]))
+    )
+    return bool(
+        features.get("step_count") == "1-2步"
+        and features.get("formula_count") == "0-1个"
+        and features.get("calculation_complexity") == "口算或直接判断"
+        and features.get("reasoning_chain") in ["直接套用", "简单因果推理"]
+        and features.get("knowledge_diff") == "低"
+        and features.get("state_count") == "单状态"
+        and features.get("constraint_count") == "无约束"
+        and features.get("variable_relation") == "无变量关系"
+        and features.get("experiment_requirement") == "无"
+        and features.get("graph_table_requirement") == "无"
+        and direct_semantic
+    )
+
+
+def is_fused_independent_direct_set(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    """两个以内相互独立、直接代入的小问按最高小问处理，可回到基础。"""
+    count = count_subquestions(data)
+    text = full_text_of(data)
+    return bool(
+        1 <= count <= 2
+        and features.get("subquestion_dependency") == "多问但相互独立"
+        and features.get("calculation_complexity") in ["口算或直接判断", "简单笔算"]
+        and features.get("state_count") == "单状态"
+        and features.get("constraint_count") in ["无约束", "单一约束"]
+        and features.get("variable_relation") in ["无变量关系", "简单正反比"]
+        and features.get("experiment_requirement") in ["无", "基础操作或读数"]
+        and features.get("graph_table_requirement") in ["无", "直接读数"]
+        and not contains_any(text, ["往返", "反推", "误差方向", "异常", "方案", "可行性", "边界", "分类讨论", "多解"])
+    )
+
+
+def is_fused_cross_module_material_medium(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    """三问以上材料题若包含模型转换和跨模块解释，不能按独立小问压成基础。"""
+    count = count_subquestions(data)
+    supports = 0
+    supports += features.get("step_count") == "3-5步"
+    supports += features.get("formula_count") in ["2-3个", "4-6个"]
+    supports += features.get("information_carrier") in ["图像或表格", "多图表综合"]
+    supports += features.get("variable_relation") in ["简单正反比", "图像函数关系"]
+    text = full_text_of(data)
+    has_continuous_model = bool(
+        ("往返" in text and contains_any(text, ["液面", "传播", "反射", "路程"]))
+        or (contains_any(text, ["卫星", "航天"]) and contains_any(text, ["周期", "推导", "轨道"]))
+    )
+    return bool(
+        count >= 3
+        and features.get("subquestion_dependency") == "多问但相互独立"
+        and features.get("cross_module") == "跨模块综合"
+        and has_continuous_model
+        and supports >= 2
+    )
+
+
+def is_fused_multiple_experiment_medium(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    """多个标准实验的读数、误差方向和现象解释形成整题中等负担。"""
+    text = full_text_of(data)
+    return bool(
+        count_subquestions(data) >= 3
+        and features.get("subquestion_dependency") == "多问但相互独立"
+        and features.get("problem_structure") == "实验探究"
+        and features.get("information_carrier") in ["实验装置图", "多图表综合"]
+        and contains_any(text, ["误差", "为什么", "原因", "调节", "不能", "不可以", "实验"])
+    )
+
+
+def is_fused_routine_heater_or_pressure_scale(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    """模型明确的电热/压力秤常规综合保护在中等。"""
+    text = full_text_of(data)
+    heater = contains_any(text, ["加热挡", "保温挡", "高温挡", "低温挡", "双挡", "两个挡位"]) and contains_any(text, ["电热", "电热水壶", "电热器"])
+    pressure_scale = contains_any(text, ["压力秤", "压敏电阻"]) and contains_any(text, ["欧姆", "量程", "R-F", "阻值"])
+    strong_block = contains_any(text, ["黑箱", "非线性I-U", "分类讨论", "多解", "不等式", "边界覆盖", "可行性验证", "故障并存"])
+    common = not strong_block and features.get("reasoning_chain") != "逆向推理或临界分析" and features.get("variable_relation") != "多变量耦合关系"
+    if pressure_scale:
+        # 电表量程可能被抽成“多约束”，但直接 R-F 读图仍是常规中等结构。
+        return common
+    return bool(heater and common and features.get("constraint_count") in ["无约束", "单一约束"])
+
+
+def is_fused_standard_experiment_medium(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    text = full_text_of(data)
+    return bool(
+        features.get("problem_structure") == "实验探究"
+        and features.get("step_count") in ["1-2步", "3-5步"]
+        and features.get("calculation_complexity") in ["口算或直接判断", "简单笔算"]
+        and features.get("experiment_requirement") in ["基础操作或读数", "控制变量或故障分析"]
+        and features.get("graph_table_requirement") in ["无", "直接读数", "多组比较归纳"]
+        and not contains_any(text, ["缺表法", "等效替代", "自主设计", "新方案", "可行性", "边界验证", "异常点反推"])
+    )
+
+
+def is_fused_routine_control_medium(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    """显性控制链即使被抽成多状态/多约束，也不因单个 feature 升拔高。"""
+    text = full_text_of(data)
+    explicit_control = contains_any(text, ["自动接通", "自动断开", "停止工作", "开始工作", "实现保温", "报警"])
+    no_calculation = features.get("formula_count") == "0-1个" and features.get("calculation_complexity") == "口算或直接判断"
+    return bool(
+        explicit_control
+        and no_calculation
+        and features.get("variable_relation") == "无变量关系"
+        and features.get("experiment_requirement") == "无"
+        and features.get("graph_table_requirement") == "无"
+        and not contains_any(text, ["参数范围", "方案设计", "可行性", "边界覆盖", "改装", "标尺"])
+    )
+
+
+def is_fused_hidden_model_hard(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    """低计算但存在隐含过程、几何/力臂、路径或误差建模的拔高通道。"""
+    text = full_text_of(data)
+    semantic_groups = [
+        ["力臂", "支点"], ["路径", "反射"], ["误差", "方向"],
+        ["顺序", "操作"], ["等效", "替代"], ["载流量", "选择"],
+    ]
+    semantic_count = sum(all(word in text for word in group) for group in semantic_groups)
+    feature_support = sum([
+        features.get("reasoning_chain") in ["多层因果推理", "逆向推理或临界分析"],
+        features.get("experiment_requirement") == "方案设计或误差评价",
+        features.get("subquestion_dependency") == "多问且层层递进",
+        features.get("state_count") in ["多状态", "连续变化或临界状态"],
+    ])
+    return semantic_count >= 1 and feature_support >= 2
+
+
+def is_fused_validated_design_final(data: Dict[str, Any], features: Dict[str, str]) -> bool:
+    """压轴项目必须同时有设计、范围/边界验证和模型支撑。"""
+    text = full_text_of(data)
+    design = contains_any(text, ["改装", "设计标尺", "方案设计", "设计方案", "自主设计"])
+    validation_terms = ["覆盖", "可行性", "边界", "量程", "所有待测", "筛选有效解", "方案比较"]
+    validation_count = sum(term in text for term in validation_terms)
+    model_support = sum([
+        features.get("step_count") in ["6-8步", "9-12步", "12步以上"],
+        features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"],
+        features.get("knowledge_count") == "4个及以上",
+        features.get("cross_module") == "跨模块综合",
+        features.get("variable_relation") in ["图像函数关系", "多变量耦合关系"],
+        features.get("experiment_requirement") == "方案设计或误差评价",
+    ])
+    return design and validation_count >= 2 and model_support >= 3
+
+
+def fused_basic_to_medium_evidence(features: Dict[str, str], data: Dict[str, Any]) -> List[str]:
+    if is_fused_standard_diagram_task(data, features):
+        return []
+    if is_fused_multiple_experiment_medium(data, features):
+        return ["多个标准实验", "包含读数/误差/现象解释", "整题综合负担达到中等"]
+    if is_fused_cross_module_material_medium(data, features):
+        return ["三问以上材料题", "跨模块模型转换", "包含计算与解释"]
+    evidence: List[str] = []
+    if features.get("experiment_requirement") == "控制变量或故障分析" and features.get("graph_table_requirement") in ["多组比较归纳", "图像反推或外推"]:
+        evidence.extend(["控制变量或故障分析", "多组数据归纳/图像反推"])
+    if features.get("subquestion_dependency") == "多问且层层递进" and features.get("reasoning_chain") == "多层因果推理":
+        evidence.extend(["多问层层递进", "连续因果链"])
+    if features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"] and features.get("state_count") in ["双状态", "多状态", "连续变化或临界状态"]:
+        evidence.extend(["多公式联动", "存在状态转换"])
+    return evidence
+
+
+def fused_medium_to_hard_evidence(features: Dict[str, str], data: Dict[str, Any]) -> List[str]:
+    if is_fused_routine_control_medium(data, features) or is_fused_routine_heater_or_pressure_scale(data, features) or is_fused_standard_experiment_medium(data, features):
+        return []
+    if is_fused_hidden_model_hard(data, features):
+        return ["隐含过程/几何/误差模型", "至少两个结构证据相互印证"]
+    evidence = core_high_signals(features, data)
+    stable_semantic = bool(
+        features.get("experiment_requirement") == "方案设计或误差评价"
+        or features.get("graph_table_requirement") == "图像反推或外推"
+        or features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"]
+        or features.get("reasoning_chain") == "逆向推理或临界分析"
+    )
+    required = 2 if features.get("step_count") == "6-8步" else 3
+    return evidence if stable_semantic and len(set(evidence)) >= required else []
+
+
+def fused_hard_to_final_evidence(features: Dict[str, str], data: Dict[str, Any]) -> List[str]:
+    """非项目压轴必须由稳定的深耦合特征共同支持，不能复用“未降档”条件。"""
+    evidence: List[str] = []
+    if features.get("step_count") in ["9-12步", "12步以上"]: evidence.append("9步以上真实推理")
+    if features.get("formula_count") in ["4-6个", "7个以上"]: evidence.append("长公式链")
+    if features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"]: evidence.append("联立/范围计算")
+    if features.get("reasoning_chain") == "逆向推理或临界分析": evidence.append("逆向或临界分析")
+    if features.get("constraint_count") == "多约束": evidence.append("多约束")
+    if features.get("variable_relation") == "多变量耦合关系": evidence.append("多变量耦合")
+    if features.get("graph_table_requirement") == "图像反推或外推": evidence.append("图像反推")
+    if features.get("cross_module") == "跨模块综合": evidence.append("跨模块融合")
+    if features.get("experiment_requirement") == "方案设计或误差评价": evidence.append("方案设计/评价")
+
+    if features.get("step_count") in ["9-12步", "12步以上"]:
+        return evidence if len(set(evidence)) >= 5 else []
+    # 6-8步必须至少六项深耦合证据，防止普通实验评价或过程顺序题升压轴。
+    return evidence if features.get("step_count") == "6-8步" and len(set(evidence)) >= 6 else []
+
+
+def postprocess_fused(rating_result: Dict[str, Any], data: Dict[str, Any], raw_level: str) -> Dict[str, Any]:
+    """融合最终版：单实现、结构语义优先、每次最多调整一档。"""
+    features = rating_result["features"]
+
+    if raw_level == "送分题":
+        if not is_fused_textbook_easy(data, features):
+            reasons = should_upgrade_easy_to_basic(features, data)
+            if reasons:
+                set_level_with_audit(rating_result, "基础题", "fused_easy_to_basic", reasons)
+    elif raw_level == "基础题":
+        if is_fused_textbook_easy(data, features):
+            set_level_with_audit(rating_result, "送分题", "fused_basic_to_easy", ["教材原型直接识别", "无计算/实验/状态分析"])
+        else:
+            evidence = fused_basic_to_medium_evidence(features, data)
+            if evidence:
+                set_level_with_audit(rating_result, "中等题", "fused_basic_to_medium", evidence)
+    elif raw_level == "中等题":
+        if is_fused_standard_diagram_task(data, features):
+            set_level_with_audit(rating_result, "基础题", "fused_medium_to_basic", ["单一规范作图/接线", "无计算、实验数据或状态分析"])
+        elif is_fused_independent_direct_set(data, features):
+            set_level_with_audit(rating_result, "基础题", "fused_medium_to_basic", ["两个以内独立小问", "均为直接代入/简单判断"])
+        else:
+            evidence = fused_medium_to_hard_evidence(features, data)
+            if evidence:
+                set_level_with_audit(rating_result, "拔高题", "fused_medium_to_hard", evidence)
+    elif raw_level == "拔高题":
+        if is_fused_routine_heater_or_pressure_scale(data, features):
+            set_level_with_audit(rating_result, "中等题", "fused_hard_to_medium", ["常规模型明确", "无分类/多解/复杂边界"])
+        elif is_fused_validated_design_final(data, features):
+            set_level_with_audit(rating_result, "压轴题", "fused_hard_to_final", ["方案设计", "范围/边界覆盖", "可行性验证", "多模型支撑"])
+        else:
+            evidence = fused_hard_to_final_evidence(features, data)
+            if evidence:
+                set_level_with_audit(rating_result, "压轴题", "fused_hard_to_final", evidence)
+    elif raw_level == "压轴题" and should_downgrade_final_to_hard(features, data):
+        set_level_with_audit(rating_result, "拔高题", "fused_final_to_hard", core_high_signals(features, data))
+
+    sync_coarse_difficulty(rating_result)
+    return rating_result
+
+
 def postprocess_v7_compat(
     rating_result: Dict[str, Any],
     data: Dict[str, Any],
@@ -658,6 +938,8 @@ def postprocess_physics_difficulty(rating_result: Dict[str, Any], data: Dict[str
     rating_result["difficulty_level_raw"] = raw_level
     rating_result["postprocess_actions"] = []
 
+    if RATING_PROFILE == "fused":
+        return postprocess_fused(rating_result, data, raw_level)
     if RATING_PROFILE == "v7_compat":
         return postprocess_v7_compat(rating_result, data, raw_level)
 
