@@ -72,6 +72,17 @@ ENABLE_GPT56_INDEPENDENCE_GUARD = (
     not in {"0", "false", "no", "off"}
 )
 
+# GPT-5.6 主标签的结构校准和严重偏差安全网分开开关，
+# 便于在同一 Prompt 下分别做净贡献回放。
+ENABLE_GPT56_STRUCTURAL_CALIBRATION = (
+    os.getenv("ENABLE_GPT56_STRUCTURAL_CALIBRATION", "1").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
+ENABLE_GPT56_SEVERE_DEVIATION_GUARDS = (
+    os.getenv("ENABLE_GPT56_SEVERE_DEVIATION_GUARDS", "1").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
+
 
 def resolve_temperature(model_name: str, raw_value: str) -> Optional[float]:
     """Lite 服务端固定使用 temperature=1，其他模型保留环境变量配置。"""
@@ -648,6 +659,30 @@ def sync_coarse_difficulty(result: Dict[str, Any]) -> None:
     }.get(level, "基础/中等区间（2-3档）")
 
 
+ADJACENT_REASONING_BY_LEVEL = {
+    "送分题": {
+        "why_not_lower": "送分题已是最低档。",
+        "why_not_higher": "只需完成唯一熟悉模板的一次直接识别、读数、代入或标准动作，没有第二次物理决策。",
+    },
+    "基础题": {
+        "why_not_lower": "仍需完成显性的条件映射、规律应用或规范操作，不只是唯一教材事实的直接识别。",
+        "why_not_higher": "没有连续过程、共享中间结论、完整实验流程或单项3—4步常规分析。",
+    },
+    "中等题": {
+        "why_not_lower": "存在连续过程、共享结论、完整实验流程或3—4步真实分析，超过简单显性应用。",
+        "why_not_higher": "没有决定性模型转换，也未形成满足拔高标准的约5—6步高密度完整链。",
+    },
+    "拔高题": {
+        "why_not_lower": "存在决定性模型转换，或形成达到拔高标准的高密度完整链。",
+        "why_not_higher": "尚未形成复杂状态—参数—约束网络中的分类、临界、边界验证、图像反推或有效解筛选。",
+    },
+    "压轴题": {
+        "why_not_lower": "多对象、多状态和多约束形成复杂网络，并执行了临界、分类、边界验证、图像反推或有效解筛选。",
+        "why_not_higher": "压轴题已是最高档。",
+    },
+}
+
+
 def set_level_with_audit(result: Dict[str, Any], level: str, rule: str, evidence: List[str]) -> None:
     old = result.get("difficulty_level")
     if old == level:
@@ -658,6 +693,9 @@ def set_level_with_audit(result: Dict[str, Any], level: str, rule: str, evidence
     reasoning = result.setdefault("reasoning", {})
     prefix = f"自动调整：{rule}；证据：{'；'.join(evidence[:5])}。"
     reasoning["core_basis"] = prefix + str(reasoning.get("core_basis", ""))
+    adjacent_reasoning = ADJACENT_REASONING_BY_LEVEL[level]
+    reasoning["why_not_lower"] = adjacent_reasoning["why_not_lower"]
+    reasoning["why_not_higher"] = adjacent_reasoning["why_not_higher"]
 
 
 def is_fused_standard_diagram_task(data: Dict[str, Any], features: Dict[str, str]) -> bool:
@@ -1261,6 +1299,7 @@ def postprocess_v7_stable(
     data: Dict[str, Any],
     raw_level: str,
     enable_progressive_final_chain: Optional[bool] = None,
+    require_decisive_final_evidence: bool = False,
 ) -> Dict[str, Any]:
     """按教师样本中跨三次稳定的联合结构做相邻档校准。
 
@@ -1394,6 +1433,35 @@ def postprocess_v7_stable(
         or features.get("reasoning_chain") == "逆向推理或临界分析"
         or features.get("graph_table_requirement") == "图像反推或外推"
     )
+    final_decisive_evidence = bool(
+        features.get("graph_table_requirement") == "图像反推或外推"
+        or features.get("calculation_complexity") == "复杂方程或范围计算"
+        or features.get("state_count") == "连续变化或临界状态"
+        or contains_any(
+            core_basis,
+            [
+                "分类讨论",
+                "多解筛选",
+                "边界验证",
+                "临界条件",
+                "临界状态",
+                "有效解",
+                "可行性验证",
+                "可行性判断",
+                "上下界",
+                "最大值和最小值",
+                "筛选真正有效",
+                "量程范围筛选",
+                "溢出临界",
+            ],
+        )
+        # 项目题的窄通道：必须是覆盖范围/可行性的明确验证，
+        # 不把单独的“最大”“范围”当作压轴证据。
+        or contains_any(
+            full_text_of(data),
+            ["是否能覆盖", "是否可行", "可行性验证", "根据物理条件筛选有效解"],
+        )
+    )
 
     if low_structure_medium:
         set_level_with_audit(
@@ -1432,6 +1500,7 @@ def postprocess_v7_stable(
         and len(high_signals) >= 5
         and features.get("constraint_count") == "多约束"
         and has_final_reasoning_signal
+        and (not require_decisive_final_evidence or final_decisive_evidence)
     ):
         set_level_with_audit(
             stable_result,
@@ -1467,28 +1536,89 @@ def postprocess_gpt56_hybrid(
     data: Dict[str, Any],
     raw_level: str,
 ) -> Dict[str, Any]:
-    """GPT-5.6 裁定口径：旧 Hybrid5d 主体加一条窄的独立概念保护。"""
+    """GPT-5.6 裁定口径的相邻档结构校准。
+
+    规则来自 1066 题的全量回放：先使用 Hybrid5d 稳定主体，
+    再仅在原始等级未被调整时执行一条 GPT-5.6 专属校准。
+    所有规则最多移动一档，且每题最多记录一个动作。
+    """
     calibrated = postprocess_v7_stable(
         rating_result,
         data,
         raw_level,
         enable_progressive_final_chain=False,
+        require_decisive_final_evidence=True,
     )
     for action in calibrated.get("postprocess_actions", []):
         rule_name = str(action.get("rule", ""))
         if rule_name.startswith("teacher_"):
             action["rule"] = rule_name.replace("teacher_", "gpt56_hybrid_", 1)
-    if not ENABLE_GPT56_INDEPENDENCE_GUARD:
-        return calibrated
-    if raw_level != "中等题" or calibrated.get("postprocess_actions"):
+    if calibrated.get("postprocess_actions"):
         return calibrated
 
     features = calibrated.get("features", {})
+    core_basis = str(calibrated.get("reasoning", {}).get("core_basis", "") or "")
     evidence_text = (
-        str(calibrated.get("reasoning", {}).get("core_basis", "") or "")
+        core_basis
         + "\n"
         + full_text_of(data)
     )
+    options = data.get("options")
+    has_options = bool(options and (not isinstance(options, (list, tuple, dict)) or len(options) > 0))
+
+    # 送分/基础：只使用一个低阶教材模板、没有第二次物理决策。
+    # 知识点数必须为 1，防止多个独立史实/能源概念被批量降档。
+    single_template_basic = bool(
+        ENABLE_GPT56_STRUCTURAL_CALIBRATION
+        and raw_level == "基础题"
+        and features.get("step_count") == "1-2步"
+        and features.get("formula_count") == "0-1个"
+        and features.get("calculation_complexity") == "口算或直接判断"
+        and features.get("reasoning_chain") == "直接套用"
+        and features.get("problem_structure") == "概念判断"
+        and features.get("additional_structure") == "无"
+        and features.get("subquestion_dependency") == "无多问"
+        and features.get("knowledge_count") == "1个"
+        and features.get("knowledge_diff") == "低"
+        and features.get("cross_module") == "同一模块内部"
+        and features.get("state_count") == "单状态"
+        and features.get("constraint_count") == "无约束"
+        and features.get("variable_relation") == "无变量关系"
+        and features.get("experiment_requirement") == "无"
+        and features.get("graph_table_requirement") == "无"
+    )
+    if single_template_basic:
+        set_level_with_audit(
+            calibrated,
+            "送分题",
+            "gpt56_basic_to_easy_single_template_guard",
+            ["唯一低阶教材模板", "1步直接套用", "无状态、约束或实验分析"],
+        )
+        sync_coarse_difficulty(calibrated)
+        return calibrated
+
+    # 多组构型下验证“作用效果等效”不是一次直接读数。
+    equivalence_experiment = bool(
+        ENABLE_GPT56_SEVERE_DEVIATION_GUARDS
+        and raw_level == "基础题"
+        and features.get("problem_structure") == "实验探究"
+        and contains_any(evidence_text, ["4组实验", "四组实验", "多组实验"])
+        and contains_any(evidence_text, ["等效", "合力", "作用效果"])
+        and contains_any(evidence_text, ["相同", "不同", "比较"])
+    )
+    if equivalence_experiment:
+        set_level_with_audit(
+            calibrated,
+            "中等题",
+            "gpt56_basic_to_medium_equivalence_experiment_guard",
+            ["多组实验构型", "作用效果等效判定", "需跨构型比较"],
+        )
+        sync_coarse_difficulty(calibrated)
+        return calibrated
+
+    if raw_level != "中等题":
+        return calibrated
+
     explicit_independence = contains_any(
         evidence_text,
         ["彼此独立", "各选项独立", "每个选项独立", "独立判断"],
@@ -1498,7 +1628,8 @@ def postprocess_gpt56_hybrid(
         ["充分条件", "必要条件", "反例", "特殊边界", "规范表述"],
     )
     independent_low_structure_concept = bool(
-        features.get("problem_structure") == "概念判断"
+        ENABLE_GPT56_INDEPENDENCE_GUARD
+        and features.get("problem_structure") == "概念判断"
         and features.get("formula_count") == "0-1个"
         and features.get("state_count") == "单状态"
         and features.get("constraint_count") == "无约束"
@@ -1515,6 +1646,94 @@ def postprocess_gpt56_hybrid(
             "gpt56_medium_to_basic_explicit_independence_guard",
             ["模型明确判定选项彼此独立", "无状态、约束或变量联动", "无实验或图表推导"],
         )
+        sync_coarse_difficulty(calibrated)
+        return calibrated
+
+    step_match = re.search(
+        r"(?:实际有效推理(?:约|为|大约)?|实际(?:约|为|大约)?|"
+        r"完整有效推理约|有效物理决策共)\s*(\d+)",
+        core_basis,
+    )
+    explicit_step_lower_bound = int(step_match.group(1)) if step_match else 0
+
+    # GPT-5.6 裁定中，多公式力学题的完整负担经常被 Lite 用
+    # “每步都常规”压成中等。层层递进题仍要求 core_basis 明确至少 5 步，
+    # 以保留常规 4 步潜水器计算的中等边界。
+    dense_force_chain = bool(
+        ENABLE_GPT56_STRUCTURAL_CALIBRATION
+        and features.get("calculation_complexity") == "多公式联立"
+        and features.get("problem_structure") == "力学综合"
+        and features.get("knowledge_count") == "2-3个"
+        and (
+            features.get("subquestion_dependency") != "多问且层层递进"
+            or explicit_step_lower_bound >= 5
+        )
+    )
+    if dense_force_chain:
+        set_level_with_audit(
+            calibrated,
+            "拔高题",
+            "gpt56_medium_to_hard_dense_force_chain",
+            ["力学综合", "多公式联立", "完整任务负担超过常规4步链"],
+        )
+        sync_coarse_difficulty(calibrated)
+        return calibrated
+
+    if not ENABLE_GPT56_SEVERE_DEVIATION_GUARDS:
+        return calibrated
+
+    phase_buoyancy_transition = bool(
+        features.get("problem_structure") == "力学综合"
+        and contains_any(evidence_text, ["熔化", "消融", "融化"])
+        and contains_any(evidence_text, ["漂浮", "浮力", "排开"])
+        and contains_any(evidence_text, ["液面", "体积", "压强"])
+    )
+    multi_graph_long_chain = bool(
+        features.get("step_count") in ["6-8步", "9-12步", "12步以上"]
+        and features.get("formula_count") in ["4-6个", "7个以上"]
+        and features.get("information_carrier") == "多图表综合"
+        and features.get("knowledge_count") == "4个及以上"
+    )
+    circuit_boundary_chain = bool(
+        features.get("problem_structure") == "电路综合"
+        and features.get("information_carrier") == "多图表综合"
+        and features.get("state_count") in ["双状态", "多状态", "连续变化或临界状态"]
+        and contains_any(evidence_text, ["最大", "最小", "范围"])
+        and contains_any(evidence_text, ["额定电流", "电流不超过", "量程"])
+    )
+    force_model_family_count = sum(
+        contains_any(evidence_text, terms)
+        for terms in [
+            ["滑轮", "滑轮组"],
+            ["杠杆", "力臂", "支点"],
+            ["压强", "支柱", "受力面积"],
+            ["功率", "机械效率"],
+        ]
+    )
+    parallel_nontrivial_models = bool(
+        has_options
+        and features.get("problem_structure") == "力学综合"
+        and force_model_family_count >= 3
+        and contains_any(evidence_text, ["转动", "角度", "作用力大小始终", "隐含条件"])
+    )
+
+    if phase_buoyancy_transition:
+        rule = "gpt56_medium_to_hard_phase_buoyancy_guard"
+        evidence = ["相变前后状态转换", "浮力/排开体积建模", "液面或压强结果联动"]
+    elif multi_graph_long_chain:
+        rule = "gpt56_medium_to_hard_multigraph_chain_guard"
+        evidence = ["6-8步以上", "4-6个以上公式", "多图表与4个以上知识点"]
+    elif circuit_boundary_chain:
+        rule = "gpt56_medium_to_hard_circuit_boundary_guard"
+        evidence = ["多图表电路", "双状态以上", "额定限制与极值/范围共同约束"]
+    elif parallel_nontrivial_models:
+        rule = "gpt56_medium_to_hard_parallel_model_guard"
+        evidence = ["三类以上非平凡力学模型", "动态几何或隐含条件", "每个选项均需完整建模"]
+    else:
+        rule = ""
+        evidence = []
+    if rule:
+        set_level_with_audit(calibrated, "拔高题", rule, evidence)
     sync_coarse_difficulty(calibrated)
     return calibrated
 
@@ -1613,7 +1832,7 @@ def postprocess_physics_difficulty(rating_result: Dict[str, Any], data: Dict[str
     rating_result["features"] = normalize_features(rating_result.get("features"))
     normalize_reasoning_schema(rating_result)
     if raw_level not in LEVEL_MAP:
-        raw_level = "中等题"
+        raise ValueError("模型未返回合法 difficulty_level，已写入错误日志，不执行默认中等题后处理")
     rating_result["difficulty_level"] = raw_level
     rating_result["difficulty_level_raw"] = raw_level
     rating_result["postprocess_actions"] = []
@@ -1719,6 +1938,11 @@ async def call_model_with_cache(question_content: str, session: aiohttp.ClientSe
     if USE_CACHE and not response_id:
         return {}, 0.0, 0, 0, 0
     dynamic_content = question_content + DIFFICULTY_RATING_PROMPT_SUFFIX
+    request_started = time.time()
+    accumulated_prompt_tokens = 0
+    accumulated_completion_tokens = 0
+    accumulated_total_tokens = 0
+    last_invalid_result: Dict[str, Any] = {}
     for retry in range(retries):
         payload: Dict[str, Any] = {
             "model": MODEL_NAME,
@@ -1729,7 +1953,6 @@ async def call_model_with_cache(question_content: str, session: aiohttp.ClientSe
             payload["previous_response_id"] = response_id
         if TEMPERATURE is not None:
             payload["temperature"] = TEMPERATURE
-        started = time.time()
         try:
             async with session.post(f"{BASE_URL}responses", json=payload, headers={"Authorization": f"Bearer {API_KEY}"}, timeout=aiohttp.ClientTimeout(total=timeout_sec)) as response:
                 if response.status == 200:
@@ -1740,7 +1963,21 @@ async def call_model_with_cache(question_content: str, session: aiohttp.ClientSe
                             if content.get("type") == "output_text":
                                 output_text = content.get("text", "")
                     usage = result.get("usage", {})
-                    return parse_model_response(output_text), time.time() - started, usage.get("input_tokens", 0), usage.get("output_tokens", 0), usage.get("total_tokens", 0)
+                    accumulated_prompt_tokens += usage.get("input_tokens", 0)
+                    accumulated_completion_tokens += usage.get("output_tokens", 0)
+                    accumulated_total_tokens += usage.get("total_tokens", 0)
+                    parsed_result = parse_model_response(output_text)
+                    if extract_raw_difficulty_level(parsed_result) in LEVEL_MAP:
+                        return (
+                            parsed_result,
+                            time.time() - request_started,
+                            accumulated_prompt_tokens,
+                            accumulated_completion_tokens,
+                            accumulated_total_tokens,
+                        )
+                    last_invalid_result = parsed_result
+                    print(f"模型响应缺少合法 difficulty_level，重试 {retry + 1}/{retries}")
+                    continue
                 error_text = await response.text()
                 print(f"API请求失败 (状态码: {response.status}): {error_text[:200]}")
                 if USE_CACHE and "PreviousResponseNotFound" in error_text:
@@ -1760,7 +1997,13 @@ async def call_model_with_cache(question_content: str, session: aiohttp.ClientSe
             if retry == retries - 1:
                 return {}, 0.0, 0, 0, 0
             await asyncio.sleep(1)
-    return {}, 0.0, 0, 0, 0
+    return (
+        last_invalid_result,
+        time.time() - request_started,
+        accumulated_prompt_tokens,
+        accumulated_completion_tokens,
+        accumulated_total_tokens,
+    )
 
 
 async def append_jsonl(path: str, data: Dict[str, Any]) -> None:
@@ -1791,6 +2034,12 @@ async def process_single_question(data: Dict[str, Any], session: aiohttp.ClientS
                 "hybrid_severe_deviation_guards_enabled": ENABLE_HYBRID_SEVERE_DEVIATION_GUARDS,
                 "gpt56_independence_guard_enabled": (
                     RATING_PROFILE == "gpt56_hybrid" and ENABLE_GPT56_INDEPENDENCE_GUARD
+                ),
+                "gpt56_structural_calibration_enabled": (
+                    RATING_PROFILE == "gpt56_hybrid" and ENABLE_GPT56_STRUCTURAL_CALIBRATION
+                ),
+                "gpt56_severe_deviation_guards_enabled": (
+                    RATING_PROFILE == "gpt56_hybrid" and ENABLE_GPT56_SEVERE_DEVIATION_GUARDS
                 ),
                 "difficulty_rating_raw": raw_result,
                 "difficulty_level_raw": raw_level,

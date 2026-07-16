@@ -31,6 +31,54 @@ def result(level: str, **overrides: str) -> dict:
     }
 
 
+class ModelResponseValidationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_schema_invalid_success_response_is_retried_and_usage_is_accumulated(self) -> None:
+        class FakeResponse:
+            status = 200
+
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            async def json(self) -> dict:
+                return {
+                    "output": [{"type": "message", "content": [{"type": "output_text", "text": self.text}]}],
+                    "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+                }
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.responses = [
+                    '{"features": {}}',
+                    '{"difficulty_level": "基础题"}',
+                ]
+                self.calls = 0
+
+            def post(self, *args, **kwargs):
+                response = FakeResponse(self.responses[self.calls])
+                self.calls += 1
+                return response
+
+        original_use_cache = rating.USE_CACHE
+        rating.USE_CACHE = False
+        try:
+            session = FakeSession()
+            parsed, _, prompt_tokens, completion_tokens, total_tokens = await rating.call_model_with_cache(
+                "测试题", session, retries=2, timeout_sec=5
+            )
+        finally:
+            rating.USE_CACHE = original_use_cache
+
+        self.assertEqual(session.calls, 2)
+        self.assertEqual(parsed["difficulty_level"], "基础题")
+        self.assertEqual((prompt_tokens, completion_tokens, total_tokens), (20, 4, 24))
+
+
 class PhysicsPostprocessTests(unittest.TestCase):
     def setUp(self) -> None:
         self.original_profile = rating.RATING_PROFILE
@@ -1341,6 +1389,269 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
         self.assertEqual(output["difficulty_level"], "拔高题")
         self.assertTrue(output["postprocess_actions"])
         self.assertTrue(output["postprocess_actions"][0]["rule"].startswith("gpt56_hybrid_"))
+
+    def test_single_template_basic_is_calibrated_to_easy(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "直接识别液化这一个教材概念。",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="直接套用",
+            problem_structure="概念判断",
+            additional_structure="无",
+            subquestion_dependency="无多问",
+            knowledge_count="1个",
+            knowledge_diff="低",
+            cross_module="同一模块内部",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "送分题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_basic_to_easy_single_template_guard",
+        )
+
+    def test_multiple_direct_concepts_are_not_forced_to_easy(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "四个选项分别判断能源、力、声和光的基础概念。",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="直接套用",
+            problem_structure="概念判断",
+            additional_structure="无",
+            subquestion_dependency="无多问",
+            knowledge_count="4个及以上",
+            knowledge_diff="低",
+            cross_module="跨模块综合",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_dense_force_chain_is_calibrated_to_hard(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            additional_structure="力学约束",
+            subquestion_dependency="无多问",
+            knowledge_count="2-3个",
+            state_count="双状态",
+            constraint_count="单一约束",
+            error_risk="明显易错点",
+        )
+        raw["reasoning"]["core_basis"] = "最高难任务实际有4个有效物理决策，需要对双状态建立多个方程。"
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {"question_id": "dense-force", "stem": "比例、压强和浮力的多公式联立辨析。"},
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_medium_to_hard_dense_force_chain",
+        )
+
+    def test_four_step_progressive_standard_force_problem_stays_medium(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            additional_structure="力学约束",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="2-3个",
+            state_count="双状态",
+            constraint_count="单一约束",
+        )
+        raw["reasoning"]["core_basis"] = "最高难小问实际有效推理约4步，路径完全显性。"
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {"question_id": "routine-force", "stem": "常规浮力、水深与压强的三问计算。"},
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_phase_buoyancy_transition_gets_severe_deviation_guard(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "冰块漂浮且内含石块，需比较熔化前后排开体积、液面与容器底压强。",
+            step_count="3-5步",
+            formula_count="4-6个",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            state_count="双状态",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_medium_to_hard_phase_buoyancy_guard",
+        )
+
+    def test_multi_graph_long_chain_gets_severe_deviation_guard(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "结合多张图像完成航母、升力、相对速度和滑跑距离的综合分析。",
+            step_count="6-8步",
+            formula_count="4-6个",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            information_carrier="多图表综合",
+            knowledge_count="4个及以上",
+            state_count="双状态",
+            variable_relation="图像函数关系",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_medium_to_hard_multigraph_chain_guard",
+        )
+
+    def test_circuit_extreme_with_rated_limit_gets_severe_deviation_guard(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "根据P-I图像和额定电流限制，求可调电阻的最大值、最小电流与功率范围。",
+            step_count="3-5步",
+            formula_count="2-3个",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            additional_structure="电路约束",
+            information_carrier="多图表综合",
+            state_count="双状态",
+            constraint_count="单一约束",
+            graph_table_requirement="直接读数",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_medium_to_hard_circuit_boundary_guard",
+        )
+
+    def test_parallel_nontrivial_force_models_get_severe_deviation_guard(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "起重机选项分别分析滑轮组、机械效率、杠杆转动时的力臂和支柱受力面积对压强的影响。",
+            step_count="3-5步",
+            formula_count="2-3个",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            additional_structure="力学约束",
+            knowledge_count="2-3个",
+            constraint_count="单一约束",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_medium_to_hard_parallel_model_guard",
+        )
+
+    def test_multi_configuration_equivalence_experiment_is_at_least_medium(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "同一直线上二力合成实验设置4组实验，比较弹簧伸长量是否相同，判断作用效果是否等效以确定合力。",
+            step_count="1-2步",
+            formula_count="0-1个",
+            reasoning_chain="简单因果推理",
+            problem_structure="实验探究",
+            additional_structure="实验探究",
+            information_carrier="单图识别",
+            knowledge_count="1个",
+            experiment_requirement="基础操作或读数",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_basic_to_medium_equivalence_experiment_guard",
+        )
+
+    def test_joint_final_rule_requires_decisive_evidence_in_gpt56_profile(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "多状态、多约束和多公式的高密度完整链，但没有图像反推、复杂范围、连续临界或边界筛选。",
+            step_count="6-8步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="4个及以上",
+            cross_module="跨模块综合",
+            state_count="多状态",
+            constraint_count="多约束",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_joint_final_rule_keeps_graph_reverse_candidate(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "多状态、多约束的复杂网络，需要从图像反推条件并完成有效解筛选。",
+            step_count="6-8步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="逆向推理或临界分析",
+            problem_structure="跨模块综合",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="4个及以上",
+            state_count="多状态",
+            constraint_count="多约束",
+            graph_table_requirement="图像反推或外推",
+        )
+        self.assertEqual(output["difficulty_level"], "压轴题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_hybrid_hard_to_final_joint_structure",
+        )
+
+    def test_adjustment_rewrites_reasoning_for_the_final_adjacent_boundary(self) -> None:
+        raw = result(
+            "基础题",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="直接套用",
+            problem_structure="概念判断",
+            additional_structure="无",
+            subquestion_dependency="无多问",
+            knowledge_count="1个",
+            knowledge_diff="低",
+            cross_module="同一模块内部",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        raw["reasoning"]["why_not_lower"] = "旧理由：不是送分题。"
+        raw["reasoning"]["why_not_higher"] = "旧理由：不是中等题。"
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {"question_id": "reasoning-sync", "stem": "直接识别液化这一个教材概念。"},
+        )
+        self.assertEqual(output["difficulty_level"], "送分题")
+        self.assertEqual(output["reasoning"]["why_not_lower"], "送分题已是最低档。")
+        self.assertIn("没有第二次物理决策", output["reasoning"]["why_not_higher"])
+
+    def test_invalid_raw_level_is_rejected_instead_of_defaulting_to_medium(self) -> None:
+        raw = result("中等题")
+        raw.pop("difficulty_level")
+        with self.assertRaisesRegex(ValueError, "合法 difficulty_level"):
+            rating.postprocess_physics_difficulty(raw, {"question_id": "invalid-level", "stem": "测试题"})
 
 
 class FusedPostprocessTests(unittest.TestCase):
