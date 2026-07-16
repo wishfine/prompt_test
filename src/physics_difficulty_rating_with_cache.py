@@ -47,6 +47,12 @@ ENABLE_PROGRESSIVE_FINAL_CHAIN = (
     not in {"0", "false", "no", "off"}
 )
 
+# 仅校准原始中等题中的低结构概念题；显式开关便于 V7/V8 公平消融。
+ENABLE_LOW_STRUCTURE_CONCEPT_GUARD = (
+    os.getenv("ENABLE_LOW_STRUCTURE_CONCEPT_GUARD", "1").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
+
 
 def resolve_temperature(model_name: str, raw_value: str) -> Optional[float]:
     """Lite 服务端固定使用 temperature=1，其他模型保留环境变量配置。"""
@@ -1249,7 +1255,8 @@ def postprocess_v7_stable(
     features = stable_result.get("features", {})
     core_basis = str(stable_result.get("reasoning", {}).get("core_basis", "") or "")
     step_match = re.search(
-        r"实际有效推理(?:约|为|大约)?\s*(\d+)(?:\s*[-—至到]\s*(\d+))?\s*步",
+        r"(?:实际有效推理(?:约|为|大约)?|实际(?:约|为|大约)?)\s*"
+        r"(\d+)(?:\s*[-—至到]\s*(\d+))?\s*(?:步|个有效物理决策)",
         core_basis,
     )
     explicit_step_lower_bound = int(step_match.group(1)) if step_match else 0
@@ -1280,25 +1287,49 @@ def postprocess_v7_stable(
     if features.get("graph_table_requirement") == "图像反推或外推":
         high_signals.append("图像反推或外推")
 
+    concept_exception_text = core_basis + "\n" + full_text_of(data)
+    has_concept_medium_exception = contains_any(
+        concept_exception_text,
+        [
+            "充分条件",
+            "必要条件",
+            "反例",
+            "特殊边界",
+            "边界条件",
+            "规范表述",
+            "逻辑过强",
+            "逻辑过弱",
+            "控制变量",
+            "故障分析",
+            "异常点",
+        ],
+    )
     low_structure_medium = bool(
-        raw_level == "中等题"
-        and features.get("step_count") == "3-5步"
+        ENABLE_LOW_STRUCTURE_CONCEPT_GUARD
+        and raw_level == "中等题"
+        and features.get("step_count") in ["1-2步", "3-5步"]
+        and features.get("formula_count") == "0-1个"
         and features.get("calculation_complexity") == "口算或直接判断"
         and features.get("problem_structure") == "概念判断"
+        and features.get("additional_structure") == "无"
+        and features.get("information_carrier") != "多图表综合"
         and features.get("subquestion_dependency") == "无多问"
         and features.get("state_count") == "单状态"
         and features.get("constraint_count") == "无约束"
+        and features.get("variable_relation") == "无变量关系"
         and features.get("cross_module") == "同一模块内部"
         and features.get("experiment_requirement") == "无"
         and features.get("graph_table_requirement") == "无"
-        # 实测中这条宽泛降档会误伤高密度概念辨析。只有单知识点、
-        # 直接或简单因果且低易错的概念题，才保留保护性降档。
-        and features.get("knowledge_count") == "1个"
         and features.get("reasoning_chain") in ["直接套用", "简单因果推理"]
-        and features.get("error_risk") in ["无明显易错点", "轻微易错点"]
-        # 六个以上的同概念高密度辨析，可能在考充分/必要条件和反例，
-        # 不再当作普通四选一概念题保护性降档。
-        and option_count < 6
+        and (option_count == 0 or option_count <= 5)
+        and not has_concept_medium_exception
+        and (
+            features.get("step_count") == "1-2步"
+            or (
+                features.get("knowledge_count") == "1个"
+                and features.get("error_risk") in ["无明显易错点", "轻微易错点"]
+            )
+        )
     )
     decisive_graph_state_transform = bool(
         raw_level == "中等题"
@@ -1322,6 +1353,17 @@ def postprocess_v7_stable(
         or features.get("reasoning_chain") == "逆向推理或临界分析"
         or features.get("graph_table_requirement") == "图像反推或外推"
     )
+    has_integrated_chain_support = bool(
+        features.get("state_count") in ["双状态", "多状态", "连续变化或临界状态"]
+        or features.get("constraint_count") in ["单一约束", "多约束"]
+        or features.get("formula_count") in ["2-3个", "4-6个", "7个以上"]
+        or features.get("reasoning_chain") in ["多层因果推理", "逆向推理或临界分析"]
+        or features.get("variable_relation") in ["图像函数关系", "多变量耦合关系"]
+        or features.get("experiment_requirement") in ["控制变量或故障分析", "方案设计或误差评价"]
+        or features.get("graph_table_requirement") in ["多组比较归纳", "图像反推或外推"]
+        or features.get("subquestion_dependency") == "多问且层层递进"
+        or features.get("cross_module") == "跨模块综合"
+    )
     has_final_reasoning_signal = bool(
         features.get("calculation_complexity") in ["多公式联立", "复杂方程或范围计算"]
         or features.get("reasoning_chain") == "逆向推理或临界分析"
@@ -1332,8 +1374,8 @@ def postprocess_v7_stable(
         set_level_with_audit(
             stable_result,
             "基础题",
-            "teacher_medium_to_basic_low_structure",
-            ["单状态无约束", "无实验或图表任务", "同类概念直接判断"],
+            "teacher_medium_to_basic_low_structure_guard",
+            ["单状态无约束", "无实验、图表或变量关系", "直接套用或简单因果"],
         )
     elif decisive_graph_state_transform:
         set_level_with_audit(
@@ -1347,7 +1389,7 @@ def postprocess_v7_stable(
         and features.get("step_count") in ["3-5步", "6-8步", "9-12步", "12步以上"]
         and (
             (len(high_signals) >= 3 and has_modeling_signal)
-            or explicit_step_lower_bound >= 5
+            or (explicit_step_lower_bound >= 5 and has_integrated_chain_support)
         )
     ):
         medium_evidence = list(high_signals)
@@ -1570,6 +1612,7 @@ async def process_single_question(data: Dict[str, Any], session: aiohttp.ClientS
             output.update({
                 "rating_profile": RATING_PROFILE,
                 "progressive_final_chain_enabled": ENABLE_PROGRESSIVE_FINAL_CHAIN,
+                "low_structure_concept_guard_enabled": ENABLE_LOW_STRUCTURE_CONCEPT_GUARD,
                 "difficulty_rating_raw": raw_result,
                 "difficulty_level_raw": raw_level,
                 "postprocess_actions": result.get("postprocess_actions", []) if isinstance(result, dict) else [],
@@ -1622,6 +1665,7 @@ async def main_batch_run() -> None:
     USE_CACHE = not args.no_cache
     print(f"评级配置: {RATING_PROFILE}")
     print(f"递进边界链后处理: {'启用' if ENABLE_PROGRESSIVE_FINAL_CHAIN else '禁用'}")
+    print(f"低结构概念题保护: {'启用' if ENABLE_LOW_STRUCTURE_CONCEPT_GUARD else '禁用'}")
     if args.seed is not None:
         random.seed(args.seed)
         print(f"固定随机种子: {args.seed}")

@@ -56,19 +56,19 @@ class ProductionPromptAssetTests(unittest.TestCase):
 
     def test_production_prompt_resolves_diagram_and_multi_blank_conflicts(self) -> None:
         prefix = self.load_prefix()
-        self.assertIn("单个静止物体的教材原型受力图", prefix)
+        self.assertIn("单个静止物体的教材原型受力方向", prefix)
         self.assertIn("一条凸透镜特殊光线", prefix)
-        self.assertRegex(prefix, r"复杂受力分析[^。]{0,100}至少基础题")
-        self.assertIn("同一小节的多个直接识记空", prefix)
-        self.assertRegex(prefix, r"多个不同实验原理[^。]{0,100}至少基础题")
+        self.assertRegex(prefix, r"完整受力图[^。]{0,120}至少为基础题")
+        self.assertIn("同一个教材结论或同一种回答规则", prefix)
+        self.assertRegex(prefix, r"不同实验原理[^。]{0,120}至少基础题")
 
     def test_production_prompt_uses_direct_retrieval_bundle_easy_boundary(self) -> None:
         prefix = self.load_prefix()
         self.assertIn("直接检索束", prefix)
-        self.assertIn("每个空或选项都能独立由教材事实直接作答", prefix)
-        self.assertIn("不需要共同物理过程、规律选择或条件联动", prefix)
+        self.assertIn("不按章节或小节定义，而按回答规则定义", prefix)
+        self.assertIn("同一个教材结论或同一种识别规则", prefix)
         self.assertIn("分子动理论知识结构图", prefix)
-        self.assertIn("多个空不等于多个应用步骤", prefix)
+        self.assertIn("多个空也不等于多个应用步骤", prefix)
 
     def test_production_prompt_uses_five_dimension_anchor_with_task_structure_check(self) -> None:
         prefix = self.load_prefix()
@@ -88,15 +88,16 @@ class ProductionPromptAssetTests(unittest.TestCase):
 
     def test_production_prompt_allows_single_question_internal_chain_to_be_final(self) -> None:
         prefix = self.load_prefix()
-        self.assertIn("不以存在多个小问或前问结果复用为必要条件", prefix)
+        self.assertIn("答案依赖", prefix)
+        self.assertIn("模型依赖", prefix)
         self.assertIn("单个设问内部", prefix)
 
     def test_production_prompt_contains_sample_derived_boundary_corrections(self) -> None:
         prefix = self.load_prefix()
         self.assertIn("四个选项不会自动排除送分题", prefix)
-        self.assertIn("高密度概念辨析", prefix)
-        self.assertIn("一个决定性转换", prefix)
-        self.assertIn("整题的完整推理链", prefix)
+        self.assertIn("低结构概念题", prefix)
+        self.assertIn("决定性转换通道", prefix)
+        self.assertIn("高密度综合链通道", prefix)
 
     def test_production_prompt_has_no_unavailable_score_rate_variable(self) -> None:
         prefix = self.load_prefix()
@@ -106,7 +107,7 @@ class ProductionPromptAssetTests(unittest.TestCase):
     def test_production_prompt_uses_stable_adjacent_boundary_table(self) -> None:
         prefix = self.load_prefix()
         self.assertNotIn("最短且完整的有效解题链", prefix)
-        self.assertIn("不能只统计最后一问从已知答案出发的局部步骤", prefix)
+        self.assertIn("不能只统计最后一问的局部步骤", prefix)
         self.assertIn("相邻档位稳定决策表", prefix)
         self.assertIn("3-5步本身不能证明达到中等题", prefix)
         self.assertIn("6-8步也可以判压轴题", prefix)
@@ -134,18 +135,17 @@ class ProductionPromptAssetTests(unittest.TestCase):
     def test_parallel_concepts_keep_step_depth_and_have_a_breadth_gate(self) -> None:
         prefix = self.load_prefix()
         self.assertNotIn("通常判为基础题或中等题", prefix)
-        self.assertIn("横向有效任务广度的严格判定", prefix)
-        self.assertIn("选项或小问彼此独立，只表示它们不能机械累加为连续推理步骤", prefix)
-        self.assertIn("至少两个分析型任务分别是什么", prefix)
-        self.assertIn("不能作为横向广度升档依据", prefix)
+        self.assertIn("低结构概念题否决条件", prefix)
+        self.assertIn("四个彼此独立的选项不是四步", prefix)
+        self.assertIn("不得仅凭“共同机制”“任务多”“知识点多”升为中等", prefix)
 
-    def test_production_prompt_uses_depth_breadth_dual_track(self) -> None:
+    def test_production_prompt_uses_unified_decisions_and_dependency(self) -> None:
         prefix = self.load_prefix()
-        self.assertIn("纵向深度", prefix)
-        self.assertIn("横向广度", prefix)
-        self.assertIn("step_count 不机械累加", prefix)
-        self.assertIn("共享同一物理过程、实验逻辑、状态变量、图像关系或装置工作机制", prefix)
-        self.assertIn("完全无关的教材事实", prefix)
+        self.assertIn("统一有效物理决策原则", prefix)
+        self.assertIn("选择或更换模型", prefix)
+        self.assertIn("建立独立方程", prefix)
+        self.assertIn("答案依赖", prefix)
+        self.assertIn("模型依赖", prefix)
 
     def test_composite_features_use_field_specific_scopes(self) -> None:
         prefix = self.load_prefix()
@@ -155,29 +155,27 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("多个约束只有共同参与同一求解、范围或有效解筛选时", prefix)
         self.assertIn("仍按最高难单项记录", prefix)
 
-    def test_medium_features_allow_truthful_breadth_values(self) -> None:
+    def test_medium_features_allow_truthful_logic_values(self) -> None:
         prefix = self.load_prefix()
-        self.assertIn("通过横向广度达到中等时可以是0-1个", prefix)
-        self.assertIn("通过横向广度达到中等时可以是4个及以上", prefix)
-        self.assertIn("最高难单项可以只是简单因果推理", prefix)
+        self.assertIn("概念逻辑辨析可以是0-1个", prefix)
+        self.assertIn("高密度逻辑辨析的知识难度可以为低", prefix)
+        self.assertIn("可如实记录简单因果", prefix)
         self.assertIn("载体形式不决定等级", prefix)
         self.assertIn("实验要求：可以为无", prefix)
 
     def test_horizontal_breadth_excludes_transparent_or_repeated_tasks(self) -> None:
         prefix = self.load_prefix()
-        self.assertIn("至少两个任务属于分析型任务", prefix)
-        self.assertIn("直接读取一个点", prefix)
-        self.assertIn("仅改变知识点名称但认知动作相同", prefix)
-        self.assertIn("横向广度最多支持相邻升一档", prefix)
+        self.assertNotIn("至少两个任务属于分析型任务", prefix)
+        self.assertIn("低结构概念题否决条件", prefix)
+        self.assertIn("普通教材规律在不同选项中的独立应用也不能累积成中等", prefix)
+        self.assertIn("单个最高难任务本身达到3—4个有效物理决策", prefix)
 
-    def test_horizontal_breadth_requires_shared_physics_not_shared_packaging(self) -> None:
+    def test_low_structure_gate_rejects_shared_packaging(self) -> None:
         prefix = self.load_prefix()
-        self.assertIn("共享同一物理过程、实验逻辑、状态变量、图像关系或装置工作机制", prefix)
-        self.assertIn("仅共享故事背景、图片、物品名称、比赛场景、科技产品或生活主题", prefix)
-        self.assertIn("不构成共同物理结构", prefix)
-        self.assertIn("若将某个选项替换为另一个生活物品", prefix)
-        self.assertNotIn("同一情境中的有效任务广度", prefix)
-        self.assertNotIn("同一情境中完成多个非重复的应用型任务", prefix)
+        self.assertIn("同一章节、同一图片、同一产品或同一装置", prefix)
+        self.assertIn("各选项分别调用通用教材结论", prefix)
+        self.assertIn("不得仅凭“共同机制”", prefix)
+        self.assertNotIn("形成共同机制下的横向有效任务广度", prefix)
 
     def test_single_model_chain_does_not_count_intermediate_quantities_as_steps(self) -> None:
         prefix = self.load_prefix()
@@ -195,22 +193,21 @@ class ProductionPromptAssetTests(unittest.TestCase):
 
     def test_transparent_mapping_is_limited_to_one_clear_knowledge_target(self) -> None:
         prefix = self.load_prefix()
-        self.assertIn("一次透明映射通常只对应一个明确知识目标", prefix)
-        self.assertIn("多个不同实验原理、跨小节概念、规范测量步骤或多个不同物理属性", prefix)
+        self.assertIn("同一个教材结论或同一种回答规则", prefix)
+        self.assertIn("不同实验原理、不同回答规则、规范测量步骤或多个不同物理属性", prefix)
         self.assertIn("非零起点相减", prefix)
 
-    def test_breadth_core_basis_names_shared_mechanism_and_two_analytical_tasks(self) -> None:
+    def test_core_basis_names_decisions_and_dependency_not_shared_mechanism(self) -> None:
         prefix = self.load_prefix()
-        self.assertIn("core_basis 必须列出共同物理结构", prefix)
-        self.assertIn("至少两个分析型任务分别是什么", prefix)
-        self.assertIn("同一生活情境", prefix)
+        self.assertIn("core_basis` 必须先写明实际有效物理决策数", prefix)
+        self.assertIn("答案依赖、模型依赖还是确实相互独立", prefix)
+        self.assertNotIn("至少两个分析型任务分别是什么", prefix)
 
-    def test_breadth_requires_shared_device_specific_information(self) -> None:
+    def test_middle_requires_specific_structure_not_device_story(self) -> None:
         prefix = self.load_prefix()
-        self.assertIn("至少两个分析型任务必须共同使用", prefix)
-        self.assertIn("同一项装置特有信息、状态关系或中间结论", prefix)
-        self.assertIn("只需分别调用通用教材结论", prefix)
-        self.assertIn("通常只是共同背景，不是共同机制", prefix)
+        self.assertIn("题目特有的中间结论、状态关系或图像推导结果", prefix)
+        self.assertIn("普通教材规律在不同选项中的独立应用", prefix)
+        self.assertNotIn("至少两个分析型任务必须共同使用", prefix)
 
     def test_feature_truth_has_priority_over_level_appearance(self) -> None:
         prefix = self.load_prefix()
@@ -242,7 +239,7 @@ class ProductionPromptAssetTests(unittest.TestCase):
     def test_easy_boundary_has_no_subquestion_count_threshold(self) -> None:
         prefix = self.load_prefix()
         self.assertNotIn("小题数量≥3", prefix)
-        self.assertIn("多个小问若跨知识点", prefix)
+        self.assertIn("多个小问若需要不同回答规则", prefix)
 
     def test_boundary_few_shot_feature_values_are_single_legal_enums(self) -> None:
         prefix = self.load_prefix()
@@ -297,8 +294,10 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertNotIn("数据归纳与高密度概念辨析", prefix)
         self.assertIn("围绕同一概念的充分必要条件、反例、特殊边界或规范表述辨析", prefix)
         self.assertNotIn("必须反复区分必要条件", prefix)
-        self.assertIn("鱼缸增氧泵原理选择题", prefix)
-        self.assertIn("形成共同机制下的横向有效任务广度", prefix)
+        self.assertNotIn("鱼缸增氧泵原理选择题", prefix)
+        self.assertNotIn("形成共同机制下的横向有效任务广度", prefix)
+        self.assertIn("低结构概念题", prefix)
+        self.assertIn("充分条件、必要条件", prefix)
 
     def test_glass_tube_example_records_multilayer_reasoning(self) -> None:
         prefix = self.load_prefix()
@@ -329,6 +328,34 @@ class ProductionPromptAssetTests(unittest.TestCase):
     def test_batch_output_records_progressive_chain_ab_switch(self) -> None:
         source = (ROOT / "src" / "physics_difficulty_rating_with_cache.py").read_text(encoding="utf-8")
         self.assertIn('"progressive_final_chain_enabled": ENABLE_PROGRESSIVE_FINAL_CHAIN', source)
+        self.assertIn('"low_structure_concept_guard_enabled": ENABLE_LOW_STRUCTURE_CONCEPT_GUARD', source)
+
+
+class V8CandidatePromptAssetTests(unittest.TestCase):
+    def load_prefix(self) -> str:
+        path = ROOT / "prompts" / "初中物理难度打标提示词_v8_candidate.txt"
+        namespace: dict[str, str] = {}
+        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), {}, namespace)
+        return namespace["DIFFICULTY_RATING_PROMPT_PREFIX"]
+
+    def test_v8_candidate_uses_same_core_semantics_without_v7_repetition(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("有效物理决策", prefix)
+        self.assertIn("单一熟悉教材模板", prefix)
+        self.assertIn("同一种回答规则", prefix)
+        self.assertIn("低结构概念题", prefix)
+        self.assertIn("决定性转换", prefix)
+        self.assertIn("高密度综合链", prefix)
+        self.assertIn("答案依赖", prefix)
+        self.assertIn("模型依赖", prefix)
+        self.assertNotIn("鱼缸增氧泵", prefix)
+        self.assertNotIn("至少两个分析型任务", prefix)
+
+    def test_v8_candidate_does_not_make_complete_wiring_an_easy_question(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("完整电路连接", prefix)
+        self.assertRegex(prefix, r"完整电路连接[^。]{0,120}至少为基础题")
+        self.assertNotIn("一个标准接线任务，只要仍然只使用一个唯一教材模板，也可以判送分题", prefix)
 
     def test_final_prompt_json_example_has_no_duplicate_keys(self) -> None:
         prefix = self.load_prefix()

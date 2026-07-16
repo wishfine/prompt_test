@@ -375,12 +375,15 @@ class V7StablePostprocessTests(unittest.TestCase):
     def setUp(self) -> None:
         self.original_profile = rating.RATING_PROFILE
         self.original_progressive_final_chain = rating.ENABLE_PROGRESSIVE_FINAL_CHAIN
+        self.original_low_structure_guard = rating.ENABLE_LOW_STRUCTURE_CONCEPT_GUARD
         rating.RATING_PROFILE = "v7_stable"
         rating.ENABLE_PROGRESSIVE_FINAL_CHAIN = True
+        rating.ENABLE_LOW_STRUCTURE_CONCEPT_GUARD = True
 
     def tearDown(self) -> None:
         rating.RATING_PROFILE = self.original_profile
         rating.ENABLE_PROGRESSIVE_FINAL_CHAIN = self.original_progressive_final_chain
+        rating.ENABLE_LOW_STRUCTURE_CONCEPT_GUARD = self.original_low_structure_guard
 
     def postprocess(self, level: str, stem: str, sub_questions: list | None = None, **feature_values: str) -> dict:
         return rating.postprocess_physics_difficulty(
@@ -389,6 +392,7 @@ class V7StablePostprocessTests(unittest.TestCase):
         )
 
     def test_all_five_raw_levels_pass_through_without_joint_signals(self) -> None:
+        rating.ENABLE_LOW_STRUCTURE_CONCEPT_GUARD = False
         for level in ["送分题", "基础题", "中等题", "拔高题", "压轴题"]:
             with self.subTest(level=level):
                 output = self.postprocess(level, "不包含联合高阶结构的常规题。")
@@ -412,7 +416,103 @@ class V7StablePostprocessTests(unittest.TestCase):
         )
         self.assertEqual(output["difficulty_level"], "基础题")
         self.assertEqual(output["difficulty_level_raw"], "中等题")
-        self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_medium_to_basic_low_structure")
+        self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_medium_to_basic_low_structure_guard")
+
+    def test_low_structure_one_to_two_step_concept_is_calibrated_to_basic(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "四个选项分别调用通用教材结论直接判断。",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="简单因果推理",
+            problem_structure="概念判断",
+            information_carrier="单图识别",
+            subquestion_dependency="无多问",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            cross_module="同一模块内部",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_medium_to_basic_low_structure_guard")
+
+    def test_low_structure_guard_can_be_disabled(self) -> None:
+        rating.ENABLE_LOW_STRUCTURE_CONCEPT_GUARD = False
+        output = self.postprocess(
+            "中等题",
+            "四个选项分别调用通用教材结论直接判断。",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="简单因果推理",
+            problem_structure="概念判断",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            cross_module="同一模块内部",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_low_structure_guard_preserves_logical_concept_analysis(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "辨析摩擦产生条件的充分条件、必要条件，并用反例检验。",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="简单因果推理",
+            problem_structure="概念判断",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            cross_module="同一模块内部",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_low_structure_guard_requires_zero_or_one_formula(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "需要调用两个独立物理关系完成概念判断。",
+            step_count="1-2步",
+            formula_count="2-3个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="简单因果推理",
+            problem_structure="概念判断",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            cross_module="同一模块内部",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+
+    def test_low_structure_guard_preserves_multi_table_analysis(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "需要联合多幅图表判断。",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="简单因果推理",
+            problem_structure="概念判断",
+            information_carrier="多图表综合",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            cross_module="同一模块内部",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
 
     def test_four_option_multilayer_conceptual_medium_is_not_downgraded(self) -> None:
         raw = result(
@@ -514,6 +614,35 @@ class V7StablePostprocessTests(unittest.TestCase):
         )
         self.assertEqual(output["difficulty_level"], "拔高题")
         self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_medium_to_hard_joint_structure")
+
+    def test_medium_with_explicit_five_decisions_and_structure_reaches_hard(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            state_count="双状态",
+            reasoning_chain="多层因果推理",
+        )
+        raw["reasoning"]["core_basis"] = "最高难任务实际约5个有效物理决策，需要分别建立两个状态。"
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {"question_id": "v8-five-decisions", "stem": "五个有效物理决策的双状态综合题。"},
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+
+    def test_explicit_five_decisions_without_structure_does_not_reach_hard(self) -> None:
+        rating.ENABLE_LOW_STRUCTURE_CONCEPT_GUARD = False
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            state_count="单状态",
+            reasoning_chain="简单因果推理",
+        )
+        raw["reasoning"]["core_basis"] = "最高难任务实际约5个有效物理决策。"
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {"question_id": "v8-five-decisions-no-structure", "stem": "多个直接判断。"},
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
 
     def test_unrelated_number_five_does_not_trigger_step_calibration(self) -> None:
         raw = result("中等题", step_count="3-5步", state_count="双状态", problem_structure="直接计算")
