@@ -42,7 +42,7 @@ class ProductionPromptAssetTests(unittest.TestCase):
     def test_production_prompt_keeps_old_baseline_depth_and_two_layer_examples(self) -> None:
         prefix = self.load_prefix()
         self.assertGreaterEqual(len(prefix), 17500)
-        self.assertLess(len(prefix), 23000)
+        self.assertLess(len(prefix), 24000)
         self.assertGreaterEqual(prefix.count("### 代表性例题"), 5)
         self.assertIn("## 相邻档位边界校准 few-shot", prefix)
 
@@ -58,17 +58,19 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("单个静止物体的教材原型受力图", prefix)
         self.assertIn("一条凸透镜特殊光线", prefix)
         self.assertRegex(prefix, r"复杂受力分析[^。]{0,100}至少基础题")
-        self.assertIn("同一知识骨架中的两个基础节点", prefix)
+        self.assertIn("同一个低阶知识任务", prefix)
         self.assertRegex(prefix, r"跨不同知识点[^。]{0,100}至少基础题")
 
-    def test_production_prompt_limits_multi_blank_easy_boundary_without_shortcut_label(self) -> None:
+    def test_production_prompt_refines_easyfix_without_shortcut_label_or_blank_count_gate(self) -> None:
         prefix = self.load_prefix()
         self.assertNotIn("直接检索束", prefix)
-        self.assertIn("不能把多个独立的一步题合并包装成送分题", prefix)
-        self.assertIn("三个及以上相互独立的空", prefix)
-        self.assertIn("实验操作、仪器读数、规律应用或公式应用", prefix)
+        self.assertIn("关键不是空、选项或小问的数量", prefix)
+        self.assertIn("是否仍是同一个低阶知识任务", prefix)
+        self.assertIn("不能只因为有三个以上的空就升档", prefix)
+        self.assertIn("使用题目给出的数值、图示位置或实验条件", prefix)
+        self.assertIn("送分规则不得覆盖中等以上结构", prefix)
         self.assertIn("分子动理论知识结构图", prefix)
-        self.assertIn("静止在水平地面上的篮球", prefix)
+        self.assertIn("翅膀每秒振动3—5次", prefix)
 
     def test_production_prompt_uses_five_dimension_anchor_with_task_structure_check(self) -> None:
         prefix = self.load_prefix()

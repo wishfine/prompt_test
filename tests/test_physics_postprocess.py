@@ -405,6 +405,41 @@ class V7StablePostprocessTests(unittest.TestCase):
         self.assertEqual(output["difficulty_level_raw"], "送分题")
         self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_easy_to_basic_structure_guard")
 
+    def test_single_instrument_reading_can_stay_easy(self) -> None:
+        output = self.postprocess(
+            "送分题",
+            "直接读出温度计示数。",
+            problem_structure="图像表格分析",
+            information_carrier="实验装置图",
+            knowledge_count="1个",
+            experiment_requirement="基础操作或读数",
+        )
+        self.assertEqual(output["difficulty_level"], "送分题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_single_weak_structure_signal_does_not_override_easy(self) -> None:
+        for overrides in [
+            {"state_count": "双状态"},
+            {"constraint_count": "单一约束"},
+            {"variable_relation": "简单正反比"},
+        ]:
+            with self.subTest(overrides=overrides):
+                output = self.postprocess("送分题", "一个完全显性的教材原型判断。", **overrides)
+                self.assertEqual(output["difficulty_level"], "送分题")
+                self.assertEqual(output["postprocess_actions"], [])
+
+    def test_strong_structure_conflict_still_guards_easy(self) -> None:
+        for overrides in [
+            {"state_count": "多状态"},
+            {"constraint_count": "多约束"},
+            {"variable_relation": "多变量耦合关系"},
+            {"graph_table_requirement": "图像反推或外推"},
+        ]:
+            with self.subTest(overrides=overrides):
+                output = self.postprocess("送分题", "存在真实高阶结构。", **overrides)
+                self.assertEqual(output["difficulty_level"], "基础题")
+                self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_easy_to_basic_structure_guard")
+
     def test_easy_with_real_calculation_is_guarded_to_basic(self) -> None:
         output = self.postprocess(
             "送分题",

@@ -1327,16 +1327,30 @@ def postprocess_v7_stable(
     if raw_level == "送分题":
         if features.get("formula_count") != "0-1个" or features.get("calculation_complexity") != "口算或直接判断":
             easy_structure_conflicts.append("存在公式链或真实笔算")
-        if features.get("experiment_requirement") != "无":
-            easy_structure_conflicts.append("存在实验操作、读数或分析")
+        experiment_requirement = features.get("experiment_requirement")
+        if experiment_requirement in ["控制变量或故障分析", "方案设计或误差评价"]:
+            easy_structure_conflicts.append("存在实验分析、设计或评价")
+        elif (
+            experiment_requirement == "基础操作或读数"
+            and (
+                features.get("problem_structure") == "实验探究"
+                or features.get("subquestion_dependency") != "无多问"
+                or features.get("knowledge_count") != "1个"
+            )
+        ):
+            # 单个仪器的完全显性读数仍可落在送分/基础边界；只有当读数
+            # 属于完整实验任务、多问或多知识任务时，才视为原判送分的硬冲突。
+            easy_structure_conflicts.append("基础读数属于完整实验或多任务")
         if features.get("graph_table_requirement") in ["多组比较归纳", "图像反推或外推"]:
             easy_structure_conflicts.append("存在多组归纳或图像反推")
         if features.get("subquestion_dependency") == "多问且层层递进":
             easy_structure_conflicts.append("多问形成递进链")
-        if features.get("state_count") != "单状态" or features.get("constraint_count") != "无约束":
-            easy_structure_conflicts.append("存在状态转换或约束筛选")
-        if features.get("variable_relation") != "无变量关系":
-            easy_structure_conflicts.append("需要处理变量关系")
+        if features.get("state_count") in ["多状态", "连续变化或临界状态"]:
+            easy_structure_conflicts.append("存在多状态或临界过程")
+        if features.get("constraint_count") == "多约束":
+            easy_structure_conflicts.append("存在多约束筛选")
+        if features.get("variable_relation") in ["图像函数关系", "多变量耦合关系"]:
+            easy_structure_conflicts.append("需要处理函数或多变量关系")
 
     if easy_structure_conflicts:
         set_level_with_audit(
