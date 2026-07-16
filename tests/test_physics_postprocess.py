@@ -374,10 +374,13 @@ class V7StablePostprocessTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.original_profile = rating.RATING_PROFILE
+        self.original_progressive_final_chain = rating.ENABLE_PROGRESSIVE_FINAL_CHAIN
         rating.RATING_PROFILE = "v7_stable"
+        rating.ENABLE_PROGRESSIVE_FINAL_CHAIN = True
 
     def tearDown(self) -> None:
         rating.RATING_PROFILE = self.original_profile
+        rating.ENABLE_PROGRESSIVE_FINAL_CHAIN = self.original_progressive_final_chain
 
     def postprocess(self, level: str, stem: str, sub_questions: list | None = None, **feature_values: str) -> dict:
         return rating.postprocess_physics_difficulty(
@@ -392,73 +395,6 @@ class V7StablePostprocessTests(unittest.TestCase):
                 self.assertEqual(output["difficulty_level"], level)
                 self.assertEqual(output["difficulty_level_raw"], level)
                 self.assertEqual(output["postprocess_actions"], [])
-
-    def test_easy_with_experiment_task_is_guarded_to_basic(self) -> None:
-        output = self.postprocess(
-            "送分题",
-            "根据实验装置完成基础操作并读数。",
-            problem_structure="实验探究",
-            information_carrier="实验装置图",
-            experiment_requirement="基础操作或读数",
-        )
-        self.assertEqual(output["difficulty_level"], "基础题")
-        self.assertEqual(output["difficulty_level_raw"], "送分题")
-        self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_easy_to_basic_structure_guard")
-
-    def test_single_instrument_reading_can_stay_easy(self) -> None:
-        output = self.postprocess(
-            "送分题",
-            "直接读出温度计示数。",
-            problem_structure="图像表格分析",
-            information_carrier="实验装置图",
-            knowledge_count="1个",
-            experiment_requirement="基础操作或读数",
-        )
-        self.assertEqual(output["difficulty_level"], "送分题")
-        self.assertEqual(output["postprocess_actions"], [])
-
-    def test_single_weak_structure_signal_does_not_override_easy(self) -> None:
-        for overrides in [
-            {"state_count": "双状态"},
-            {"constraint_count": "单一约束"},
-            {"variable_relation": "简单正反比"},
-        ]:
-            with self.subTest(overrides=overrides):
-                output = self.postprocess("送分题", "一个完全显性的教材原型判断。", **overrides)
-                self.assertEqual(output["difficulty_level"], "送分题")
-                self.assertEqual(output["postprocess_actions"], [])
-
-    def test_strong_structure_conflict_still_guards_easy(self) -> None:
-        for overrides in [
-            {"state_count": "多状态"},
-            {"constraint_count": "多约束"},
-            {"variable_relation": "多变量耦合关系"},
-            {"graph_table_requirement": "图像反推或外推"},
-        ]:
-            with self.subTest(overrides=overrides):
-                output = self.postprocess("送分题", "存在真实高阶结构。", **overrides)
-                self.assertEqual(output["difficulty_level"], "基础题")
-                self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_easy_to_basic_structure_guard")
-
-    def test_easy_with_real_calculation_is_guarded_to_basic(self) -> None:
-        output = self.postprocess(
-            "送分题",
-            "代入一个公式完成简单笔算。",
-            calculation_complexity="简单笔算",
-        )
-        self.assertEqual(output["difficulty_level"], "基础题")
-        self.assertEqual(output["postprocess_actions"][0]["rule"], "teacher_easy_to_basic_structure_guard")
-
-    def test_textbook_prototype_easy_still_passes_through(self) -> None:
-        output = self.postprocess(
-            "送分题",
-            "画出静止在水平地面上的篮球所受重力和支持力。",
-            problem_structure="概念判断",
-            reasoning_chain="直接套用",
-            knowledge_count="1个",
-        )
-        self.assertEqual(output["difficulty_level"], "送分题")
-        self.assertEqual(output["postprocess_actions"], [])
 
     def test_low_structure_conceptual_medium_is_calibrated_to_basic(self) -> None:
         output = self.postprocess(
@@ -624,6 +560,53 @@ class V7StablePostprocessTests(unittest.TestCase):
             state_count="多状态",
             constraint_count="多约束",
             calculation_complexity="多公式联立",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_hard_progressive_boundary_chain_with_four_signals_reaches_final(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "多状态计算题的各问层层递进，并在多重安全约束下完成范围边界筛选。",
+            step_count="6-8步",
+            state_count="多状态",
+            constraint_count="多约束",
+            subquestion_dependency="多问且层层递进",
+            calculation_complexity="复杂方程或范围计算",
+            problem_structure="电路综合",
+        )
+        self.assertEqual(output["difficulty_level"], "压轴题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "teacher_hard_to_final_progressive_boundary_chain",
+        )
+
+    def test_routine_progressive_experiment_with_four_signals_stays_hard(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "按标准流程改变电阻、记录多组数据并完成常规误差分析。",
+            step_count="6-8步",
+            constraint_count="多约束",
+            subquestion_dependency="多问且层层递进",
+            calculation_complexity="多公式联立",
+            reasoning_chain="逆向推理或临界分析",
+            problem_structure="实验探究",
+            experiment_requirement="控制变量或故障分析",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_progressive_boundary_chain_can_be_disabled_for_ab_test(self) -> None:
+        rating.ENABLE_PROGRESSIVE_FINAL_CHAIN = False
+        output = self.postprocess(
+            "拔高题",
+            "多状态计算题的各问层层递进，并在多重安全约束下完成范围边界筛选。",
+            step_count="6-8步",
+            state_count="多状态",
+            constraint_count="多约束",
+            subquestion_dependency="多问且层层递进",
+            calculation_complexity="复杂方程或范围计算",
+            problem_structure="电路综合",
         )
         self.assertEqual(output["difficulty_level"], "拔高题")
         self.assertEqual(output["postprocess_actions"], [])

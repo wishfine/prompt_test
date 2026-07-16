@@ -58,19 +58,16 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("单个静止物体的教材原型受力图", prefix)
         self.assertIn("一条凸透镜特殊光线", prefix)
         self.assertRegex(prefix, r"复杂受力分析[^。]{0,100}至少基础题")
-        self.assertIn("同一个低阶知识任务", prefix)
+        self.assertIn("同一小节的多个直接识记空", prefix)
         self.assertRegex(prefix, r"跨不同知识点[^。]{0,100}至少基础题")
 
-    def test_production_prompt_refines_easyfix_without_shortcut_label_or_blank_count_gate(self) -> None:
+    def test_production_prompt_uses_direct_retrieval_bundle_easy_boundary(self) -> None:
         prefix = self.load_prefix()
-        self.assertNotIn("直接检索束", prefix)
-        self.assertIn("关键不是空、选项或小问的数量", prefix)
-        self.assertIn("是否仍是同一个低阶知识任务", prefix)
-        self.assertIn("不能只因为有三个以上的空就升档", prefix)
-        self.assertIn("使用题目给出的数值、图示位置或实验条件", prefix)
-        self.assertIn("送分规则不得覆盖中等以上结构", prefix)
+        self.assertIn("直接检索束", prefix)
+        self.assertIn("每个空或选项都能独立由教材事实直接作答", prefix)
+        self.assertIn("不需要共同物理过程、规律选择或条件联动", prefix)
         self.assertIn("分子动理论知识结构图", prefix)
-        self.assertIn("翅膀每秒振动3—5次", prefix)
+        self.assertIn("多个空不等于多个应用步骤", prefix)
 
     def test_production_prompt_uses_five_dimension_anchor_with_task_structure_check(self) -> None:
         prefix = self.load_prefix()
@@ -114,6 +111,97 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("步骤数只作支持证据，不作为单独门槛", prefix)
         self.assertNotIn("向上复核：防止专家视角压缩步骤", prefix)
 
+    def test_independent_options_are_not_accumulated_into_medium_workload(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("四个彼此独立的选项不是四步", prefix)
+        self.assertIn("以最高难选项自身的有效推理链计步", prefix)
+        self.assertNotIn("中等题的常见标志是“整体工作量和联合辨析”", prefix)
+
+    def test_final_boundary_keeps_six_to_eight_step_enum_without_five_step_anchor(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("6-8步也可以判压轴题", prefix)
+        self.assertNotIn("实际约5—6步也可进入压轴比较", prefix)
+        self.assertNotIn("实际约5—6步的高密度完整链", prefix)
+        self.assertNotIn("实际约5—6步只有", prefix)
+
+    def test_independent_questions_use_only_the_hardest_question_step_chain(self) -> None:
+        prefix = self.load_prefix()
+        self.assertNotIn("多个相互独立的直接小问可填“3-5步”", prefix)
+        self.assertIn("step_count 仍按最高难小问或最高难选项自身的连续推理链填写", prefix)
+
+    def test_parallel_concepts_default_to_basic_and_have_a_medium_gate(self) -> None:
+        prefix = self.load_prefix()
+        self.assertNotIn("通常判为基础题或中等题", prefix)
+        self.assertIn("概念选择题由基础题升为中等题的结构门槛", prefix)
+        self.assertIn("若只能写出“逐项判断多个选项”", prefix)
+        self.assertIn("不满足中等题门槛", prefix)
+
+    def test_easy_boundary_has_no_subquestion_count_threshold(self) -> None:
+        prefix = self.load_prefix()
+        self.assertNotIn("小题数量≥3", prefix)
+        self.assertIn("多个小问若跨知识点", prefix)
+
+    def test_boundary_few_shot_feature_values_are_single_legal_enums(self) -> None:
+        prefix = self.load_prefix()
+        allowed = {
+            "step_count": {"1-2步", "3-5步", "6-8步", "9-12步", "12步以上"},
+            "formula_count": {"0-1个", "2-3个", "4-6个", "7个以上"},
+            "calculation_complexity": {"口算或直接判断", "简单笔算", "多公式联立", "复杂方程或范围计算"},
+            "reasoning_chain": {"直接套用", "简单因果推理", "多层因果推理", "逆向推理或临界分析"},
+            "problem_structure": {"概念判断", "直接计算", "实验探究", "图像表格分析", "电路综合", "力学综合", "热学综合", "光学声学综合", "跨模块综合"},
+            "information_carrier": {"纯文字", "单图识别", "电路图", "实验装置图", "图像或表格", "多图表综合"},
+            "reality_question": {"是", "否"},
+            "subquestion_dependency": {"无多问", "多问但相互独立", "多问且层层递进"},
+            "knowledge_count": {"1个", "2-3个", "4个及以上"},
+            "state_count": {"单状态", "双状态", "多状态", "连续变化或临界状态"},
+            "constraint_count": {"无约束", "单一约束", "多约束"},
+            "variable_relation": {"无变量关系", "简单正反比", "图像函数关系", "多变量耦合关系"},
+            "experiment_requirement": {"无", "基础操作或读数", "控制变量或故障分析", "方案设计或误差评价"},
+            "graph_table_requirement": {"无", "直接读数", "多组比较归纳", "图像反推或外推"},
+            "error_risk": {"无明显易错点", "轻微易错点", "明显易错点", "高易错点"},
+        }
+        for line in prefix.splitlines():
+            if not line.startswith("核心特征："):
+                continue
+            for item in re.split(r"[,，]", line.removeprefix("核心特征：").rstrip("。")):
+                key, value = item.strip().split("=", 1)
+                self.assertIn(key, allowed)
+                self.assertIn(value, allowed[key], msg=f"非法 few-shot 枚举: {key}={value}")
+
+    def test_json_core_basis_demonstrates_five_dimension_anchor(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("五维中过程/对象和思维层次落在中等档", prefix)
+        self.assertIn("知识量与数学工具提供常规支撑", prefix)
+
+    def test_knowledge_section_uses_structural_context_not_high_level_prior(self) -> None:
+        prefix = self.load_prefix()
+        self.assertNotIn("物理高难题知识点：大概率判为 4-5 档", prefix)
+        self.assertIn("容易承载高难结构的知识情境：最终等级仍由任务结构决定", prefix)
+        self.assertIn("装置名称或知识点类别本身不构成升档依据", prefix)
+        self.assertIn("多状态电路中的多重安全量程约束", prefix)
+        self.assertIn("隐含控制逻辑与参数筛选并存的继电器控制", prefix)
+        self.assertIn("非线性元件图像反推与多状态约束综合", prefix)
+
+    def test_basic_to_medium_examples_distinguish_states_objects_and_modules(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("两个需要分别建模的状态", prefix)
+        self.assertIn("多个相互作用的研究对象", prefix)
+        self.assertIn("电学与热学、力学与热学", prefix)
+        self.assertNotIn("力学+浮力", prefix)
+
+    def test_medium_definition_and_friction_example_use_shared_conditions(self) -> None:
+        prefix = self.load_prefix()
+        self.assertNotIn("数据归纳与高密度概念辨析", prefix)
+        self.assertIn("围绕同一概念的充分必要条件、反例、特殊边界或规范表述辨析", prefix)
+        self.assertNotIn("必须反复区分必要条件", prefix)
+        self.assertIn("必须基于同一完整条件集区分必要条件", prefix)
+
+    def test_glass_tube_example_records_multilayer_reasoning(self) -> None:
+        prefix = self.load_prefix()
+        section = prefix[prefix.index("【边界示例7】"):prefix.index("【边界示例8】")]
+        self.assertIn("reasoning_chain=多层因果推理", section)
+        self.assertNotIn("reasoning_chain=逆向推理或临界分析", section)
+
     def test_production_prompt_has_sample_anchored_hard_and_final_examples(self) -> None:
         prefix = self.load_prefix()
         self.assertIn("两条关系线", prefix)
@@ -133,6 +221,10 @@ class ProductionPromptAssetTests(unittest.TestCase):
         source = (ROOT / "src" / "physics_difficulty_rating_with_cache.py").read_text(encoding="utf-8")
         self.assertIn('"prompts", "初中物理难度打标提示词.txt"', source)
         self.assertNotIn('default_prompt =', source)
+
+    def test_batch_output_records_progressive_chain_ab_switch(self) -> None:
+        source = (ROOT / "src" / "physics_difficulty_rating_with_cache.py").read_text(encoding="utf-8")
+        self.assertIn('"progressive_final_chain_enabled": ENABLE_PROGRESSIVE_FINAL_CHAIN', source)
 
     def test_final_prompt_json_example_has_no_duplicate_keys(self) -> None:
         prefix = self.load_prefix()
