@@ -48,6 +48,9 @@ class PhysicsPostprocessTests(unittest.TestCase):
     def test_hybrid5d_refined_profile_is_available(self) -> None:
         self.assertIn("hybrid5d_refined", rating.VALID_RATING_PROFILES)
 
+    def test_gpt56_hybrid_profile_is_available(self) -> None:
+        self.assertIn("gpt56_hybrid", rating.VALID_RATING_PROFILES)
+
     def test_raw_level_can_be_recovered_from_misnested_reasoning(self) -> None:
         raw = result("中等题")
         raw["reasoning"]["difficulty_level"] = "拔高题"
@@ -107,7 +110,7 @@ class PhysicsPostprocessTests(unittest.TestCase):
             problem_structure="实验探究",
             information_carrier="图像或表格",
             subquestion_dependency="多问但相互独立",
-            knowledge_count="2-3个",
+            knowledge_count="4个及以上",
             experiment_requirement="控制变量或故障分析",
             graph_table_requirement="多组比较归纳",
         )
@@ -357,7 +360,7 @@ class V7CompatPostprocessTests(unittest.TestCase):
             information_carrier="多图表综合",
             reality_question="是",
             subquestion_dependency="多问且层层递进",
-            knowledge_count="4个及以上",
+            knowledge_count="2-3个",
             knowledge_diff="高",
             cross_module="跨模块综合",
             state_count="多状态",
@@ -1245,6 +1248,99 @@ class Hybrid5dRefinedPostprocessTests(V7StablePostprocessTests):
         )
         self.assertEqual(output["difficulty_level"], "中等题")
         self.assertEqual(output["postprocess_actions"], [])
+
+
+class GPT56HybridPostprocessTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.original_profile = rating.RATING_PROFILE
+        self.original_progressive = rating.ENABLE_PROGRESSIVE_FINAL_CHAIN
+        rating.RATING_PROFILE = "gpt56_hybrid"
+        rating.ENABLE_PROGRESSIVE_FINAL_CHAIN = True
+
+    def tearDown(self) -> None:
+        rating.RATING_PROFILE = self.original_profile
+        rating.ENABLE_PROGRESSIVE_FINAL_CHAIN = self.original_progressive
+
+    def postprocess(self, level: str, stem: str, **feature_values: str) -> dict:
+        return rating.postprocess_physics_difficulty(
+            result(level, **feature_values),
+            {"question_id": "gpt56-hybrid-test", "stem": stem, "options": ["A", "B", "C", "D"]},
+        )
+
+    def test_progressive_four_signal_hard_is_not_forced_to_final(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "多问递进的常规综合题，但没有分类、多解或边界验证。",
+            step_count="6-8步",
+            formula_count="2-3个",
+            calculation_complexity="复杂方程或范围计算",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="2-3个",
+            state_count="多状态",
+            constraint_count="多约束",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_explicitly_independent_low_structure_concept_is_basic(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "四个选项彼此独立，每个选项独立调用一条教材结论。",
+            step_count="3-5步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="多层因果推理",
+            problem_structure="概念判断",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_medium_to_basic_explicit_independence_guard",
+        )
+
+    def test_independent_guard_preserves_condition_and_counterexample_analysis(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "选项彼此独立，但需区分充分条件、必要条件并用反例验证。",
+            step_count="3-5步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="多层因果推理",
+            problem_structure="概念判断",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_inherited_audit_rule_names_are_gpt56_neutral(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "双状态、多约束、两问递进，需建立方程联立并反推图像关系。",
+            step_count="6-8步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="逆向推理或临界分析",
+            problem_structure="电路综合",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="4个及以上",
+            state_count="多状态",
+            constraint_count="多约束",
+            graph_table_requirement="图像反推或外推",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertTrue(output["postprocess_actions"])
+        self.assertTrue(output["postprocess_actions"][0]["rule"].startswith("gpt56_hybrid_"))
 
 
 class FusedPostprocessTests(unittest.TestCase):

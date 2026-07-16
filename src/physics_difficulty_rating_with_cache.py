@@ -37,6 +37,7 @@ MODEL_NAME = os.getenv("MODEL_NAME", "doubao-seed-2.0-lite")
 VALID_RATING_PROFILES = {
     "fused",
     "generalized",
+    "gpt56_hybrid",
     "hybrid5d_refined",
     "v7_compat",
     "v7_stable",
@@ -63,6 +64,11 @@ ENABLE_LOW_STRUCTURE_CONCEPT_GUARD = (
 # 自身 features 明显不一致时的严重偏差。开关便于全量 A/B 回归。
 ENABLE_HYBRID_SEVERE_DEVIATION_GUARDS = (
     os.getenv("ENABLE_HYBRID_SEVERE_DEVIATION_GUARDS", "1").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
+
+ENABLE_GPT56_INDEPENDENCE_GUARD = (
+    os.getenv("ENABLE_GPT56_INDEPENDENCE_GUARD", "1").strip().lower()
     not in {"0", "false", "no", "off"}
 )
 
@@ -1254,6 +1260,7 @@ def postprocess_v7_stable(
     rating_result: Dict[str, Any],
     data: Dict[str, Any],
     raw_level: str,
+    enable_progressive_final_chain: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """按教师样本中跨三次稳定的联合结构做相邻档校准。
 
@@ -1264,6 +1271,11 @@ def postprocess_v7_stable(
     stable_result["difficulty_level"] = raw_level
     stable_result["difficulty_level_raw"] = raw_level
     stable_result["postprocess_actions"] = []
+    progressive_final_chain_enabled = (
+        ENABLE_PROGRESSIVE_FINAL_CHAIN
+        if enable_progressive_final_chain is None
+        else enable_progressive_final_chain
+    )
 
     features = stable_result.get("features", {})
     core_basis = str(stable_result.get("reasoning", {}).get("core_basis", "") or "")
@@ -1428,7 +1440,7 @@ def postprocess_v7_stable(
             high_signals,
         )
     elif (
-        ENABLE_PROGRESSIVE_FINAL_CHAIN
+        progressive_final_chain_enabled
         and raw_level == "拔高题"
         and features.get("step_count") in ["6-8步", "9-12步", "12步以上"]
         and len(high_signals) >= 4
@@ -1448,6 +1460,63 @@ def postprocess_v7_stable(
 
     sync_coarse_difficulty(stable_result)
     return stable_result
+
+
+def postprocess_gpt56_hybrid(
+    rating_result: Dict[str, Any],
+    data: Dict[str, Any],
+    raw_level: str,
+) -> Dict[str, Any]:
+    """GPT-5.6 裁定口径：旧 Hybrid5d 主体加一条窄的独立概念保护。"""
+    calibrated = postprocess_v7_stable(
+        rating_result,
+        data,
+        raw_level,
+        enable_progressive_final_chain=False,
+    )
+    for action in calibrated.get("postprocess_actions", []):
+        rule_name = str(action.get("rule", ""))
+        if rule_name.startswith("teacher_"):
+            action["rule"] = rule_name.replace("teacher_", "gpt56_hybrid_", 1)
+    if not ENABLE_GPT56_INDEPENDENCE_GUARD:
+        return calibrated
+    if raw_level != "中等题" or calibrated.get("postprocess_actions"):
+        return calibrated
+
+    features = calibrated.get("features", {})
+    evidence_text = (
+        str(calibrated.get("reasoning", {}).get("core_basis", "") or "")
+        + "\n"
+        + full_text_of(data)
+    )
+    explicit_independence = contains_any(
+        evidence_text,
+        ["彼此独立", "各选项独立", "每个选项独立", "独立判断"],
+    )
+    logical_boundary = contains_any(
+        evidence_text,
+        ["充分条件", "必要条件", "反例", "特殊边界", "规范表述"],
+    )
+    independent_low_structure_concept = bool(
+        features.get("problem_structure") == "概念判断"
+        and features.get("formula_count") == "0-1个"
+        and features.get("state_count") == "单状态"
+        and features.get("constraint_count") == "无约束"
+        and features.get("variable_relation") == "无变量关系"
+        and features.get("experiment_requirement") == "无"
+        and features.get("graph_table_requirement") == "无"
+        and explicit_independence
+        and not logical_boundary
+    )
+    if independent_low_structure_concept:
+        set_level_with_audit(
+            calibrated,
+            "基础题",
+            "gpt56_medium_to_basic_explicit_independence_guard",
+            ["模型明确判定选项彼此独立", "无状态、约束或变量联动", "无实验或图表推导"],
+        )
+    sync_coarse_difficulty(calibrated)
+    return calibrated
 
 
 def postprocess_hybrid5d_refined(
@@ -1551,6 +1620,8 @@ def postprocess_physics_difficulty(rating_result: Dict[str, Any], data: Dict[str
 
     if RATING_PROFILE == "fused":
         return postprocess_fused(rating_result, data, raw_level)
+    if RATING_PROFILE == "gpt56_hybrid":
+        return postprocess_gpt56_hybrid(rating_result, data, raw_level)
     if RATING_PROFILE == "hybrid5d_refined":
         return postprocess_hybrid5d_refined(rating_result, data, raw_level)
     if RATING_PROFILE == "v7_stable":
@@ -1713,8 +1784,14 @@ async def process_single_question(data: Dict[str, Any], session: aiohttp.ClientS
             output.update({
                 "rating_profile": RATING_PROFILE,
                 "progressive_final_chain_enabled": ENABLE_PROGRESSIVE_FINAL_CHAIN,
+                "progressive_final_chain_effective": (
+                    ENABLE_PROGRESSIVE_FINAL_CHAIN and RATING_PROFILE != "gpt56_hybrid"
+                ),
                 "low_structure_concept_guard_enabled": ENABLE_LOW_STRUCTURE_CONCEPT_GUARD,
                 "hybrid_severe_deviation_guards_enabled": ENABLE_HYBRID_SEVERE_DEVIATION_GUARDS,
+                "gpt56_independence_guard_enabled": (
+                    RATING_PROFILE == "gpt56_hybrid" and ENABLE_GPT56_INDEPENDENCE_GUARD
+                ),
                 "difficulty_rating_raw": raw_result,
                 "difficulty_level_raw": raw_level,
                 "postprocess_actions": result.get("postprocess_actions", []) if isinstance(result, dict) else [],
