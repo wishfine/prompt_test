@@ -45,6 +45,9 @@ class PhysicsPostprocessTests(unittest.TestCase):
     def test_v7_stable_profile_is_available(self) -> None:
         self.assertIn("v7_stable", rating.VALID_RATING_PROFILES)
 
+    def test_hybrid5d_refined_profile_is_available(self) -> None:
+        self.assertIn("hybrid5d_refined", rating.VALID_RATING_PROFILES)
+
     def test_raw_level_can_be_recovered_from_misnested_reasoning(self) -> None:
         raw = result("中等题")
         raw["reasoning"]["difficulty_level"] = "拔高题"
@@ -1099,6 +1102,149 @@ class V7StablePostprocessTests(unittest.TestCase):
         )
         self.assertIn(output["difficulty_level"], ["拔高题", "压轴题"])
         self.assertNotEqual(output["difficulty_level"], "中等题")
+
+
+class Hybrid5dRefinedPostprocessTests(V7StablePostprocessTests):
+    """Hybrid5d refined 复用经历史回放验证的窄相邻档规则。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.original_hybrid_severe_guards = rating.ENABLE_HYBRID_SEVERE_DEVIATION_GUARDS
+        rating.RATING_PROFILE = "hybrid5d_refined"
+        rating.ENABLE_HYBRID_SEVERE_DEVIATION_GUARDS = True
+
+    def tearDown(self) -> None:
+        rating.ENABLE_HYBRID_SEVERE_DEVIATION_GUARDS = self.original_hybrid_severe_guards
+        super().tearDown()
+
+    def test_profile_uses_auditable_one_level_adjustment(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            formula_count="2-3个",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            state_count="双状态",
+            graph_table_requirement="图像反推或外推",
+        )
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {"question_id": "hybrid5d-refined", "stem": "从图像反推两个状态并完成连续计算。"},
+        )
+        self.assertEqual(output["difficulty_level_raw"], "中等题")
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(len(output["postprocess_actions"]), 1)
+
+    def test_independent_low_structure_concept_medium_is_reduced_to_basic(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "四个选项彼此独立，只需逐项调用教材结论辨析。",
+            step_count="3-5步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="多层因果推理",
+            problem_structure="概念判断",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "hybrid_medium_to_basic_independent_concept_guard",
+        )
+
+    def test_independent_concept_guard_preserves_logical_boundary_analysis(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "四个选项彼此独立，但需逐项辨析充分条件、必要条件和反例。",
+            step_count="3-5步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="多层因果推理",
+            problem_structure="概念判断",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_independent_concept_guard_preserves_image_dependent_analysis(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "四个选项彼此独立，但需逐项利用图中的光路结构辨析。",
+            step_count="3-5步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="多层因果推理",
+            problem_structure="概念判断",
+            information_carrier="单图识别",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_dense_multiformula_two_state_medium_is_raised_to_hard(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "在两个状态中串联多个公式完成综合计算。",
+            step_count="3-5步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            subquestion_dependency="多问且层层递进",
+            state_count="双状态",
+            constraint_count="单一约束",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "hybrid_medium_to_hard_dense_formula_state_guard",
+        )
+
+    def test_dense_formula_guard_does_not_raise_single_state_medium(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "在一个显性状态中串联多个常规公式。",
+            step_count="3-5步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            state_count="单状态",
+            constraint_count="单一约束",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_hybrid_severe_deviation_guards_can_be_disabled(self) -> None:
+        rating.ENABLE_HYBRID_SEVERE_DEVIATION_GUARDS = False
+        output = self.postprocess(
+            "中等题",
+            "四个选项彼此独立，只需逐项调用教材结论辨析。",
+            step_count="3-5步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="多层因果推理",
+            problem_structure="概念判断",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
 
 
 class FusedPostprocessTests(unittest.TestCase):

@@ -34,7 +34,13 @@ BASE_URL = os.getenv("BASE_URL", "http://172.22.0.35:4466/v1")
 if not BASE_URL.endswith("/"):
     BASE_URL += "/"
 MODEL_NAME = os.getenv("MODEL_NAME", "doubao-seed-2.0-lite")
-VALID_RATING_PROFILES = {"fused", "generalized", "v7_compat", "v7_stable"}
+VALID_RATING_PROFILES = {
+    "fused",
+    "generalized",
+    "hybrid5d_refined",
+    "v7_compat",
+    "v7_stable",
+}
 RATING_PROFILE = (os.getenv("RATING_PROFILE", "v7_stable").strip().lower() or "v7_stable")
 if RATING_PROFILE not in VALID_RATING_PROFILES:
     raise ValueError(
@@ -50,6 +56,13 @@ ENABLE_PROGRESSIVE_FINAL_CHAIN = (
 # 仅校准原始中等题中的低结构概念题；显式开关便于 V7/V8 公平消融。
 ENABLE_LOW_STRUCTURE_CONCEPT_GUARD = (
     os.getenv("ENABLE_LOW_STRUCTURE_CONCEPT_GUARD", "1").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
+
+# Hybrid5d refined 仅使用两条可审计的相邻档安全网，用于收缩模型输出与
+# 自身 features 明显不一致时的严重偏差。开关便于全量 A/B 回归。
+ENABLE_HYBRID_SEVERE_DEVIATION_GUARDS = (
+    os.getenv("ENABLE_HYBRID_SEVERE_DEVIATION_GUARDS", "1").strip().lower()
     not in {"0", "false", "no", "off"}
 )
 
@@ -1437,6 +1450,92 @@ def postprocess_v7_stable(
     return stable_result
 
 
+def postprocess_hybrid5d_refined(
+    rating_result: Dict[str, Any],
+    data: Dict[str, Any],
+    raw_level: str,
+) -> Dict[str, Any]:
+    """在 Hybrid5d 基线后增加两条窄的严重偏差安全网。
+
+    两条规则都只修正原始中等题，且最多移动一档：
+    - 低结构、彼此独立的概念辨析 -> 基础题；
+    - 双状态以上、多公式联立的综合模型 -> 拔高题。
+
+    若 V7 稳定规则已经调整，不再连续触发第二条规则。
+    """
+    refined_result = postprocess_v7_stable(rating_result, data, raw_level)
+    if not ENABLE_HYBRID_SEVERE_DEVIATION_GUARDS:
+        return refined_result
+    if raw_level != "中等题" or refined_result.get("postprocess_actions"):
+        return refined_result
+
+    features = refined_result.get("features", {})
+    evidence_text = (
+        str(refined_result.get("reasoning", {}).get("core_basis", "") or "")
+        + "\n"
+        + full_text_of(data)
+    )
+    concept_logic_exceptions = [
+        "充分条件",
+        "必要条件",
+        "反例",
+        "特殊边界",
+        "边界条件",
+        "规范表述",
+        "逻辑过强",
+        "逻辑过弱",
+        "控制变量",
+        "故障分析",
+        "异常点",
+    ]
+    independent_concept_markers = [
+        "彼此独立",
+        "各选项独立",
+        "独立判断",
+        "逐一辨析",
+        "逐个辨析",
+        "逐项",
+    ]
+    independent_low_structure_concept = bool(
+        features.get("problem_structure") == "概念判断"
+        and features.get("formula_count") == "0-1个"
+        and features.get("calculation_complexity") == "口算或直接判断"
+        and features.get("information_carrier") == "纯文字"
+        and features.get("state_count") == "单状态"
+        and features.get("constraint_count") == "无约束"
+        and features.get("variable_relation") == "无变量关系"
+        and features.get("experiment_requirement") == "无"
+        and features.get("graph_table_requirement") == "无"
+        and contains_any(evidence_text, independent_concept_markers)
+        and not contains_any(evidence_text, concept_logic_exceptions)
+    )
+    dense_formula_state_model = bool(
+        features.get("formula_count") in ["2-3个", "4-6个", "7个以上"]
+        and features.get("calculation_complexity") == "多公式联立"
+        and features.get("problem_structure")
+        in ["电路综合", "力学综合", "热学综合", "光学声学综合", "跨模块综合"]
+        and features.get("state_count") in ["双状态", "多状态", "连续变化或临界状态"]
+    )
+
+    if independent_low_structure_concept:
+        set_level_with_audit(
+            refined_result,
+            "基础题",
+            "hybrid_medium_to_basic_independent_concept_guard",
+            ["选项彼此独立", "单状态且无约束", "无变量、实验或图表推导"],
+        )
+    elif dense_formula_state_model:
+        set_level_with_audit(
+            refined_result,
+            "拔高题",
+            "hybrid_medium_to_hard_dense_formula_state_guard",
+            ["双状态以上", "多公式联立", "综合物理模型"],
+        )
+
+    sync_coarse_difficulty(refined_result)
+    return refined_result
+
+
 def postprocess_physics_difficulty(rating_result: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
     """统一后处理：最多调整一档，并记录每次调整的证据。"""
     if not isinstance(rating_result, dict) or not rating_result:
@@ -1452,6 +1551,8 @@ def postprocess_physics_difficulty(rating_result: Dict[str, Any], data: Dict[str
 
     if RATING_PROFILE == "fused":
         return postprocess_fused(rating_result, data, raw_level)
+    if RATING_PROFILE == "hybrid5d_refined":
+        return postprocess_hybrid5d_refined(rating_result, data, raw_level)
     if RATING_PROFILE == "v7_stable":
         return postprocess_v7_stable(rating_result, data, raw_level)
     if RATING_PROFILE == "v7_compat":
@@ -1613,6 +1714,7 @@ async def process_single_question(data: Dict[str, Any], session: aiohttp.ClientS
                 "rating_profile": RATING_PROFILE,
                 "progressive_final_chain_enabled": ENABLE_PROGRESSIVE_FINAL_CHAIN,
                 "low_structure_concept_guard_enabled": ENABLE_LOW_STRUCTURE_CONCEPT_GUARD,
+                "hybrid_severe_deviation_guards_enabled": ENABLE_HYBRID_SEVERE_DEVIATION_GUARDS,
                 "difficulty_rating_raw": raw_result,
                 "difficulty_level_raw": raw_level,
                 "postprocess_actions": result.get("postprocess_actions", []) if isinstance(result, dict) else [],

@@ -278,6 +278,7 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertNotIn("物理高难题知识点：大概率判为 4-5 档", prefix)
         self.assertIn("容易承载高难结构的知识情境：最终等级仍由任务结构决定", prefix)
         self.assertIn("装置名称或知识点类别本身不构成升档依据", prefix)
+
         self.assertIn("多状态电路中的多重安全量程约束", prefix)
         self.assertIn("隐含控制逻辑与参数筛选并存的继电器控制", prefix)
         self.assertIn("非线性元件图像反推与多状态约束综合", prefix)
@@ -329,6 +330,59 @@ class ProductionPromptAssetTests(unittest.TestCase):
         source = (ROOT / "src" / "physics_difficulty_rating_with_cache.py").read_text(encoding="utf-8")
         self.assertIn('"progressive_final_chain_enabled": ENABLE_PROGRESSIVE_FINAL_CHAIN', source)
         self.assertIn('"low_structure_concept_guard_enabled": ENABLE_LOW_STRUCTURE_CONCEPT_GUARD', source)
+
+
+class Hybrid5dRefinedPromptAssetTests(unittest.TestCase):
+    def load_prefix(self) -> str:
+        path = ROOT / "prompts" / "初中物理难度打标提示词_hybrid5d_refined.txt"
+        namespace: dict[str, str] = {}
+        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), {}, namespace)
+        return namespace["DIFFICULTY_RATING_PROMPT_PREFIX"]
+
+    def test_refined_prompt_is_derived_from_hybrid5d_and_parseable(self) -> None:
+        prefix = self.load_prefix()
+        self.assertGreater(len(prefix), 15000)
+        self.assertIn("教师五维定档主标准", prefix)
+        self.assertIn("18 个 features", prefix)
+
+    def test_refined_prompt_separates_chain_depth_and_total_task_load(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("纵向链深 D", prefix)
+        self.assertIn("横向任务量 B", prefix)
+        self.assertIn("高阶结构 H", prefix)
+        self.assertIn("step_count 只记录最高难单项的纵向链深", prefix)
+        self.assertIn("横向任务量最多只支持上调一个相邻档", prefix)
+
+    def test_refined_prompt_has_mutually_exclusive_five_level_gates(self) -> None:
+        prefix = self.load_prefix()
+        for marker in [
+            "送分题硬边界",
+            "基础题硬边界",
+            "中等题硬边界",
+            "拔高题硬边界",
+            "压轴题硬边界",
+        ]:
+            self.assertIn(marker, prefix)
+        self.assertIn("先满足更高档硬边界，才允许进入该档", prefix)
+
+    def test_refined_prompt_does_not_count_independent_options_as_steps(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("四个独立选项不是四步", prefix)
+        self.assertIn("逐项阅读、逐项套用同一规则", prefix)
+        self.assertIn("不能写成3-5步或多层因果推理", prefix)
+
+    def test_refined_prompt_recognizes_model_dependency_and_high_density_chain(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("答案依赖", prefix)
+        self.assertIn("模型依赖", prefix)
+        self.assertIn("高密度综合链通道", prefix)
+        self.assertIn("强压轴结构", prefix)
+
+    def test_refined_prompt_has_no_score_rate_or_untrusted_source_label(self) -> None:
+        prefix = self.load_prefix()
+        self.assertNotIn("得分率", prefix)
+        self.assertNotRegex(prefix, r"(?<![A-Za-z])P(?:≥|<|时)")
+        self.assertNotIn("source_difficulty_untrusted", prefix)
 
 
 class V8CandidatePromptAssetTests(unittest.TestCase):
