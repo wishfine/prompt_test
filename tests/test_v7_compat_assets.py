@@ -42,7 +42,8 @@ class ProductionPromptAssetTests(unittest.TestCase):
     def test_production_prompt_keeps_old_baseline_depth_and_two_layer_examples(self) -> None:
         prefix = self.load_prefix()
         self.assertGreaterEqual(len(prefix), 17500)
-        self.assertLess(len(prefix), 24000)
+        # Prompt 长度不是评级约束；这里只防止无意中的失控膨胀。
+        self.assertLess(len(prefix), 27000)
         self.assertGreaterEqual(prefix.count("### 代表性例题"), 5)
         self.assertIn("## 相邻档位边界校准 few-shot", prefix)
 
@@ -80,7 +81,8 @@ class ProductionPromptAssetTests(unittest.TestCase):
     def test_production_prompt_does_not_treat_choice_count_or_simple_application_as_easy(self) -> None:
         prefix = self.load_prefix()
         self.assertIn("四个选项本身既不升档也不降档", prefix)
-        self.assertIn("需要把生活情境映射到物理规律", prefix)
+        self.assertIn("条件与唯一物理结论之间的一次透明映射", prefix)
+        self.assertIn("需要在多个规律中选择", prefix)
         self.assertNotIn("四个短选项或一步因果；只要", prefix)
         self.assertNotIn("一步生活原型对应，不必然排除送分", prefix)
 
@@ -129,12 +131,56 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertNotIn("多个相互独立的直接小问可填“3-5步”", prefix)
         self.assertIn("step_count 仍按最高难小问或最高难选项自身的连续推理链填写", prefix)
 
-    def test_parallel_concepts_default_to_basic_and_have_a_medium_gate(self) -> None:
+    def test_parallel_concepts_keep_step_depth_and_have_a_breadth_gate(self) -> None:
         prefix = self.load_prefix()
         self.assertNotIn("通常判为基础题或中等题", prefix)
-        self.assertIn("概念选择题由基础题升为中等题的结构门槛", prefix)
-        self.assertIn("若只能写出“逐项判断多个选项”", prefix)
+        self.assertIn("概念选择题由基础题升为中等题的双通道门槛", prefix)
+        self.assertIn("选项彼此独立只说明它们不能累加成连续推理步骤", prefix)
+        self.assertIn("至少三个非重复应用任务分别是什么", prefix)
         self.assertIn("不满足中等题门槛", prefix)
+
+    def test_production_prompt_uses_depth_breadth_dual_track(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("纵向深度", prefix)
+        self.assertIn("横向广度", prefix)
+        self.assertIn("step_count 不机械累加", prefix)
+        self.assertIn("同一情境、实验或装置", prefix)
+        self.assertIn("完全无关的教材事实", prefix)
+
+    def test_composite_features_use_field_specific_scopes(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("knowledge_count 记录整道题实际要求调用且彼此不同的知识点并集", prefix)
+        self.assertIn("information_carrier 记录整题实际参与作答的主要信息载体", prefix)
+        self.assertIn("多个状态只有在题目要求比较、串联或统一分析它们时", prefix)
+        self.assertIn("多个约束只有共同参与同一求解、范围或有效解筛选时", prefix)
+        self.assertIn("仍按最高难单项记录", prefix)
+
+    def test_medium_features_allow_truthful_breadth_values(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("通过横向广度达到中等时可以是0-1个", prefix)
+        self.assertIn("通过横向广度达到中等时可以是4个及以上", prefix)
+        self.assertIn("最高难单项可以只是简单因果推理", prefix)
+        self.assertIn("载体形式不决定等级", prefix)
+        self.assertIn("实验要求：可以为无", prefix)
+
+    def test_horizontal_breadth_excludes_transparent_or_repeated_tasks(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("至少两个任务必须超出直接识别或一次透明映射", prefix)
+        self.assertIn("直接读取一个点", prefix)
+        self.assertIn("仅改变知识点名称但认知动作相同", prefix)
+        self.assertIn("横向广度最多支持相邻升一档", prefix)
+
+    def test_easy_formula_boundary_distinguishes_direct_substitution(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("题面已经明确唯一关系的一步直接代入不必然排除送分题", prefix)
+        self.assertIn("自主选择适用规律或公式", prefix)
+        self.assertIn("先求中间量", prefix)
+
+    def test_parallel_module_coverage_is_not_cross_module_fusion(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("cross_module 只记录不同模块是否在同一推理链中发生融合", prefix)
+        self.assertIn("仍填“同一模块内部”", prefix)
+        self.assertIn("由 knowledge_count 记录知识覆盖广度", prefix)
 
     def test_easy_boundary_has_no_subquestion_count_threshold(self) -> None:
         prefix = self.load_prefix()
@@ -189,12 +235,13 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("电学与热学、力学与热学", prefix)
         self.assertNotIn("力学+浮力", prefix)
 
-    def test_medium_definition_and_friction_example_use_shared_conditions(self) -> None:
+    def test_medium_definition_and_examples_cover_shared_structure_and_finite_breadth(self) -> None:
         prefix = self.load_prefix()
         self.assertNotIn("数据归纳与高密度概念辨析", prefix)
         self.assertIn("围绕同一概念的充分必要条件、反例、特殊边界或规范表述辨析", prefix)
         self.assertNotIn("必须反复区分必要条件", prefix)
-        self.assertIn("必须基于同一完整条件集区分必要条件", prefix)
+        self.assertIn("鱼缸增氧泵原理选择题", prefix)
+        self.assertIn("形成中等题的横向有效任务广度", prefix)
 
     def test_glass_tube_example_records_multilayer_reasoning(self) -> None:
         prefix = self.load_prefix()

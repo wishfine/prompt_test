@@ -105,6 +105,46 @@ def extract_raw_prediction(item: dict[str, Any]) -> str | None:
     return None
 
 
+def summarize_predictions(rows: list[tuple[str, str]]) -> dict[str, Any]:
+    """汇总一组（教师等级，预测等级），供原始输出和最终输出共用。"""
+    if not rows:
+        return {"evaluated": 0}
+    total = len(rows)
+    labels_in_order = list(LEVEL_ORDER)
+    exact = sum(target == prediction for target, prediction in rows)
+    distances = [abs(LEVEL_ORDER[target] - LEVEL_ORDER[prediction]) for target, prediction in rows]
+    confusion = {target: {prediction: 0 for prediction in labels_in_order} for target in labels_in_order}
+    per_level_total = Counter()
+    per_level_correct = Counter()
+    prediction_distribution = Counter()
+    over = under = 0
+    for target, prediction in rows:
+        confusion[target][prediction] += 1
+        per_level_total[target] += 1
+        prediction_distribution[prediction] += 1
+        if target == prediction:
+            per_level_correct[target] += 1
+        if LEVEL_ORDER[prediction] > LEVEL_ORDER[target]:
+            over += 1
+        elif LEVEL_ORDER[prediction] < LEVEL_ORDER[target]:
+            under += 1
+    return {
+        "evaluated": total,
+        "exact_match_rate": round(exact / total, 4),
+        "within_one_level_rate": round(sum(distance <= 1 for distance in distances) / total, 4),
+        "mae": round(sum(distances) / total, 4),
+        "severe_deviation_count": sum(distance >= 2 for distance in distances),
+        "over_predicted": over,
+        "under_predicted": under,
+        "prediction_distribution": {level: prediction_distribution.get(level, 0) for level in labels_in_order},
+        "confusion_matrix": confusion,
+        "per_level_accuracy": {
+            level: round(per_level_correct[level] / per_level_total[level], 4) if per_level_total[level] else None
+            for level in labels_in_order
+        },
+    }
+
+
 def evaluate(results_path: Path, labels: dict[str, str]) -> dict[str, Any]:
     rows: list[tuple[str, str, str, str | None, list[dict[str, Any]]]] = []
     with results_path.open("r", encoding="utf-8") as handle:
@@ -118,24 +158,12 @@ def evaluate(results_path: Path, labels: dict[str, str]) -> dict[str, Any]:
                 rows.append((question_id, TEACHER_TO_LEVEL[labels[question_id]], prediction, extract_raw_prediction(item), item.get("postprocess_actions") or []))
     if not rows:
         raise ValueError("结果中没有可与教师 CSV 匹配的有效预测")
-    total = len(rows)
-    exact = sum(target == prediction for _, target, prediction, _, _ in rows)
-    distances = [abs(LEVEL_ORDER[target] - LEVEL_ORDER[prediction]) for _, target, prediction, _, _ in rows]
-    labels_in_order = list(LEVEL_ORDER)
-    confusion = {target: {prediction: 0 for prediction in labels_in_order} for target in labels_in_order}
-    per_level_total = Counter()
-    per_level_correct = Counter()
-    over = under = 0
+    final_summary = summarize_predictions([(target, prediction) for _, target, prediction, _, _ in rows])
+    raw_summary = summarize_predictions(
+        [(target, raw) for _, target, _, raw, _ in rows if raw in LEVEL_ORDER]
+    )
     rule_stats: dict[str, Counter[str]] = defaultdict(Counter)
     for _, target, prediction, raw, actions in rows:
-        confusion[target][prediction] += 1
-        per_level_total[target] += 1
-        if target == prediction:
-            per_level_correct[target] += 1
-        if LEVEL_ORDER[prediction] > LEVEL_ORDER[target]:
-            over += 1
-        elif LEVEL_ORDER[prediction] < LEVEL_ORDER[target]:
-            under += 1
         raw_error = abs(LEVEL_ORDER[raw] - LEVEL_ORDER[target]) if raw in LEVEL_ORDER else None
         final_error = abs(LEVEL_ORDER[prediction] - LEVEL_ORDER[target])
         for action in actions:
@@ -148,15 +176,8 @@ def evaluate(results_path: Path, labels: dict[str, str]) -> dict[str, Any]:
             else:
                 rule_stats[rule]["worsened"] += 1
     return {
-        "evaluated": total,
-        "exact_match_rate": round(exact / total, 4),
-        "within_one_level_rate": round(sum(distance <= 1 for distance in distances) / total, 4),
-        "mae": round(sum(distances) / total, 4),
-        "severe_deviation_count": sum(distance >= 2 for distance in distances),
-        "over_predicted": over,
-        "under_predicted": under,
-        "confusion_matrix": confusion,
-        "per_level_accuracy": {level: round(per_level_correct[level] / per_level_total[level], 4) if per_level_total[level] else None for level in labels_in_order},
+        **final_summary,
+        "raw_evaluation": raw_summary,
         "postprocess_rules": {rule: dict(counter) for rule, counter in sorted(rule_stats.items())},
     }
 
