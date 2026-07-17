@@ -104,6 +104,37 @@ python src/physics_difficulty_rating_with_cache.py \
 
 完整的数据口径、few-shot 表、后处理规则和 200 题分层回归命令见 [PHYSICS_RATING_REVISION.md](PHYSICS_RATING_REVISION.md)。
 
+## 第二阶段边界复核
+
+`src/physics_boundary_second_review.py` 只复核单次首轮结果，不对三次运行投票或合并。三次实验应分别评估稳定性；需要复核错题时，先从指定的一次运行导出全部错题，再逐题复核。复核器默认只处理以下候选：
+
+- 任一次首轮发生过后处理调整；
+- 最终等级与 18 维结构特征明显靠近相邻档边界。
+
+复核结果只有在等级合法、相对首轮最多移动一档、证据字段完整且置信度为“高”时才自动生效。首轮结果、复核原始 JSON、调整原因、耗时和 token 均保留在输出中。
+
+先导出 Run1 全部错题：
+
+```bash
+python tests/adjudication_label_regression.py \
+  --csv data/labeled/physics_adjudicated_labels_gpt56_1066.csv \
+  --jsonl data/labeled/physics_difficulty_tiku_data_0714_1000.jsonl \
+  --evaluate outputs/model_runs/lite_physics_final_candidate_1066_run1.jsonl \
+  --export-mismatches outputs/model_runs/lite_physics_final_candidate_1066_run1_mismatches.jsonl
+```
+
+再查看复核候选数量，不发模型请求：
+
+```bash
+python src/physics_boundary_second_review.py \
+  -i outputs/model_runs/lite_physics_final_candidate_1066_run1_mismatches.jsonl \
+  -o outputs/model_runs/lite_physics_final_candidate_1066_run1_reviewed.jsonl \
+  -e outputs/model_runs/lite_physics_final_candidate_1066_run1_review_errors.jsonl \
+  --review-mode all --dry-run
+```
+
+正式复核时删除 `--dry-run`。错题包应使用 `all`，保证每道错题都复核；完整1066题输入可使用 `selective` 或 `broad`。复核输出会把分歧归为“模型确实误判”“参考标签需修订”“相邻边界均可”或“双方均需修订”。可用 `--model doubao-seed-2.0-pro` 单独指定复核模型。
+
 ## 代码约束
 
 `src/physics_difficulty_rating_with_cache.py` 保持以下兼容性：

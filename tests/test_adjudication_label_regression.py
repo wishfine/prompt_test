@@ -8,7 +8,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.adjudication_label_regression import evaluate, load_adjudicated_labels
+from tests.adjudication_label_regression import (
+    evaluate,
+    export_mismatches,
+    load_adjudicated_labels,
+)
 
 
 class AdjudicationLabelRegressionTests(unittest.TestCase):
@@ -37,9 +41,16 @@ class AdjudicationLabelRegressionTests(unittest.TestCase):
                 "question_id": "q1",
                 "difficulty_level_raw": "中等题",
                 "difficulty_rating": {"difficulty_level": "拔高题"},
+                "difficulty_level_before_review": "中等题",
                 "postprocess_actions": [
                     {"rule": "medium_to_hard", "from": "中等题", "to": "拔高题"}
                 ],
+                "boundary_review": {
+                    "selected": True,
+                    "applied": True,
+                    "error": "",
+                    "result": {"confidence": "高"},
+                },
             },
             {
                 "question_id": "q2",
@@ -61,7 +72,10 @@ class AdjudicationLabelRegressionTests(unittest.TestCase):
         self.assertEqual(result["evaluated"], 2)
         self.assertEqual(result["exact_match_rate"], 0.5)
         self.assertEqual(result["raw_evaluation"]["exact_match_rate"], 0.0)
-        self.assertEqual(result["postprocess_rules"]["medium_to_hard"]["improved"], 1)
+        self.assertEqual(result["before_boundary_review_evaluation"]["exact_match_rate"], 0.0)
+        self.assertEqual(result["postprocess_rules"]["medium_to_hard"]["unchanged"], 1)
+        self.assertEqual(result["boundary_review"]["stats"]["improved"], 1)
+        self.assertEqual(result["boundary_review"]["transitions"]["中等题->拔高题"]["improved"], 1)
         self.assertEqual(result["confidence_slices"]["高"]["exact_match_rate"], 1.0)
         self.assertEqual(result["confidence_slices"]["中"]["exact_match_rate"], 0.0)
 
@@ -98,6 +112,31 @@ class AdjudicationLabelRegressionTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn('"exact_match_rate": 1.0', completed.stdout)
+
+    def test_export_mismatches_keeps_single_run_rows_and_reference_metadata(self) -> None:
+        rows = [
+            {"question_id": "q1", "difficulty_rating": {"difficulty_level": "基础题"}},
+            {"question_id": "q2", "difficulty_rating": {"difficulty_level": "中等题"}},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "run1.jsonl"
+            target = Path(directory) / "run1_mismatches.jsonl"
+            source.write_text(
+                "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+            count = export_mismatches(
+                source,
+                target,
+                {"q1": "基础题", "q2": "拔高题"},
+                {"q1": "高", "q2": "中"},
+            )
+            exported = [json.loads(line) for line in target.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(count, 1)
+        self.assertEqual(exported[0]["question_id"], "q2")
+        self.assertEqual(exported[0]["adjudication_reference_level"], "拔高题")
+        self.assertEqual(exported[0]["adjudication_prediction_level"], "中等题")
 
 
 if __name__ == "__main__":
