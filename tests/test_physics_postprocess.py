@@ -1336,11 +1336,13 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
         output = self.postprocess(
             "中等题",
             "四个选项彼此独立，每个选项独立调用一条教材结论。",
-            step_count="3-5步",
+            step_count="1-2步",
             formula_count="0-1个",
             calculation_complexity="口算或直接判断",
-            reasoning_chain="多层因果推理",
+            reasoning_chain="简单因果推理",
             problem_structure="概念判断",
+            additional_structure="图像表格",
+            information_carrier="单图识别",
             state_count="单状态",
             constraint_count="无约束",
             variable_relation="无变量关系",
@@ -1352,6 +1354,24 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
             output["postprocess_actions"][0]["rule"],
             "gpt56_medium_to_basic_explicit_independence_guard",
         )
+
+    def test_independence_guard_preserves_three_step_contextual_analysis(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "四个选项彼此独立，但分别需要重力计算、电磁波判断、升力分析和平衡条件的情境映射。",
+            step_count="3-5步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="多层因果推理",
+            problem_structure="概念判断",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
 
     def test_independent_guard_preserves_condition_and_counterexample_analysis(self) -> None:
         output = self.postprocess(
@@ -1430,6 +1450,81 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
             knowledge_count="4个及以上",
             knowledge_diff="低",
             cross_module="跨模块综合",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_direct_textbook_quantity_estimate_is_calibrated_to_easy(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "下列数据中与实际相符的是：普通公交车长度约10m，中学生课桌高度约0.8m。",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="简单因果推理",
+            problem_structure="概念判断",
+            additional_structure="无",
+            information_carrier="纯文字",
+            subquestion_dependency="无多问",
+            knowledge_count="2-3个",
+            knowledge_diff="低",
+            cross_module="同一模块内部",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "送分题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_basic_to_easy_direct_quantity_estimate_guard",
+        )
+
+    def test_multi_derived_quantity_estimate_stays_basic(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "生活物理量估测：分别估算跳绳功率、课本压强、上楼做功和乒乓球浮力。",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="简单因果推理",
+            problem_structure="概念判断",
+            additional_structure="无",
+            information_carrier="纯文字",
+            subquestion_dependency="无多问",
+            knowledge_count="2-3个",
+            knowledge_diff="低",
+            cross_module="同一模块内部",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_scientific_notation_unit_estimate_stays_basic(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "2.85×10^9nm最接近下列哪个物体的长度？",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="简单因果推理",
+            problem_structure="概念判断",
+            additional_structure="无",
+            information_carrier="纯文字",
+            subquestion_dependency="无多问",
+            knowledge_count="1个",
+            knowledge_diff="低",
+            cross_module="同一模块内部",
             state_count="单状态",
             constraint_count="无约束",
             variable_relation="无变量关系",
@@ -1577,6 +1672,67 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
         self.assertEqual(
             output["postprocess_actions"][0]["rule"],
             "gpt56_basic_to_medium_equivalence_experiment_guard",
+        )
+
+    def test_equivalence_guard_tolerates_model_misclassifying_experiment_as_concept(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "同一直线上二力合成实验设置4组实验，比较弹簧伸长量是否相同，判断作用效果是否等效以确定合力。",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="简单因果推理",
+            problem_structure="概念判断",
+            information_carrier="实验装置图",
+            experiment_requirement="基础操作或读数",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_basic_to_medium_equivalence_experiment_guard",
+        )
+
+    def test_direct_interval_distance_graph_is_reduced_from_medium_to_basic(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "由路程-时间图象直接判断小车在0～3s内运动的路程。",
+            step_count="3-5步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="多层因果推理",
+            problem_structure="图像表格分析",
+            knowledge_count="1个",
+            state_count="多状态",
+            constraint_count="无约束",
+            experiment_requirement="无",
+            graph_table_requirement="多组比较归纳",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_medium_to_basic_direct_interval_graph_guard",
+        )
+
+    def test_multi_switch_lamp_power_boundary_is_raised_despite_carrier_drift(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "小灯泡给出额定电压和I-U图像。分别只闭合S2、只闭合S3及全部开关，在电流表量程和安全限制下求最大功率与功率范围。",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            information_carrier="图像或表格",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="2-3个",
+            state_count="多状态",
+            constraint_count="单一约束",
+            graph_table_requirement="直接读数",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_medium_to_hard_multi_switch_power_boundary_guard",
         )
 
     def test_joint_final_rule_requires_decisive_evidence_in_gpt56_profile(self) -> None:

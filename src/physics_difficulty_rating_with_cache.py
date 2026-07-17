@@ -1597,11 +1597,62 @@ def postprocess_gpt56_hybrid(
         sync_coarse_difficulty(calibrated)
         return calibrated
 
+    # 教材中常见物理量的量级估测，若不需要公式链、单位换算或多类
+    # 派生量计算，实质上仍是一次熟悉量级检索。
+    question_text = full_text_of(data)
+    estimate_signal = contains_any(
+        question_text,
+        ["与实际相符", "符合实际", "估测", "估计值", "最接近", "接近实际"],
+    )
+    scientific_unit_conversion = contains_any(
+        question_text,
+        ["纳米", "nm", "科学计数法", "单位换算", "×10^", "×10的"],
+    )
+    derived_quantity_families = sum(
+        contains_any(question_text, terms)
+        for terms in [
+            ["功率"],
+            ["压强"],
+            ["做功", "功的大小"],
+            ["浮力"],
+            ["机械效率"],
+            ["热量"],
+        ]
+    )
+    direct_quantity_estimate = bool(
+        ENABLE_GPT56_STRUCTURAL_CALIBRATION
+        and raw_level == "基础题"
+        and estimate_signal
+        and not scientific_unit_conversion
+        and derived_quantity_families < 3
+        and features.get("step_count") == "1-2步"
+        and features.get("formula_count") == "0-1个"
+        and features.get("calculation_complexity") in ["口算或直接判断", "简单笔算"]
+        and features.get("reasoning_chain") in ["直接套用", "简单因果推理"]
+        and features.get("problem_structure") == "概念判断"
+        and features.get("subquestion_dependency") == "无多问"
+        and features.get("knowledge_diff") == "低"
+        and features.get("cross_module") == "同一模块内部"
+        and features.get("state_count") == "单状态"
+        and features.get("constraint_count") == "无约束"
+        and features.get("variable_relation") == "无变量关系"
+        and features.get("experiment_requirement") == "无"
+        and features.get("graph_table_requirement") == "无"
+    )
+    if direct_quantity_estimate:
+        set_level_with_audit(
+            calibrated,
+            "送分题",
+            "gpt56_basic_to_easy_direct_quantity_estimate_guard",
+            ["教材常见物理量级", "1步估测或对比", "无单位换算或多派生量计算"],
+        )
+        sync_coarse_difficulty(calibrated)
+        return calibrated
+
     # 多组构型下验证“作用效果等效”不是一次直接读数。
     equivalence_experiment = bool(
         ENABLE_GPT56_SEVERE_DEVIATION_GUARDS
         and raw_level == "基础题"
-        and features.get("problem_structure") == "实验探究"
         and contains_any(evidence_text, ["4组实验", "四组实验", "多组实验"])
         and contains_any(evidence_text, ["等效", "合力", "作用效果"])
         and contains_any(evidence_text, ["相同", "不同", "比较"])
@@ -1630,7 +1681,10 @@ def postprocess_gpt56_hybrid(
     independent_low_structure_concept = bool(
         ENABLE_GPT56_INDEPENDENCE_GUARD
         and features.get("problem_structure") == "概念判断"
+        and features.get("step_count") == "1-2步"
         and features.get("formula_count") == "0-1个"
+        and features.get("calculation_complexity") == "口算或直接判断"
+        and features.get("reasoning_chain") in ["直接套用", "简单因果推理"]
         and features.get("state_count") == "单状态"
         and features.get("constraint_count") == "无约束"
         and features.get("variable_relation") == "无变量关系"
@@ -1645,6 +1699,28 @@ def postprocess_gpt56_hybrid(
             "基础题",
             "gpt56_medium_to_basic_explicit_independence_guard",
             ["模型明确判定选项彼此独立", "无状态、约束或变量联动", "无实验或图表推导"],
+        )
+        sync_coarse_difficulty(calibrated)
+        return calibrated
+
+    direct_interval_graph = bool(
+        ENABLE_GPT56_SEVERE_DEVIATION_GUARDS
+        and features.get("problem_structure") == "图像表格分析"
+        and features.get("formula_count") == "0-1个"
+        and features.get("calculation_complexity") == "口算或直接判断"
+        and features.get("knowledge_count") == "1个"
+        and features.get("constraint_count") == "无约束"
+        and features.get("experiment_requirement") == "无"
+        and contains_any(evidence_text, ["路程-时间", "路程—时间", "s-t图", "s－t图"])
+        and contains_any(evidence_text, ["运动的路程", "内的路程", "路程为"])
+        and not contains_any(evidence_text, ["平均速度", "速度大小", "速度为"])
+    )
+    if direct_interval_graph:
+        set_level_with_audit(
+            calibrated,
+            "基础题",
+            "gpt56_medium_to_basic_direct_interval_graph_guard",
+            ["单一s-t图区间", "直接读取路程差", "无公式选择或约束筛选"],
         )
         sync_coarse_difficulty(calibrated)
         return calibrated
@@ -1701,6 +1777,18 @@ def postprocess_gpt56_hybrid(
         and contains_any(evidence_text, ["最大", "最小", "范围"])
         and contains_any(evidence_text, ["额定电流", "电流不超过", "量程"])
     )
+    switch_state_mentions = sum(
+        evidence_text.count(term)
+        for term in ["只闭合", "均闭合", "全部闭合", "断开开关", "闭合开关"]
+    )
+    multi_switch_power_boundary = bool(
+        features.get("problem_structure") == "电路综合"
+        and features.get("state_count") in ["双状态", "多状态", "连续变化或临界状态"]
+        and switch_state_mentions >= 2
+        and contains_any(evidence_text, ["额定电压", "额定电流", "正常发光"])
+        and contains_any(evidence_text, ["量程", "允许通过", "确保电路安全", "保证不损坏"])
+        and contains_any(evidence_text, ["最大功率", "功率的变化范围", "功率范围"])
+    )
     force_model_family_count = sum(
         contains_any(evidence_text, terms)
         for terms in [
@@ -1723,6 +1811,9 @@ def postprocess_gpt56_hybrid(
     elif multi_graph_long_chain:
         rule = "gpt56_medium_to_hard_multigraph_chain_guard"
         evidence = ["6-8步以上", "4-6个以上公式", "多图表与4个以上知识点"]
+    elif multi_switch_power_boundary:
+        rule = "gpt56_medium_to_hard_multi_switch_power_boundary_guard"
+        evidence = ["多开关状态重建", "灯泡额定或图像关系", "安全限制与功率边界"]
     elif circuit_boundary_chain:
         rule = "gpt56_medium_to_hard_circuit_boundary_guard"
         evidence = ["多图表电路", "双状态以上", "额定限制与极值/范围共同约束"]

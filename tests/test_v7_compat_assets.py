@@ -230,6 +230,13 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("自主选择适用规律或公式", prefix)
         self.assertIn("先求中间量", prefix)
 
+    def test_direct_quantity_estimates_are_distinguished_from_derived_estimates(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("多个不同物理量的教材常见量级", prefix)
+        self.assertIn("仍可判送分题", prefix)
+        self.assertIn("多个派生物理量", prefix)
+        self.assertIn("科学计数法换算", prefix)
+
     def test_parallel_module_coverage_is_not_cross_module_fusion(self) -> None:
         prefix = self.load_prefix()
         self.assertIn("cross_module 只记录不同模块是否在同一推理链中发生融合", prefix)
