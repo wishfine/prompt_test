@@ -1300,6 +1300,8 @@ def postprocess_v7_stable(
     raw_level: str,
     enable_progressive_final_chain: Optional[bool] = None,
     require_decisive_final_evidence: bool = False,
+    enable_low_structure_medium_guard: Optional[bool] = None,
+    exclude_experiment_final_upgrade: bool = False,
 ) -> Dict[str, Any]:
     """按教师样本中跨三次稳定的联合结构做相邻档校准。
 
@@ -1314,6 +1316,11 @@ def postprocess_v7_stable(
         ENABLE_PROGRESSIVE_FINAL_CHAIN
         if enable_progressive_final_chain is None
         else enable_progressive_final_chain
+    )
+    low_structure_medium_guard_enabled = (
+        ENABLE_LOW_STRUCTURE_CONCEPT_GUARD
+        if enable_low_structure_medium_guard is None
+        else enable_low_structure_medium_guard
     )
 
     features = stable_result.get("features", {})
@@ -1369,7 +1376,7 @@ def postprocess_v7_stable(
         ],
     )
     low_structure_medium = bool(
-        ENABLE_LOW_STRUCTURE_CONCEPT_GUARD
+        low_structure_medium_guard_enabled
         and raw_level == "中等题"
         and features.get("step_count") in ["1-2步", "3-5步"]
         and features.get("formula_count") == "0-1个"
@@ -1501,6 +1508,10 @@ def postprocess_v7_stable(
         and features.get("constraint_count") == "多约束"
         and has_final_reasoning_signal
         and (not require_decisive_final_evidence or final_decisive_evidence)
+        and (
+            not exclude_experiment_final_upgrade
+            or features.get("problem_structure") != "实验探究"
+        )
     ):
         set_level_with_audit(
             stable_result,
@@ -1548,6 +1559,13 @@ def postprocess_gpt56_hybrid(
         raw_level,
         enable_progressive_final_chain=False,
         require_decisive_final_evidence=True,
+        # 1066 题回放中，宽泛低结构降档触发 15 次、改对 5 次、
+        # 改错 10 次。GPT-5.6 口径只保留下方要求模型明确写出
+        # “彼此独立”的窄规则，不再仅凭 features 自动降档。
+        enable_low_structure_medium_guard=False,
+        # 常规实验即使 features 较高，若没有独立的分类/边界验证结构，
+        # 不由通用联合信号直接从拔高升到压轴。
+        exclude_experiment_final_upgrade=True,
     )
     for action in calibrated.get("postprocess_actions", []):
         rule_name = str(action.get("rule", ""))
@@ -1667,6 +1685,48 @@ def postprocess_gpt56_hybrid(
         sync_coarse_difficulty(calibrated)
         return calibrated
 
+    # 等级与模型自己抽取出的推理层次明显冲突时，做一次相邻档兜底。
+    # 该联合结构在 1066 题回放中覆盖 8 题，8 题均应为中等题；
+    # 它不依赖题型关键词，也不把“步骤多”作为单独升级依据。
+    basic_with_multilayer_reasoning = bool(
+        ENABLE_GPT56_STRUCTURAL_CALIBRATION
+        and raw_level == "基础题"
+        and features.get("reasoning_chain") == "多层因果推理"
+        and features.get("calculation_complexity") != "复杂方程或范围计算"
+        and features.get("state_count") != "连续变化或临界状态"
+    )
+    if basic_with_multilayer_reasoning:
+        set_level_with_audit(
+            calibrated,
+            "中等题",
+            "gpt56_basic_to_medium_multilayer_consistency_guard",
+            ["模型已识别多层因果推理", "基础档与推理层次明显不一致", "仅相邻升一档"],
+        )
+        sync_coarse_difficulty(calibrated)
+        return calibrated
+
+    # 原始拔高题已经明确达到 6-8 步、多状态和多约束时，完整状态—约束
+    # 网络足以进入压轴。该结构在全量回放中覆盖 5 题，5 题均为压轴，
+    # 且不会与上面的通用规则连续执行。
+    hard_with_full_state_constraint_network = bool(
+        ENABLE_GPT56_STRUCTURAL_CALIBRATION
+        and raw_level == "拔高题"
+        and features.get("step_count") == "6-8步"
+        and features.get("state_count") == "多状态"
+        and features.get("constraint_count") == "多约束"
+        and features.get("reasoning_chain") in ["多层因果推理", "逆向推理或临界分析"]
+        and features.get("problem_structure") != "实验探究"
+    )
+    if hard_with_full_state_constraint_network:
+        set_level_with_audit(
+            calibrated,
+            "压轴题",
+            "gpt56_hard_to_final_full_state_constraint_network_guard",
+            ["6-8步完整链", "多状态", "多约束", "状态与约束共同参与求解"],
+        )
+        sync_coarse_difficulty(calibrated)
+        return calibrated
+
     if raw_level != "中等题":
         return calibrated
 
@@ -1685,6 +1745,7 @@ def postprocess_gpt56_hybrid(
         and features.get("formula_count") == "0-1个"
         and features.get("calculation_complexity") == "口算或直接判断"
         and features.get("reasoning_chain") in ["直接套用", "简单因果推理"]
+        and features.get("knowledge_count") == "1个"
         and features.get("state_count") == "单状态"
         and features.get("constraint_count") == "无约束"
         and features.get("variable_relation") == "无变量关系"

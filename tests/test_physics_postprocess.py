@@ -1315,7 +1315,7 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
             {"question_id": "gpt56-hybrid-test", "stem": stem, "options": ["A", "B", "C", "D"]},
         )
 
-    def test_progressive_four_signal_hard_is_not_forced_to_final(self) -> None:
+    def test_six_to_eight_step_multistate_multiconstraint_network_reaches_final(self) -> None:
         output = self.postprocess(
             "拔高题",
             "多问递进的常规综合题，但没有分类、多解或边界验证。",
@@ -1329,7 +1329,47 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
             state_count="多状态",
             constraint_count="多约束",
         )
-        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(output["difficulty_level"], "压轴题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_hard_to_final_full_state_constraint_network_guard",
+        )
+
+    def test_basic_with_multilayer_reasoning_is_calibrated_to_medium(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "需要连续判断受力状态、运动变化和能量关系。",
+            step_count="3-5步",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            knowledge_count="2-3个",
+            state_count="双状态",
+            constraint_count="单一约束",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_basic_to_medium_multilayer_consistency_guard",
+        )
+
+    def test_gpt56_profile_does_not_apply_broad_low_structure_downgrade(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "同一条件下检验多个物理结论，首轮理由没有给出任务关系判断。",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="简单因果推理",
+            problem_structure="概念判断",
+            additional_structure="无",
+            subquestion_dependency="无多问",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
         self.assertEqual(output["postprocess_actions"], [])
 
     def test_explicitly_independent_low_structure_concept_is_basic(self) -> None:
@@ -1735,7 +1775,7 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
             "gpt56_medium_to_hard_multi_switch_power_boundary_guard",
         )
 
-    def test_joint_final_rule_requires_decisive_evidence_in_gpt56_profile(self) -> None:
+    def test_full_state_constraint_network_does_not_require_magic_keyword(self) -> None:
         output = self.postprocess(
             "拔高题",
             "多状态、多约束和多公式的高密度完整链，但没有图像反推、复杂范围、连续临界或边界筛选。",
@@ -1749,6 +1789,27 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
             cross_module="跨模块综合",
             state_count="多状态",
             constraint_count="多约束",
+        )
+        self.assertEqual(output["difficulty_level"], "压轴题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_hard_to_final_full_state_constraint_network_guard",
+        )
+
+    def test_standard_experiment_is_not_promoted_by_joint_final_rule(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "标准实验包含多组数据、误差分析和多个操作环节，但没有分类或边界验证。",
+            step_count="6-8步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="逆向推理或临界分析",
+            problem_structure="实验探究",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="4个及以上",
+            state_count="多状态",
+            constraint_count="多约束",
+            graph_table_requirement="图像反推或外推",
         )
         self.assertEqual(output["difficulty_level"], "拔高题")
         self.assertEqual(output["postprocess_actions"], [])

@@ -163,12 +163,15 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("载体形式不决定等级", prefix)
         self.assertIn("实验要求：可以为无", prefix)
 
-    def test_horizontal_breadth_excludes_transparent_or_repeated_tasks(self) -> None:
+    def test_horizontal_breadth_excludes_retrieval_but_allows_nontrivial_process_checks(self) -> None:
         prefix = self.load_prefix()
         self.assertNotIn("至少两个任务属于分析型任务", prefix)
         self.assertIn("低结构概念题否决条件", prefix)
-        self.assertIn("普通教材规律在不同选项中的独立应用也不能累积成中等", prefix)
+        self.assertIn("普通教材结论在不同选项中的直接检索也不能累积成中等", prefix)
         self.assertIn("单个最高难任务本身达到3—4个有效物理决策", prefix)
+        self.assertIn("至少三个选项分别要求选择规律", prefix)
+        self.assertIn("至少一个选项需要两层条件判断", prefix)
+        self.assertIn("不得改写 step_count", prefix)
 
     def test_low_structure_gate_rejects_shared_packaging(self) -> None:
         prefix = self.load_prefix()
@@ -183,6 +186,24 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("传感器电阻变化→总电阻变化→总电流变化", prefix)
         self.assertIn("一次模型识别加一次规律应用", prefix)
         self.assertIn("中途需要更换物理模型", prefix)
+
+    def test_physical_intermediate_quantity_can_start_a_new_relation(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("算术中间量", prefix)
+        self.assertIn("成为另一条独立规律", prefix)
+        self.assertIn("新的规律选择或状态建立必须另计一次", prefix)
+
+    def test_full_state_constraint_network_enters_final_comparison(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("state_count=多状态", prefix)
+        self.assertIn("constraint_count=多约束", prefix)
+        self.assertIn("原则上进入压轴比较", prefix)
+
+    def test_complete_experiment_can_reach_hard_without_keyword_shortcuts(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("异常/故障反推", prefix)
+        self.assertIn("参数试算筛选", prefix)
+        self.assertIn("不能因“这是标准实验”统一压在中等", prefix)
 
     def test_dynamic_circuit_counts_new_physical_relations_not_arrows(self) -> None:
         prefix = self.load_prefix()
@@ -206,7 +227,7 @@ class ProductionPromptAssetTests(unittest.TestCase):
     def test_middle_requires_specific_structure_not_device_story(self) -> None:
         prefix = self.load_prefix()
         self.assertIn("题目特有的中间结论、状态关系或图像推导结果", prefix)
-        self.assertIn("普通教材规律在不同选项中的独立应用", prefix)
+        self.assertIn("普通教材结论在不同选项中的直接检索", prefix)
         self.assertNotIn("至少两个分析型任务必须共同使用", prefix)
 
     def test_feature_truth_has_priority_over_level_appearance(self) -> None:
