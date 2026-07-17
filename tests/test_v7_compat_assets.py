@@ -43,7 +43,9 @@ class ProductionPromptAssetTests(unittest.TestCase):
         prefix = self.load_prefix()
         self.assertGreaterEqual(len(prefix), 17500)
         # Prompt 长度不是评级约束；这里只防止无意中的失控膨胀。
-        self.assertLess(len(prefix), 27000)
+        # Guard against accidental prompt duplication; small evidence-driven
+        # additions are allowed even when the production prompt exceeds 27k.
+        self.assertLess(len(prefix), 28000)
         self.assertGreaterEqual(prefix.count("### 代表性例题"), 5)
         self.assertIn("## 相邻档位边界校准 few-shot", prefix)
 
@@ -163,15 +165,29 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("载体形式不决定等级", prefix)
         self.assertIn("实验要求：可以为无", prefix)
 
-    def test_horizontal_breadth_excludes_retrieval_but_allows_nontrivial_process_checks(self) -> None:
+    def test_horizontal_breadth_requires_shared_structure_or_single_option_depth(self) -> None:
         prefix = self.load_prefix()
         self.assertNotIn("至少两个任务属于分析型任务", prefix)
         self.assertIn("低结构概念题否决条件", prefix)
-        self.assertIn("普通教材结论在不同选项中的直接检索也不能累积成中等", prefix)
+        self.assertIn("普通教材结论在不同选项中的直接检索", prefix)
         self.assertIn("单个最高难任务本身达到3—4个有效物理决策", prefix)
-        self.assertIn("至少三个选项分别要求选择规律", prefix)
-        self.assertIn("至少一个选项需要两层条件判断", prefix)
-        self.assertIn("不得改写 step_count", prefix)
+        self.assertIn("彼此独立的选择题选项不能仅凭", prefix)
+        self.assertIn("多个选项需要选择规律", prefix)
+        self.assertIn("不得为了体现整题工作量而改写 step_count", prefix)
+        self.assertNotIn("另有一条窄的“多项非平凡辨析”通道", prefix)
+
+    def test_medium_to_hard_checks_for_a_decisive_derived_relation(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("题面未直接给出、需要学生自行导出的关键关系", prefix)
+        self.assertIn("一旦判断错误会使后续结论整体失效", prefix)
+        self.assertIn("即使完整链只有3—4个有效决策", prefix)
+        self.assertIn("直接读图或沿唯一显性链顺推，不属于决定性转换", prefix)
+
+    def test_final_chain_counts_all_dependent_states_and_constraints(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("从建立第一个必要状态/参数开始", prefix)
+        self.assertIn("不能只统计最后一问表面上的三四个动作", prefix)
+        self.assertIn("每一项独立安全约束", prefix)
 
     def test_low_structure_gate_rejects_shared_packaging(self) -> None:
         prefix = self.load_prefix()
