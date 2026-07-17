@@ -42,15 +42,27 @@ def load_adjudicated_labels(path: Path) -> tuple[dict[str, str], dict[str, str],
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         fields = reader.fieldnames or []
-        required = {"题目ID", "最终裁定档"}
-        if not required.issubset(fields):
-            raise ValueError(f"裁定 CSV 必须含 {sorted(required)}，实际字段为：{fields}")
+        if "题目ID" not in fields:
+            raise ValueError(f"裁定 CSV 必须含题目ID字段，实际字段为：{fields}")
+        label_field = next(
+            (field for field in ("修订后主标签", "最终裁定档") if field in fields),
+            "",
+        )
+        if not label_field:
+            raise ValueError(
+                "裁定 CSV 必须含修订后主标签或最终裁定档字段，"
+                f"实际字段为：{fields}"
+            )
+        confidence_field = next(
+            (field for field in ("修订后置信度", "裁定置信度") if field in fields),
+            "",
+        )
         for row in reader:
             question_id = str(row.get("题目ID") or "").strip()
-            label = str(row.get("最终裁定档") or "").strip()
+            label = str(row.get(label_field) or "").strip()
             if question_id and label in LEVEL_ORDER:
                 labels[question_id] = label
-                confidence[question_id] = str(row.get("裁定置信度") or "").strip()
+                confidence[question_id] = str(row.get(confidence_field) or "").strip()
     return labels, confidence, fields
 
 
@@ -238,7 +250,7 @@ def main() -> None:
     matched = sorted(set(labels) & set(questions))
     distribution = Counter(labels[question_id] for question_id in matched)
     report: dict[str, Any] = {
-        "label_source": "GPT-5.6 adjudication",
+        "label_source": str(Path(args.csv)),
         "csv_effective_labels": len(labels),
         "jsonl_questions": len(questions),
         "matched": len(matched),

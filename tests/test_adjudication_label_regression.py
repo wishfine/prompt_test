@@ -35,6 +35,29 @@ class AdjudicationLabelRegressionTests(unittest.TestCase):
         self.assertEqual(confidence, {"3670061256279695360": "高"})
         self.assertIn("最终裁定档", fields)
 
+    def test_loads_rereviewed_primary_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rereviewed_labels.csv"
+            with path.open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["题目ID", "原GPT裁定档", "修订后主标签", "修订后置信度"],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "题目ID": "3670061256279695360",
+                        "原GPT裁定档": "压轴题",
+                        "修订后主标签": "拔高题",
+                        "修订后置信度": "高",
+                    }
+                )
+            labels, confidence, fields = load_adjudicated_labels(path)
+
+        self.assertEqual(labels, {"3670061256279695360": "拔高题"})
+        self.assertEqual(confidence, {"3670061256279695360": "高"})
+        self.assertIn("修订后主标签", fields)
+
     def test_evaluate_reports_raw_final_rules_and_confidence_slices(self) -> None:
         rows = [
             {
