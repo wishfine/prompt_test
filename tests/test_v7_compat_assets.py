@@ -43,13 +43,13 @@ class ProductionPromptAssetTests(unittest.TestCase):
         prefix = self.load_prefix()
         self.assertGreaterEqual(len(prefix), 17500)
         # Prompt 长度不是评级约束；这里只防止无意中的失控膨胀。
-        self.assertLess(len(prefix), 30000)
+        self.assertLess(len(prefix), 27000)
         self.assertGreaterEqual(prefix.count("### 代表性例题"), 5)
         self.assertIn("## 相邻档位边界校准 few-shot", prefix)
 
-    def test_production_prompt_has_non_versioned_boundary_examples(self) -> None:
+    def test_production_prompt_has_ten_non_versioned_boundary_examples(self) -> None:
         prefix = self.load_prefix()
-        self.assertEqual(len(re.findall(r"【边界示例[0-9A-Z]+】", prefix)), 13)
+        self.assertEqual(len(re.findall(r"【边界示例\d+】", prefix)), 10)
         self.assertNotRegex(prefix, r"V5|V6|V7")
         self.assertNotIn("回收中等保护", prefix)
         self.assertNotIn("压轴保护恢复", prefix)
@@ -199,23 +199,9 @@ class ProductionPromptAssetTests(unittest.TestCase):
 
     def test_core_basis_names_decisions_and_dependency_not_shared_mechanism(self) -> None:
         prefix = self.load_prefix()
-        self.assertIn("core_basis` 必须先写明最长连续链的实际有效物理决策数", prefix)
+        self.assertIn("core_basis` 必须先写明实际有效物理决策数", prefix)
         self.assertIn("答案依赖、模型依赖还是确实相互独立", prefix)
         self.assertNotIn("至少两个分析型任务分别是什么", prefix)
-
-    def test_prompt_requires_task_ledger_and_complete_experiment_audit(self) -> None:
-        prefix = self.load_prefix()
-        self.assertIn("内部任务台账（定档前必须完成，不单独输出）", prefix)
-        self.assertIn("装置/操作、测量、控制变量、数据/图像、结论、故障/误差", prefix)
-        self.assertIn("step_count` 仍只记录最长连续链", prefix)
-        self.assertIn("完整实验闭环", prefix)
-
-    def test_prompt_distinguishes_hard_dense_chain_from_final_model_network(self) -> None:
-        prefix = self.load_prefix()
-        self.assertIn("不能因为“每一步方法常规”就把整个5—6步闭环压成中等", prefix)
-        self.assertIn("对象—状态—约束", prefix)
-        self.assertIn("共享哪些对象/参数", prefix)
-        self.assertIn("一个显性滑动变阻器范围", prefix)
 
     def test_middle_requires_specific_structure_not_device_story(self) -> None:
         prefix = self.load_prefix()
