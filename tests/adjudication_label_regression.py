@@ -191,6 +191,8 @@ def evaluate(
     agent_stats: Counter[str] = Counter()
     agent_transitions: dict[str, Counter[str]] = defaultdict(Counter)
     agent_confidence: Counter[str] = Counter()
+    agent_disagreement: Counter[str] = Counter()
+    agent_audit_pairs: list[tuple[str, str, str]] = []
     has_agent_data = False
     for _, target, prediction, _, _, _, _, before_verification, agent_data in rows:
         if not agent_data:
@@ -200,12 +202,31 @@ def evaluate(
         agent_stats["selected" if agent_data.get("selected") else "not_selected"] += 1
         if agent_data.get("error"):
             agent_stats["request_failed"] += 1
+        mode = str(agent_data.get("mode") or "auto_apply")
+        agent_stats[mode] += 1
+        if agent_data.get("would_apply"):
+            agent_stats["would_apply"] += 1
         result = agent_data.get("blind_review")
         if isinstance(result, dict) and result:
             agent_stats["valid_response"] += 1
             confidence_value = str(result.get("confidence") or "")
             if confidence_value:
                 agent_confidence[confidence_value] += 1
+            review_level = str(result.get("review_level") or "")
+            if agent_data.get("selected") and review_level in LEVEL_ORDER:
+                agent_audit_pairs.append((target, before_verification, review_level))
+                if review_level == before_verification:
+                    agent_disagreement["agreed"] += 1
+                else:
+                    agent_disagreement["disagreed"] += 1
+                    before_error = abs(LEVEL_ORDER[before_verification] - LEVEL_ORDER[target])
+                    review_error = abs(LEVEL_ORDER[review_level] - LEVEL_ORDER[target])
+                    if review_error < before_error:
+                        agent_disagreement["blind_better"] += 1
+                    elif review_error > before_error:
+                        agent_disagreement["before_better"] += 1
+                    else:
+                        agent_disagreement["equal_distance"] += 1
         if not agent_data.get("applied"):
             continue
         agent_stats["applied"] += 1
@@ -259,6 +280,28 @@ def evaluate(
                     transition: dict(counter)
                     for transition, counter in sorted(agent_transitions.items())
                 },
+                "audit_comparison": (
+                    {
+                        "selected_before_evaluation": summarize_predictions(
+                            [(target, before) for target, before, _ in agent_audit_pairs]
+                        ),
+                        "blind_review_evaluation": summarize_predictions(
+                            [(target, blind) for target, _, blind in agent_audit_pairs]
+                        ),
+                        "disagreement": {
+                            key: agent_disagreement.get(key, 0)
+                            for key in (
+                                "agreed",
+                                "disagreed",
+                                "blind_better",
+                                "before_better",
+                                "equal_distance",
+                            )
+                        },
+                    }
+                    if agent_audit_pairs
+                    else {}
+                ),
             }
             if has_agent_data
             else {}

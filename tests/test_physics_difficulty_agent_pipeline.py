@@ -202,6 +202,19 @@ class ConservativeGateTests(unittest.TestCase):
         self.assertFalse(apply)
         self.assertIn("结构证据不足", reason)
 
+    def test_audit_only_records_would_apply_but_never_writes_back(self):
+        route = {"selected": True, "allowed_directions": ["up"], "reasons": ["结构偏高"]}
+        applied, would_apply, reason = agent.resolve_review_decision(
+            "中等题",
+            route,
+            self.review("拔高题"),
+            {"高"},
+            audit_only=True,
+        )
+        self.assertFalse(applied)
+        self.assertTrue(would_apply)
+        self.assertIn("audit-only", reason)
+
 
 class AuditAndResumeTests(unittest.TestCase):
     def test_apply_verified_level_preserves_complete_first_stage_snapshot(self):
@@ -229,6 +242,15 @@ class AuditAndResumeTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "配置不一致"):
                 agent.validate_resume_output(str(path), expected)
+
+    def test_run_signature_separates_audit_only_from_auto_apply(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.jsonl"
+            path.write_text('{"question_id":"q1"}\n', encoding="utf-8")
+            common = (str(path), "prompt", "doubao-seed-2.0-lite", 1.0, ["高"])
+            auto_signature = agent.build_run_signature(*common, audit_only=False)
+            audit_signature = agent.build_run_signature(*common, audit_only=True)
+        self.assertNotEqual(auto_signature, audit_signature)
 
 
 if __name__ == "__main__":

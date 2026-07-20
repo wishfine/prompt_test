@@ -158,6 +158,22 @@ python src/physics_difficulty_agent_pipeline.py \
 
 正式运行时删除 `--dry-run`，也可显式指定 `--model doubao-seed-2.0-mini --temperature 0`。运行后继续用 `tests/adjudication_label_regression.py` 评估；报告中的 `before_verification_evaluation` 与 `verification_agent` 会分别给出首轮基线和 Agent 的改对、改错、置信度及档位转移。
 
+在授予盲审模型自动写回权限前，推荐先使用 Lite 做只审不改实验：
+
+```bash
+python src/physics_difficulty_agent_pipeline.py \
+  -i outputs/model_runs/lite_physics_erroraudit_guard_1066_run1.jsonl \
+  -o outputs/model_runs/lite_physics_agent_lite_audit_run1.jsonl \
+  -e outputs/model_runs/lite_physics_agent_lite_audit_run1_errors.jsonl \
+  -p prompts/初中物理难度盲审提示词.txt \
+  --model doubao-seed-2.0-lite \
+  --temperature 1 \
+  --audit-only \
+  -c 30
+```
+
+`--audit-only` 会正常调用模型并保存盲审等级、置信度及“按现有门控本可写回”的 `would_apply`，但 `verification_applied` 始终为 `false`，最终等级与冻结输入完全一致。运行签名包含该模式，不能与自动写回结果混用同一输出文件。评测报告中的 `verification_agent.audit_comparison` 会直接比较风险题上冻结判断与盲审判断的准确率及分歧胜负。
+
 ## 代码约束
 
 `src/physics_difficulty_rating_with_cache.py` 保持以下兼容性：

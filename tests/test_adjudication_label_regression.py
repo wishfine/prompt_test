@@ -185,6 +185,56 @@ class AdjudicationLabelRegressionTests(unittest.TestCase):
             1,
         )
 
+    def test_evaluate_compares_audit_only_blind_review_with_frozen_prediction(self) -> None:
+        rows = [
+            {
+                "question_id": "q1",
+                "difficulty_level_before_verification": "中等题",
+                "difficulty_rating": {"difficulty_level": "中等题"},
+                "verification_agent": {
+                    "mode": "audit_only",
+                    "selected": True,
+                    "applied": False,
+                    "would_apply": True,
+                    "from": "中等题",
+                    "to": "中等题",
+                    "error": "",
+                    "blind_review": {"review_level": "基础题", "confidence": "高"},
+                },
+            },
+            {
+                "question_id": "q2",
+                "difficulty_level_before_verification": "基础题",
+                "difficulty_rating": {"difficulty_level": "基础题"},
+                "verification_agent": {
+                    "mode": "audit_only",
+                    "selected": True,
+                    "applied": False,
+                    "would_apply": False,
+                    "from": "基础题",
+                    "to": "基础题",
+                    "error": "",
+                    "blind_review": {"review_level": "基础题", "confidence": "高"},
+                },
+            },
+        ]
+        labels = {"q1": "基础题", "q2": "中等题"}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent_audit.jsonl"
+            path.write_text(
+                "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+            result = evaluate(path, labels)
+
+        audit = result["verification_agent"]["audit_comparison"]
+        self.assertEqual(result["exact_match_rate"], 0.0)
+        self.assertEqual(audit["selected_before_evaluation"]["exact_match_rate"], 0.0)
+        self.assertEqual(audit["blind_review_evaluation"]["exact_match_rate"], 0.5)
+        self.assertEqual(audit["disagreement"]["blind_better"], 1)
+        self.assertEqual(audit["disagreement"]["before_better"], 0)
+        self.assertEqual(result["verification_agent"]["stats"]["would_apply"], 1)
+
     def test_export_mismatches_keeps_single_run_rows_and_reference_metadata(self) -> None:
         rows = [
             {"question_id": "q1", "difficulty_rating": {"difficulty_level": "基础题"}},

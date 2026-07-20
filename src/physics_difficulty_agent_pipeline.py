@@ -260,6 +260,28 @@ def should_apply_blind_review(
     return True, "高置信度盲审与风险方向一致，执行相邻档调整"
 
 
+def resolve_review_decision(
+    current_level: str,
+    route: Dict[str, Any],
+    review: Dict[str, Any],
+    accepted_confidences: Iterable[str],
+    *,
+    audit_only: bool,
+) -> Tuple[bool, bool, str]:
+    """区分“按现有门控本可写回”和“本次是否真的写回”。"""
+    would_apply, reason = should_apply_blind_review(
+        current_level,
+        route,
+        review,
+        accepted_confidences,
+    )
+    if audit_only:
+        if would_apply:
+            return False, True, "audit-only：记录潜在调整，但保持冻结等级"
+        return False, False, f"audit-only：{reason}"
+    return would_apply, would_apply, reason
+
+
 def review_supports_target_level(target: str, review: Dict[str, Any]) -> Tuple[bool, str]:
     """避免仅凭 Mini 的高置信度写回与其任务结构自相矛盾的等级。"""
     count = review.get("effective_decision_count")
@@ -363,6 +385,7 @@ def build_run_signature(
     model_name: str,
     temperature: Optional[float],
     accepted_confidences: Sequence[str],
+    audit_only: bool = False,
 ) -> str:
     payload = {
         "pipeline_version": PIPELINE_VERSION,
@@ -371,6 +394,7 @@ def build_run_signature(
         "model": model_name,
         "temperature": temperature,
         "accepted_confidences": list(accepted_confidences),
+        "audit_only": bool(audit_only),
     }
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -476,6 +500,7 @@ async def process_item(
     run_signature: str,
     retries: int,
     timeout_sec: int,
+    audit_only: bool,
 ) -> None:
     async with semaphore:
         item = copy.deepcopy(source)
@@ -484,6 +509,7 @@ async def process_item(
         elapsed = prompt_tokens = completion_tokens = total_tokens = 0
         error = ""
         applied = False
+        would_apply = False
         decision_reason = "未进入风险路由"
         if route["selected"]:
             review, elapsed, prompt_tokens, completion_tokens, total_tokens, error = await call_blind_model(
@@ -496,7 +522,13 @@ async def process_item(
                 timeout_sec,
             )
             if review:
-                applied, decision_reason = should_apply_blind_review(before, route, review, accepted_confidences)
+                applied, would_apply, decision_reason = resolve_review_decision(
+                    before,
+                    route,
+                    review,
+                    accepted_confidences,
+                    audit_only=audit_only,
+                )
             else:
                 decision_reason = "盲审失败，保持首轮等级"
 
@@ -508,6 +540,7 @@ async def process_item(
         source_tokens = int(item.get("api_total_tokens", 0) or 0)
         item["verification_agent"] = {
             "enabled": True,
+            "mode": "audit_only" if audit_only else "auto_apply",
             "pipeline_version": PIPELINE_VERSION,
             "run_signature": run_signature,
             "model": model_name,
@@ -518,6 +551,7 @@ async def process_item(
             "structural_score": route["structural_score"],
             "blind_review": review,
             "applied": applied,
+            "would_apply": would_apply,
             "from": before,
             "to": after,
             "decision_reason": decision_reason,
@@ -540,7 +574,7 @@ async def process_item(
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser(description="冻结首轮后的 Mini temp=0 盲审 Agent Pipeline")
+    parser = argparse.ArgumentParser(description="冻结首轮后的独立盲审 Agent Pipeline")
     parser.add_argument("-i", "--input", required=True, help="冻结版首轮完整结果 JSONL")
     parser.add_argument("-o", "--output", required=True)
     parser.add_argument("-e", "--error", required=True)
@@ -553,6 +587,11 @@ async def main() -> None:
     parser.add_argument("--accept-confidence", default="高")
     parser.add_argument("--max-review-calls", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--audit-only",
+        action="store_true",
+        help="正常调用盲审模型并保存意见，但禁止修改冻结等级",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.prompt):
@@ -581,6 +620,7 @@ async def main() -> None:
         args.model,
         temperature,
         accepted,
+        audit_only=args.audit_only,
     )
     for path in (args.output, args.error):
         parent = os.path.dirname(os.path.abspath(path))
@@ -600,7 +640,8 @@ async def main() -> None:
                 route["reasons"] = route["reasons"] + ["超过 max-review-calls，未调用盲审模型"]
         pending.append((item, route))
     print(f"已完成: {len(done)}，待写入: {len(pending)}")
-    print(f"盲审模型: {args.model}，temperature={temperature}，自动写回置信度={accepted}")
+    mode = "只审不改" if args.audit_only else "自动写回"
+    print(f"盲审模型: {args.model}，temperature={temperature}，模式={mode}，写回置信度={accepted}")
     if not pending:
         return
 
@@ -624,6 +665,7 @@ async def main() -> None:
                     run_signature,
                     args.retries,
                     args.timeout,
+                    args.audit_only,
                 )
             )
             for item, route in pending
