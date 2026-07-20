@@ -1315,7 +1315,7 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
             {"question_id": "gpt56-hybrid-test", "stem": stem, "options": ["A", "B", "C", "D"]},
         )
 
-    def test_six_to_eight_step_multistate_multiconstraint_network_reaches_final(self) -> None:
+    def test_six_to_eight_step_multistate_multiconstraint_network_without_final_action_stays_hard(self) -> None:
         output = self.postprocess(
             "拔高题",
             "多问递进的常规综合题，但没有分类、多解或边界验证。",
@@ -1329,11 +1329,25 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
             state_count="多状态",
             constraint_count="多约束",
         )
-        self.assertEqual(output["difficulty_level"], "压轴题")
-        self.assertEqual(
-            output["postprocess_actions"][0]["rule"],
-            "gpt56_hard_to_final_full_state_constraint_network_guard",
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_six_to_eight_step_network_with_effective_solution_screening_reaches_final(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "多问递进的多状态、多约束综合题，需要分类讨论候选边界并按物理条件筛选有效解。",
+            step_count="6-8步",
+            formula_count="4-6个",
+            calculation_complexity="复杂方程或范围计算",
+            reasoning_chain="逆向推理或临界分析",
+            problem_structure="力学综合",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="4个及以上",
+            state_count="多状态",
+            constraint_count="多约束",
         )
+        self.assertEqual(output["difficulty_level"], "压轴题")
+        self.assertTrue(output["postprocess_actions"])
 
     def test_basic_with_multilayer_reasoning_is_calibrated_to_medium(self) -> None:
         output = self.postprocess(
@@ -1475,6 +1489,96 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
             output["postprocess_actions"][0]["rule"],
             "gpt56_basic_to_easy_single_template_guard",
         )
+
+    def test_inquiry_question_selection_is_not_reduced_to_easy_by_single_template_guard(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "下列关于实验探究问题的表述中，哪一个研究问题既有探究价值又易于探究？",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="直接套用",
+            problem_structure="概念判断",
+            additional_structure="无",
+            subquestion_dependency="无多问",
+            knowledge_count="1个",
+            knowledge_diff="低",
+            cross_module="同一模块内部",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+            error_risk="明显易错点",
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_direct_graph_read_does_not_trigger_decisive_transform(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "从F-h图像直接读取完全浸没时的示数，再常规计算浮力和密度；不需要识别图线身份或反推隐藏参数。",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            state_count="双状态",
+            constraint_count="单一约束",
+            graph_table_requirement="图像反推或外推",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_graph_identity_reverse_still_triggers_decisive_transform(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "必须根据交点与斜率反推两条图线分别对应哪个对象，再反求隐藏参数。",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="逆向推理或临界分析",
+            problem_structure="力学综合",
+            state_count="双状态",
+            constraint_count="单一约束",
+            graph_table_requirement="图像反推或外推",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertTrue(output["postprocess_actions"])
+
+    def test_multistate_graph_chain_preserves_decisive_transform_without_identity_wording(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "需要从同一图像提取静止向下摩擦、静止向上摩擦和匀速滑动三个阶段，再分别建立受力关系。",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            state_count="多状态",
+            constraint_count="单一约束",
+            variable_relation="图像函数关系",
+            graph_table_requirement="图像反推或外推",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertTrue(output["postprocess_actions"])
+
+    def test_dense_formula_graph_chain_preserves_decisive_transform(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "多个选项共享F-h图像，需提取阶段信息并连续求重力、浮力、体积和密度。",
+            step_count="3-5步",
+            formula_count="4-6个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            state_count="双状态",
+            constraint_count="无约束",
+            variable_relation="图像函数关系",
+            graph_table_requirement="图像反推或外推",
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertTrue(output["postprocess_actions"])
 
     def test_multiple_direct_concepts_are_not_forced_to_easy(self) -> None:
         output = self.postprocess(
@@ -1775,7 +1879,7 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
             "gpt56_medium_to_hard_multi_switch_power_boundary_guard",
         )
 
-    def test_full_state_constraint_network_does_not_require_magic_keyword(self) -> None:
+    def test_same_module_state_constraint_network_without_strong_final_action_stays_hard(self) -> None:
         output = self.postprocess(
             "拔高题",
             "多状态、多约束和多公式的高密度完整链，但没有图像反推、复杂范围、连续临界或边界筛选。",
@@ -1786,15 +1890,50 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
             problem_structure="力学综合",
             subquestion_dependency="多问且层层递进",
             knowledge_count="4个及以上",
-            cross_module="跨模块综合",
+            cross_module="同一模块内部",
             state_count="多状态",
             constraint_count="多约束",
         )
-        self.assertEqual(output["difficulty_level"], "压轴题")
-        self.assertEqual(
-            output["postprocess_actions"][0]["rule"],
-            "gpt56_hard_to_final_full_state_constraint_network_guard",
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_coupled_state_constraint_network_can_reach_final_without_magic_word(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "多问层层递进，需要在多个状态中联立多对象关系，前序状态参数持续作为后问条件。",
+            step_count="6-8步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="4个及以上",
+            state_count="多状态",
+            constraint_count="多约束",
+            variable_relation="多变量耦合关系",
         )
+        self.assertEqual(output["difficulty_level"], "压轴题")
+        self.assertTrue(output["postprocess_actions"])
+
+    def test_cross_module_double_state_graph_network_can_reach_final(self) -> None:
+        output = self.postprocess(
+            "拔高题",
+            "三个小问层层递进，跨电学与杠杆模型，需要从图像反推关系并把前问参数用于后续约束计算。",
+            step_count="6-8步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="跨模块综合",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="4个及以上",
+            cross_module="跨模块综合",
+            state_count="双状态",
+            constraint_count="多约束",
+            variable_relation="图像函数关系",
+            graph_table_requirement="图像反推或外推",
+        )
+        self.assertEqual(output["difficulty_level"], "压轴题")
+        self.assertTrue(output["postprocess_actions"])
 
     def test_standard_experiment_is_not_promoted_by_joint_final_rule(self) -> None:
         output = self.postprocess(

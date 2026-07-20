@@ -1302,6 +1302,8 @@ def postprocess_v7_stable(
     require_decisive_final_evidence: bool = False,
     enable_low_structure_medium_guard: Optional[bool] = None,
     exclude_experiment_final_upgrade: bool = False,
+    require_semantic_decisive_transform: bool = False,
+    require_strong_final_action: bool = False,
 ) -> Dict[str, Any]:
     """按教师样本中跨三次稳定的联合结构做相邻档校准。
 
@@ -1359,6 +1361,94 @@ def postprocess_v7_stable(
         high_signals.append("图像反推或外推")
 
     concept_exception_text = core_basis + "\n" + full_text_of(data)
+    direct_graph_only = contains_any(
+        concept_exception_text,
+        [
+            "直接读图",
+            "直接读取",
+            "常规读数",
+            "无需反推",
+            "不需要识别图线身份",
+            "不需要反推",
+            "没有图线身份反推",
+        ],
+    )
+    semantic_decisive_transform = bool(
+        (
+            contains_any(
+            concept_exception_text,
+            [
+                "反推图线身份",
+                "图线身份反推",
+                "判断图线身份",
+                "图线分别对应",
+                "反求隐藏参数",
+                "反推隐藏参数",
+                "由图线反求",
+                "根据斜率反推",
+                "根据交点反推",
+                "参数反推",
+            ],
+            )
+            or (
+                features.get("variable_relation") == "图像函数关系"
+                and (
+                    features.get("state_count") in ["多状态", "连续变化或临界状态"]
+                    or features.get("formula_count") in ["4-6个", "7个以上"]
+                )
+            )
+        )
+        and not direct_graph_only
+    )
+    strong_final_action = contains_any(
+        concept_exception_text,
+        [
+            "分类讨论候选",
+            "分段讨论",
+            "筛选有效解",
+            "有效解筛选",
+            "按物理条件筛选",
+            "筛选真正有效",
+            "比较候选边界",
+            "验证全部边界",
+            "边界覆盖验证",
+            "可行性验证",
+            "建立不等式",
+            "极值筛选",
+            "上下界共同筛选",
+        ],
+    )
+    structural_final_network = bool(
+        features.get("step_count") in ["6-8步", "9-12步", "12步以上"]
+        and (
+            features.get("state_count") in ["多状态", "连续变化或临界状态"]
+            or (
+                features.get("state_count") == "双状态"
+                and features.get("cross_module") == "跨模块综合"
+                and features.get("graph_table_requirement") == "图像反推或外推"
+                and features.get("subquestion_dependency") == "多问且层层递进"
+            )
+        )
+        and features.get("constraint_count") == "多约束"
+        and (
+            features.get("variable_relation") == "多变量耦合关系"
+            or features.get("cross_module") == "跨模块综合"
+            or features.get("experiment_requirement") == "方案设计或误差评价"
+            or (
+                features.get("variable_relation") == "图像函数关系"
+                and features.get("graph_table_requirement") != "直接读数"
+            )
+            or contains_any(
+                core_basis,
+                [
+                    "比较两种状态",
+                    "比较不同状态",
+                    "三对象",
+                    "多个对象",
+                ],
+            )
+        )
+    )
     has_concept_medium_exception = contains_any(
         concept_exception_text,
         [
@@ -1416,6 +1506,7 @@ def postprocess_v7_stable(
         and features.get("formula_count") in ["2-3个", "4-6个", "7个以上"]
         and features.get("reasoning_chain") in ["多层因果推理", "逆向推理或临界分析"]
         and features.get("graph_table_requirement") == "图像反推或外推"
+        and (not require_semantic_decisive_transform or semantic_decisive_transform)
     )
     has_modeling_signal = bool(
         features.get("state_count") in ["多状态", "连续变化或临界状态"]
@@ -1509,6 +1600,11 @@ def postprocess_v7_stable(
         and has_final_reasoning_signal
         and (not require_decisive_final_evidence or final_decisive_evidence)
         and (
+            not require_strong_final_action
+            or strong_final_action
+            or structural_final_network
+        )
+        and (
             not exclude_experiment_final_upgrade
             or features.get("problem_structure") != "实验探究"
         )
@@ -1566,6 +1662,12 @@ def postprocess_gpt56_hybrid(
         # 常规实验即使 features 较高，若没有独立的分类/边界验证结构，
         # 不由通用联合信号直接从拔高升到压轴。
         exclude_experiment_final_upgrade=True,
+        # GPT-5.6 校准口径下，features 中的“图像反推”必须得到语义证据
+        # 支持；直接读点再代公式不能触发中等→拔高。
+        require_semantic_decisive_transform=True,
+        # 多状态、多约束只是压轴候选。主动升压轴还必须出现分类、
+        # 有效解筛选、边界覆盖或可行性验证等强动作。
+        require_strong_final_action=True,
     )
     for action in calibrated.get("postprocess_actions", []):
         rule_name = str(action.get("rule", ""))
@@ -1583,6 +1685,18 @@ def postprocess_gpt56_hybrid(
     )
     options = data.get("options")
     has_options = bool(options and (not isinstance(options, (list, tuple, dict)) or len(options) > 0))
+    question_text = full_text_of(data)
+    inquiry_question_selection = contains_any(
+        question_text,
+        [
+            "探究价值",
+            "易于探究",
+            "提出问题",
+            "探究问题",
+            "研究问题",
+            "实验问题",
+        ],
+    )
 
     # 送分/基础：只使用一个低阶教材模板、没有第二次物理决策。
     # 知识点数必须为 1，防止多个独立史实/能源概念被批量降档。
@@ -1604,6 +1718,8 @@ def postprocess_gpt56_hybrid(
         and features.get("variable_relation") == "无变量关系"
         and features.get("experiment_requirement") == "无"
         and features.get("graph_table_requirement") == "无"
+        and features.get("error_risk") in ["无明显易错点", "轻微易错点"]
+        and not inquiry_question_selection
     )
     if single_template_basic:
         set_level_with_audit(
@@ -1617,7 +1733,6 @@ def postprocess_gpt56_hybrid(
 
     # 教材中常见物理量的量级估测，若不需要公式链、单位换算或多类
     # 派生量计算，实质上仍是一次熟悉量级检索。
-    question_text = full_text_of(data)
     estimate_signal = contains_any(
         question_text,
         ["与实际相符", "符合实际", "估测", "估计值", "最接近", "接近实际"],
@@ -1705,9 +1820,9 @@ def postprocess_gpt56_hybrid(
         sync_coarse_difficulty(calibrated)
         return calibrated
 
-    # 原始拔高题已经明确达到 6-8 步、多状态和多约束时，完整状态—约束
-    # 网络足以进入压轴。该结构在全量回放中覆盖 5 题，5 题均为压轴，
-    # 且不会与上面的通用规则连续执行。
+    # 原始拔高题达到 6-8 步、多状态和多约束后，还必须出现分类/有效解
+    # 筛选等强动作，或由跨模块、图像、方案设计、多变量耦合等证据证明
+    # 状态与约束确实处于同一求解网络；features 的机械并集不主动升压轴。
     hard_with_full_state_constraint_network = bool(
         ENABLE_GPT56_STRUCTURAL_CALIBRATION
         and raw_level == "拔高题"
@@ -1716,6 +1831,39 @@ def postprocess_gpt56_hybrid(
         and features.get("constraint_count") == "多约束"
         and features.get("reasoning_chain") in ["多层因果推理", "逆向推理或临界分析"]
         and features.get("problem_structure") != "实验探究"
+        and (
+            contains_any(
+                evidence_text,
+                [
+                    "分类讨论候选",
+                    "分段讨论",
+                    "筛选有效解",
+                    "有效解筛选",
+                    "按物理条件筛选",
+                    "筛选真正有效",
+                    "比较候选边界",
+                    "验证全部边界",
+                    "边界覆盖验证",
+                    "可行性验证",
+                    "建立不等式",
+                    "极值筛选",
+                    "上下界共同筛选",
+                ],
+            )
+            or (
+                features.get("variable_relation") == "多变量耦合关系"
+                or features.get("cross_module") == "跨模块综合"
+                or features.get("experiment_requirement") == "方案设计或误差评价"
+                or (
+                    features.get("variable_relation") == "图像函数关系"
+                    and features.get("graph_table_requirement") != "直接读数"
+                )
+                or contains_any(
+                    core_basis,
+                    ["比较两种状态", "比较不同状态", "三对象", "多个对象"],
+                )
+            )
+        )
     )
     if hard_with_full_state_constraint_network:
         set_level_with_audit(
