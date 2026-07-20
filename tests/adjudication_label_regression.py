@@ -80,6 +80,8 @@ def evaluate(
             list[dict[str, Any]],
             str,
             dict[str, Any],
+            str,
+            dict[str, Any],
         ]
     ] = []
     with results_path.open("r", encoding="utf-8") as handle:
@@ -97,6 +99,11 @@ def evaluate(
                         before_review = str(before_rating.get("difficulty_level") or "").strip()
                 if before_review not in LEVEL_ORDER:
                     before_review = prediction
+                before_verification = str(
+                    item.get("difficulty_level_before_verification") or ""
+                ).strip()
+                if before_verification not in LEVEL_ORDER:
+                    before_verification = prediction
                 rows.append(
                     (
                         question_id,
@@ -106,20 +113,32 @@ def evaluate(
                         item.get("postprocess_actions") or [],
                         before_review,
                         item.get("boundary_review") if isinstance(item.get("boundary_review"), dict) else {},
+                        before_verification,
+                        item.get("verification_agent")
+                        if isinstance(item.get("verification_agent"), dict)
+                        else {},
                     )
                 )
     if not rows:
         raise ValueError("结果中没有可与 GPT-5.6 裁定 CSV 匹配的有效预测")
 
-    final_summary = summarize_predictions([(target, prediction) for _, target, prediction, _, _, _, _ in rows])
+    final_summary = summarize_predictions(
+        [(target, prediction) for _, target, prediction, _, _, _, _, _, _ in rows]
+    )
     before_review_summary = summarize_predictions(
-        [(target, before_review) for _, target, _, _, _, before_review, _ in rows]
+        [(target, before_review) for _, target, _, _, _, before_review, _, _, _ in rows]
+    )
+    before_verification_summary = summarize_predictions(
+        [
+            (target, before_verification)
+            for _, target, _, _, _, _, _, before_verification, _ in rows
+        ]
     )
     raw_summary = summarize_predictions(
-        [(target, raw) for _, target, _, raw, _, _, _ in rows if raw in LEVEL_ORDER]
+        [(target, raw) for _, target, _, raw, _, _, _, _, _ in rows if raw in LEVEL_ORDER]
     )
     rule_stats: dict[str, Counter[str]] = defaultdict(Counter)
-    for _, target, _, raw, actions, before_review, _ in rows:
+    for _, target, _, raw, actions, before_review, _, _, _ in rows:
         raw_error = abs(LEVEL_ORDER[raw] - LEVEL_ORDER[target]) if raw in LEVEL_ORDER else None
         postprocess_error = abs(LEVEL_ORDER[before_review] - LEVEL_ORDER[target])
         for action in actions:
@@ -136,7 +155,7 @@ def evaluate(
     review_transitions: dict[str, Counter[str]] = defaultdict(Counter)
     review_confidence: Counter[str] = Counter()
     has_review_data = False
-    for _, target, prediction, _, _, before_review, review_data in rows:
+    for _, target, prediction, _, _, before_review, review_data, _, _ in rows:
         if not review_data:
             continue
         has_review_data = True
@@ -169,13 +188,47 @@ def evaluate(
         review_stats[outcome] += 1
         review_transitions[transition][outcome] += 1
 
+    agent_stats: Counter[str] = Counter()
+    agent_transitions: dict[str, Counter[str]] = defaultdict(Counter)
+    agent_confidence: Counter[str] = Counter()
+    has_agent_data = False
+    for _, target, prediction, _, _, _, _, before_verification, agent_data in rows:
+        if not agent_data:
+            continue
+        has_agent_data = True
+        agent_stats["enabled"] += 1
+        agent_stats["selected" if agent_data.get("selected") else "not_selected"] += 1
+        if agent_data.get("error"):
+            agent_stats["request_failed"] += 1
+        result = agent_data.get("blind_review")
+        if isinstance(result, dict) and result:
+            agent_stats["valid_response"] += 1
+            confidence_value = str(result.get("confidence") or "")
+            if confidence_value:
+                agent_confidence[confidence_value] += 1
+        if not agent_data.get("applied"):
+            continue
+        agent_stats["applied"] += 1
+        before_error = abs(LEVEL_ORDER[before_verification] - LEVEL_ORDER[target])
+        final_error = abs(LEVEL_ORDER[prediction] - LEVEL_ORDER[target])
+        transition = f"{before_verification}->{prediction}"
+        agent_transitions[transition]["triggered"] += 1
+        if final_error < before_error:
+            outcome = "improved"
+        elif final_error > before_error:
+            outcome = "worsened"
+        else:
+            outcome = "unchanged"
+        agent_stats[outcome] += 1
+        agent_transitions[transition][outcome] += 1
+
     confidence_slices: dict[str, dict[str, Any]] = {}
     if confidence:
         for value in sorted({confidence.get(question_id, "") for question_id, *_ in rows} - {""}):
             confidence_slices[value] = summarize_predictions(
                 [
                     (target, prediction)
-                    for question_id, target, prediction, _, _, _, _ in rows
+                    for question_id, target, prediction, _, _, _, _, _, _ in rows
                     if confidence.get(question_id) == value
                 ]
             )
@@ -184,6 +237,7 @@ def evaluate(
         **final_summary,
         "raw_evaluation": raw_summary,
         "before_boundary_review_evaluation": before_review_summary,
+        "before_verification_evaluation": before_verification_summary,
         "postprocess_rules": {rule: dict(counter) for rule, counter in sorted(rule_stats.items())},
         "boundary_review": (
             {
@@ -195,6 +249,18 @@ def evaluate(
                 },
             }
             if has_review_data
+            else {}
+        ),
+        "verification_agent": (
+            {
+                "stats": dict(agent_stats),
+                "confidence": dict(agent_confidence),
+                "transitions": {
+                    transition: dict(counter)
+                    for transition, counter in sorted(agent_transitions.items())
+                },
+            }
+            if has_agent_data
             else {}
         ),
         "confidence_slices": confidence_slices,

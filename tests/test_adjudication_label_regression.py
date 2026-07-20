@@ -136,6 +136,55 @@ class AdjudicationLabelRegressionTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn('"exact_match_rate": 1.0', completed.stdout)
 
+    def test_evaluate_reports_verification_agent_net_effect(self) -> None:
+        rows = [
+            {
+                "question_id": "q1",
+                "difficulty_level_raw": "中等题",
+                "difficulty_level_before_verification": "中等题",
+                "difficulty_rating": {"difficulty_level": "拔高题"},
+                "verification_agent": {
+                    "selected": True,
+                    "applied": True,
+                    "from": "中等题",
+                    "to": "拔高题",
+                    "error": "",
+                    "blind_review": {"confidence": "高"},
+                },
+            },
+            {
+                "question_id": "q2",
+                "difficulty_level_raw": "基础题",
+                "difficulty_level_before_verification": "基础题",
+                "difficulty_rating": {"difficulty_level": "基础题"},
+                "verification_agent": {
+                    "selected": False,
+                    "applied": False,
+                    "from": "基础题",
+                    "to": "基础题",
+                    "error": "",
+                    "blind_review": {},
+                },
+            },
+        ]
+        labels = {"q1": "拔高题", "q2": "中等题"}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent_results.jsonl"
+            path.write_text(
+                "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+            result = evaluate(path, labels)
+
+        self.assertEqual(result["before_verification_evaluation"]["exact_match_rate"], 0.0)
+        self.assertEqual(result["verification_agent"]["stats"]["selected"], 1)
+        self.assertEqual(result["verification_agent"]["stats"]["applied"], 1)
+        self.assertEqual(result["verification_agent"]["stats"]["improved"], 1)
+        self.assertEqual(
+            result["verification_agent"]["transitions"]["中等题->拔高题"]["improved"],
+            1,
+        )
+
     def test_export_mismatches_keeps_single_run_rows_and_reference_metadata(self) -> None:
         rows = [
             {"question_id": "q1", "difficulty_rating": {"difficulty_level": "基础题"}},

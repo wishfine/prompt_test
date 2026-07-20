@@ -2,9 +2,9 @@
 """
 @File    : sample_and_generate_html.py
 @Description:
-    从打标好的 3000 道物理题结果中，精准抽样 500 道题生成 HTML 评议网页。
-    - 评级判定：依据 V1 纯文本打标结果（降成本，效率高）。
-    - 可视化优化：题干和解析完全采用 V2 对应的图片 URL 进行渲染展示，不再渲染任何纯文本，规避 LaTeX 乱码。
+    从物理难度打标结果中按档抽样，或直接渲染全部结果，生成 HTML 评议网页。
+    - 评级判定：读取当前 difficulty_rating 最终结果。
+    - 可视化优化：优先使用 V2 图片 URL 渲染题干和解析，规避 LaTeX 乱码。
 """
 
 import json
@@ -691,7 +691,7 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
             parent_id = item.get('parent_id', question_id)
             api_time = item.get('api_time_use', 0)
             api_tokens = item.get('api_total_tokens', 0)
-            raw_diff = item.get('difficulty', '无')
+            raw_diff = item.get('source_difficulty_untrusted', item.get('difficulty', '无'))
 
             stem_url = item.get('stem_pic_url', '')
             analysis_url = item.get('analysis_pic_url', '')
@@ -716,7 +716,7 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
             <div class="question-header">
                 <span class="question-id">#{idx} | ID: {question_id}</span>
                 <div class="question-tags">
-                    <span class="tag tag-raw">原始教师难度: {raw_diff}档</span>
+                    <span class="tag tag-raw">来源难度（不可信）: {raw_diff}</span>
                     <span class="tag tag-time">消耗: {api_time}s</span>
                     <span class="tag tag-tokens">{api_tokens} tokens</span>
                 </div>
@@ -859,7 +859,7 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
 
 
 def main():
-    parser = argparse.ArgumentParser(description="基于 V1 评级、V2 纯图片可视化的 500 道物理题抽样生成网页工具")
+    parser = argparse.ArgumentParser(description="物理难度评级结果交互式 HTML 验收工具")
     parser.add_argument("-i", "--input", type=str, default="physics_difficulty_rated_results.jsonl",
                         help="输入的已打标 V1 结果 JSONL 路径")
     parser.add_argument("-v2", "--v2-source", type=str, default="../data/physics_sampled_5000_per_difficulty_v2.jsonl",
@@ -868,6 +868,10 @@ def main():
                         help="输出抽样后的 500 题 JSONL 数据集路径")
     parser.add_argument("-oh", "--output-html", type=str, default="physics_difficulty_rated_validation_500.html",
                         help="生成的可视化 HTML 验收网页保存路径")
+    parser.add_argument("--all-results", action="store_true",
+                        help="不再二次抽样，按模型最终等级渲染输入中的全部有效结果")
+    parser.add_argument("--seed", type=int, default=20260720,
+                        help="按档抽样时使用的固定随机种子")
 
     args = parser.parse_args()
 
@@ -935,25 +939,34 @@ def main():
         if level in LEVEL_MAP:
             grouped_data[level].append(item)
 
-    # 5. 精准抽样
+    # 5. 精准抽样，或直接保留全部结果
     sampled_data = []
     sampled_for_html = defaultdict(list)
 
-    print("\n================ 抽样计划执行 ================")
-    for level, target_count in SAMPLE_PLAN.items():
-        pool = grouped_data[level]
-        pool_size = len(pool)
-        
-        if pool_size >= target_count:
-            sampled_items = random.sample(pool, target_count)
-            print(f"  🎯 {level}: 池内共有 {pool_size} 道，精准抽样 {target_count} 道")
-        else:
-            sampled_items = pool
-            print(f"  ⚠️ {level}: 不足！池内仅有 {pool_size} 道，全部保留 (计划抽 {target_count} 道)")
-            
-        sampled_data.extend(sampled_items)
-        level_num = LEVEL_MAP[level]
-        sampled_for_html[level_num] = sampled_items
+    if args.all_results:
+        print("\n================ 全量结果渲染 ================")
+        for level in SAMPLE_PLAN:
+            items = grouped_data[level]
+            sampled_data.extend(items)
+            sampled_for_html[LEVEL_MAP[level]] = items
+            print(f"  {level}: {len(items)} 道")
+    else:
+        rng = random.Random(args.seed)
+        print(f"\n================ 抽样计划执行（seed={args.seed}） ================")
+        for level, target_count in SAMPLE_PLAN.items():
+            pool = grouped_data[level]
+            pool_size = len(pool)
+
+            if pool_size >= target_count:
+                sampled_items = rng.sample(pool, target_count)
+                print(f"  🎯 {level}: 池内共有 {pool_size} 道，精准抽样 {target_count} 道")
+            else:
+                sampled_items = pool
+                print(f"  ⚠️ {level}: 不足！池内仅有 {pool_size} 道，全部保留 (计划抽 {target_count} 道)")
+
+            sampled_data.extend(sampled_items)
+            level_num = LEVEL_MAP[level]
+            sampled_for_html[level_num] = sampled_items
 
     # 6. 导出抽样 JSONL
     print(f"\n正在导出抽样后的 JSONL 副本至: {args.output_jsonl} ...")

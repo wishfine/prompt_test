@@ -135,6 +135,26 @@ python src/physics_boundary_second_review.py \
 
 正式复核时删除 `--dry-run`。错题包应使用 `all`，保证每道错题都复核；完整1066题输入可使用 `selective` 或 `broad`。复核输出会把分歧归为“模型确实误判”“参考标签需修订”“相邻边界均可”或“双方均需修订”。可用 `--model doubao-seed-2.0-pro` 单独指定复核模型。
 
+## 冻结首轮后的盲审 Agent Pipeline
+
+`src/physics_difficulty_agent_pipeline.py` 不修改首轮 Prompt 或后处理。它先用确定性结构规则选择高风险题，再把题干、选项和解析发送给 `doubao-seed-2.0-mini` 做 `temperature=0` 独立盲审。盲审请求不会包含首轮等级、features、reasoning、后处理动作、来源 difficulty 或评估标签。
+
+只有同时满足以下条件才自动写回：盲审结论为高置信度、相对首轮只差一档、盲审不再接受当前等级、证据字段完整、有效决策数与目标档一致，并且调整方向与风险路由一致。压轴写回还要求至少两类强压轴结构。两档以上分歧只记录，不自动跨档。
+
+Pipeline 会在调整前保存完整 `difficulty_rating_before_verification` 快照。每行还记录由输入文件、盲审 Prompt、模型、温度和置信度门槛共同生成的 `run_signature`；断点续跑检测到签名不一致时会拒绝混写，要求更换输出文件。
+
+先离线查看候选数量，不调用模型：
+
+```bash
+python src/physics_difficulty_agent_pipeline.py \
+  -i outputs/model_runs/lite_physics_erroraudit_guard_1066_run1.jsonl \
+  -o outputs/model_runs/lite_physics_erroraudit_guard_agent_run1.jsonl \
+  -e outputs/model_runs/lite_physics_erroraudit_guard_agent_run1_errors.jsonl \
+  --dry-run
+```
+
+正式运行时删除 `--dry-run`，也可显式指定 `--model doubao-seed-2.0-mini --temperature 0`。运行后继续用 `tests/adjudication_label_regression.py` 评估；报告中的 `before_verification_evaluation` 与 `verification_agent` 会分别给出首轮基线和 Agent 的改对、改错、置信度及档位转移。
+
 ## 代码约束
 
 `src/physics_difficulty_rating_with_cache.py` 保持以下兼容性：
