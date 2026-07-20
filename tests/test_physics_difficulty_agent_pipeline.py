@@ -99,6 +99,189 @@ class BlindInputTests(unittest.TestCase):
         self.assertNotIn("source_difficulty_untrusted", content)
 
 
+class EvidenceAuditTests(unittest.TestCase):
+    def audit_result(
+        self,
+        *,
+        action="降一档",
+        recommended_level="基础题",
+        current_supported=False,
+        contradictions=None,
+        postprocess_rule_valid=None,
+    ):
+        return {
+            "current_level_supported": current_supported,
+            "verified_current_evidence": [],
+            "contradictions": contradictions
+            if contradictions is not None
+            else [
+                {
+                    "contradiction_type": "feature_conflict",
+                    "current_claim": "存在两个连续状态",
+                    "verified_fact": "解析只要求根据题意完成判断",
+                    "source_field": "analysis",
+                    "source_excerpt": "根据题意完成判断",
+                    "affected_rule": "",
+                }
+            ],
+            "postprocess_rule_valid": postprocess_rule_valid,
+            "recommended_action": action,
+            "recommended_level": recommended_level,
+            "candidate_required_conditions": ["最高难任务不形成连续状态"],
+            "candidate_conditions_satisfied": True,
+            "manual_review_required": False,
+            "action_basis": "解析中的直接证据与当前结构声明矛盾。",
+        }
+
+    def test_evidence_audit_content_includes_first_stage_claims_but_excludes_labels(self):
+        item = result_item(
+            actions=[{"rule": "medium_to_hard", "from": "中等题", "to": "拔高题"}],
+            level="拔高题",
+            raw="中等题",
+        )
+        content = agent.build_evidence_audit_content(
+            item,
+            {"reasons": ["首轮发生后处理调整"], "allowed_directions": ["down"], "structural_score": 8},
+        )
+        self.assertIn("某物理题题干", content)
+        self.assertIn("拔高题", content)
+        self.assertIn("medium_to_hard", content)
+        self.assertIn("首轮理由不应进入盲审", content)
+        self.assertNotIn("source_difficulty_untrusted", content)
+
+    def test_rejects_change_without_source_verifiable_contradiction(self):
+        item = result_item(level="中等题")
+        audit = self.audit_result()
+        audit["contradictions"][0]["source_excerpt"] = "题目中不存在的证据"
+        route = {"selected": True, "allowed_directions": ["down"], "reasons": ["结构偏低"]}
+        would_apply, reason = agent.should_apply_evidence_audit(item, route, audit)
+        self.assertFalse(would_apply)
+        self.assertIn("无法在题目或解析中核验", reason)
+
+    def test_rejects_reversing_postprocess_without_matching_failed_rule(self):
+        item = result_item(
+            actions=[{"rule": "medium_to_hard", "from": "中等题", "to": "拔高题"}],
+            level="拔高题",
+            raw="中等题",
+        )
+        audit = self.audit_result(recommended_level="中等题", postprocess_rule_valid=False)
+        route = {"selected": True, "allowed_directions": ["down"], "reasons": ["首轮发生后处理调整"]}
+        would_apply, reason = agent.should_apply_evidence_audit(item, route, audit)
+        self.assertFalse(would_apply)
+        self.assertIn("后处理规则", reason)
+
+    def test_accepts_adjacent_change_with_matching_verifiable_rule_contradiction(self):
+        item = result_item(
+            actions=[{"rule": "medium_to_hard", "from": "中等题", "to": "拔高题"}],
+            level="拔高题",
+            raw="中等题",
+        )
+        audit = self.audit_result(
+            recommended_level="中等题",
+            postprocess_rule_valid=False,
+            contradictions=[
+                {
+                    "contradiction_type": "postprocess_precondition_failed",
+                    "current_claim": "后处理认为存在决定性转换",
+                    "verified_fact": "解析只要求根据题意完成判断",
+                    "source_field": "analysis",
+                    "source_excerpt": "根据题意完成判断",
+                    "affected_rule": "medium_to_hard",
+                }
+            ],
+        )
+        route = {"selected": True, "allowed_directions": ["down"], "reasons": ["首轮发生后处理调整"]}
+        would_apply, reason = agent.should_apply_evidence_audit(item, route, audit)
+        self.assertTrue(would_apply)
+        self.assertIn("可核验反证", reason)
+
+    def test_self_reported_confidence_or_step_count_cannot_replace_contradiction(self):
+        item = result_item(level="中等题")
+        audit = self.audit_result(contradictions=[])
+        audit["confidence"] = "高"
+        audit["effective_decision_count"] = 1
+        route = {"selected": True, "allowed_directions": ["down"], "reasons": ["结构偏低"]}
+        would_apply, reason = agent.should_apply_evidence_audit(item, route, audit)
+        self.assertFalse(would_apply)
+        self.assertIn("反证", reason)
+
+    def test_normalizes_evidence_audit_without_confidence_or_step_fields(self):
+        normalized = agent.normalize_evidence_audit(
+            {
+                "current_level_supported": False,
+                "verified_current_evidence": [],
+                "contradictions": self.audit_result()["contradictions"],
+                "postprocess_rule_valid": None,
+                "recommended_action": "降一档",
+                "recommended_level": "基础题",
+                "candidate_required_conditions": ["显性应用"],
+                "candidate_conditions_satisfied": True,
+                "manual_review_required": False,
+                "action_basis": "存在可核验反证",
+                "confidence": "高",
+                "effective_decision_count": 1,
+            }
+        )
+        self.assertNotIn("confidence", normalized)
+        self.assertNotIn("effective_decision_count", normalized)
+        self.assertEqual(normalized["recommended_level"], "基础题")
+        self.assertFalse(normalized["current_level_supported"])
+
+    def test_malformed_boolean_is_rejected_without_validator_exception(self):
+        audit = self.audit_result()
+        audit["current_level_supported"] = []
+        error = agent.validate_evidence_audit(audit)
+        self.assertIn("布尔值", error)
+
+    def test_evidence_audit_only_records_candidate_without_writeback(self):
+        item = result_item(level="中等题")
+        route = {"selected": True, "allowed_directions": ["down"], "reasons": ["结构偏低"]}
+        applied, would_apply, reason = agent.resolve_evidence_audit_decision(
+            item,
+            route,
+            self.audit_result(),
+            audit_only=True,
+        )
+        self.assertFalse(applied)
+        self.assertTrue(would_apply)
+        self.assertIn("audit-only", reason)
+
+    def test_evidence_audit_prompt_asset_exists(self):
+        self.assertTrue(agent.DEFAULT_EVIDENCE_PROMPT.exists())
+
+    def test_evaluate_review_response_uses_evidence_gate(self):
+        item = result_item(level="中等题")
+        route = {"selected": True, "allowed_directions": ["down"], "reasons": ["结构偏低"]}
+        result = agent.evaluate_review_response(
+            item,
+            route,
+            self.audit_result(),
+            strategy="evidence_audit",
+            accepted_confidences={"高"},
+            audit_only=True,
+        )
+        self.assertEqual(result["evidence_audit"]["recommended_level"], "基础题")
+        self.assertFalse(result["applied"])
+        self.assertTrue(result["would_apply"])
+        self.assertEqual(result["error"], "")
+
+    def test_evidence_audit_defaults_to_safe_mode_without_explicit_writeback(self):
+        self.assertTrue(
+            agent.resolve_audit_only_mode(
+                "evidence_audit",
+                requested_audit_only=False,
+                allow_writeback=False,
+            )
+        )
+        self.assertFalse(
+            agent.resolve_audit_only_mode(
+                "evidence_audit",
+                requested_audit_only=False,
+                allow_writeback=True,
+            )
+        )
+
+
 class ConservativeGateTests(unittest.TestCase):
     def review(self, level, confidence="高", boundary="明确归档", acceptable=None):
         return {
@@ -251,6 +434,15 @@ class AuditAndResumeTests(unittest.TestCase):
             auto_signature = agent.build_run_signature(*common, audit_only=False)
             audit_signature = agent.build_run_signature(*common, audit_only=True)
         self.assertNotEqual(auto_signature, audit_signature)
+
+    def test_run_signature_separates_blind_review_from_evidence_audit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.jsonl"
+            path.write_text('{"question_id":"q1"}\n', encoding="utf-8")
+            common = (str(path), "prompt", "doubao-seed-2.0-lite", 1.0, ["高"])
+            blind_signature = agent.build_run_signature(*common, strategy="blind_review")
+            evidence_signature = agent.build_run_signature(*common, strategy="evidence_audit")
+        self.assertNotEqual(blind_signature, evidence_signature)
 
 
 if __name__ == "__main__":

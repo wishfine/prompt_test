@@ -235,6 +235,40 @@ class AdjudicationLabelRegressionTests(unittest.TestCase):
         self.assertEqual(audit["disagreement"]["before_better"], 0)
         self.assertEqual(result["verification_agent"]["stats"]["would_apply"], 1)
 
+    def test_evaluate_reports_evidence_audit_recommendation_quality(self) -> None:
+        rows = [
+            {
+                "question_id": "q1",
+                "difficulty_level_before_verification": "中等题",
+                "difficulty_rating": {"difficulty_level": "中等题"},
+                "verification_agent": {
+                    "strategy": "evidence_audit",
+                    "mode": "audit_only",
+                    "selected": True,
+                    "applied": False,
+                    "would_apply": True,
+                    "from": "中等题",
+                    "to": "中等题",
+                    "error": "",
+                    "evidence_audit": {
+                        "recommended_level": "基础题",
+                        "recommended_action": "降一档",
+                        "current_level_supported": False,
+                    },
+                },
+            }
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evidence_audit.jsonl"
+            path.write_text(json.dumps(rows[0], ensure_ascii=False) + "\n", encoding="utf-8")
+            result = evaluate(path, {"q1": "基础题"})
+
+        audit = result["verification_agent"]["audit_comparison"]
+        self.assertEqual(audit["recommended_level_evaluation"]["exact_match_rate"], 1.0)
+        self.assertEqual(audit["disagreement"]["audit_better"], 1)
+        self.assertEqual(result["verification_agent"]["stats"]["evidence_audit"], 1)
+        self.assertEqual(result["verification_agent"]["stats"]["valid_response"], 1)
+
     def test_export_mismatches_keeps_single_run_rows_and_reference_metadata(self) -> None:
         rows = [
             {"question_id": "q1", "difficulty_rating": {"difficulty_level": "基础题"}},

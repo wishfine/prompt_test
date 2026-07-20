@@ -193,6 +193,7 @@ def evaluate(
     agent_confidence: Counter[str] = Counter()
     agent_disagreement: Counter[str] = Counter()
     agent_audit_pairs: list[tuple[str, str, str]] = []
+    evidence_audit_pairs: list[tuple[str, str, str]] = []
     has_agent_data = False
     for _, target, prediction, _, _, _, _, before_verification, agent_data in rows:
         if not agent_data:
@@ -204,6 +205,8 @@ def evaluate(
             agent_stats["request_failed"] += 1
         mode = str(agent_data.get("mode") or "auto_apply")
         agent_stats[mode] += 1
+        strategy = str(agent_data.get("strategy") or "blind_review")
+        agent_stats[strategy] += 1
         if agent_data.get("would_apply"):
             agent_stats["would_apply"] += 1
         result = agent_data.get("blind_review")
@@ -227,6 +230,14 @@ def evaluate(
                         agent_disagreement["before_better"] += 1
                     else:
                         agent_disagreement["equal_distance"] += 1
+        evidence_result = agent_data.get("evidence_audit")
+        if isinstance(evidence_result, dict) and evidence_result:
+            agent_stats["valid_response"] += 1
+            recommended_level = str(evidence_result.get("recommended_level") or "")
+            if agent_data.get("selected") and recommended_level in LEVEL_ORDER:
+                evidence_audit_pairs.append(
+                    (target, before_verification, recommended_level)
+                )
         if not agent_data.get("applied"):
             continue
         agent_stats["applied"] += 1
@@ -300,7 +311,44 @@ def evaluate(
                         },
                     }
                     if agent_audit_pairs
-                    else {}
+                    else (
+                        {
+                            "selected_before_evaluation": summarize_predictions(
+                                [(target, before) for target, before, _ in evidence_audit_pairs]
+                            ),
+                            "recommended_level_evaluation": summarize_predictions(
+                                [(target, recommended) for target, _, recommended in evidence_audit_pairs]
+                            ),
+                            "disagreement": {
+                                "agreed": sum(
+                                    before == recommended
+                                    for _, before, recommended in evidence_audit_pairs
+                                ),
+                                "disagreed": sum(
+                                    before != recommended
+                                    for _, before, recommended in evidence_audit_pairs
+                                ),
+                                "audit_better": sum(
+                                    abs(LEVEL_ORDER[recommended] - LEVEL_ORDER[target])
+                                    < abs(LEVEL_ORDER[before] - LEVEL_ORDER[target])
+                                    for target, before, recommended in evidence_audit_pairs
+                                ),
+                                "before_better": sum(
+                                    abs(LEVEL_ORDER[recommended] - LEVEL_ORDER[target])
+                                    > abs(LEVEL_ORDER[before] - LEVEL_ORDER[target])
+                                    for target, before, recommended in evidence_audit_pairs
+                                ),
+                                "equal_distance": sum(
+                                    abs(LEVEL_ORDER[recommended] - LEVEL_ORDER[target])
+                                    == abs(LEVEL_ORDER[before] - LEVEL_ORDER[target])
+                                    and before != recommended
+                                    for target, before, recommended in evidence_audit_pairs
+                                ),
+                            },
+                        }
+                        if evidence_audit_pairs
+                        else {}
+                    )
                 ),
             }
             if has_agent_data

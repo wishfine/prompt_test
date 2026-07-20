@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""冻结首轮之后的选择性盲审 Agent Pipeline。
+"""冻结首轮之后的选择性证据审计 Agent Pipeline。
 
-流程：首轮结果 -> 确定性风险路由 -> Mini temperature=0 独立盲审 ->
-高置信度相邻档保守写回。盲审请求不包含首轮等级、features、reasoning、
-后处理动作、来源 difficulty 或任何评估标签。
+默认流程：首轮结果 -> 确定性风险路由 -> Lite证据审计 -> 只记录不写回。
+旧版独立盲审策略仅保留用于历史回放。
 """
 
 from __future__ import annotations
@@ -38,11 +37,12 @@ import physics_difficulty_rating_with_cache as rating  # noqa: E402
 load_dotenv()
 
 DEFAULT_PROMPT = ROOT / "prompts" / "初中物理难度盲审提示词.txt"
+DEFAULT_EVIDENCE_PROMPT = ROOT / "prompts" / "初中物理难度证据审计提示词.txt"
 LEVELS = ["送分题", "基础题", "中等题", "拔高题", "压轴题"]
 LEVEL_INDEX = {level: index for index, level in enumerate(LEVELS)}
 TASK_STRUCTURES = {"直接识别", "显性应用", "常规分析", "决定性转换", "高密度综合链", "全链耦合"}
 OUTPUT_LOCK = Lock()
-PIPELINE_VERSION = "blind-mini-v1"
+PIPELINE_VERSION = "evidence-audit-v2"
 
 STRUCTURE_SCORE_MAPS: Dict[str, Dict[str, int]] = {
     "step_count": {"1-2步": 0, "3-5步": 2, "6-8步": 4, "9-12步": 6, "12步以上": 7},
@@ -159,6 +159,273 @@ def build_blind_review_content(item: Dict[str, Any]) -> str:
         if safe.get(key)
     }
     return "【待独立盲审题目】\n" + rating.construct_question_content(question_only) + "\n\n请严格输出盲审 JSON。"
+
+
+def build_evidence_audit_content(item: Dict[str, Any], route: Dict[str, Any]) -> str:
+    """提供题目与首轮主张用于反证审计，但隔离来源difficulty及评估标签。"""
+    safe = rating.sanitize_question_data(item)
+    question = {
+        key: safe.get(key)
+        for key in ("stem", "options", "analysis", "sub_questions")
+        if safe.get(key)
+    }
+    difficulty_rating = item.get("difficulty_rating")
+    difficulty_rating = difficulty_rating if isinstance(difficulty_rating, dict) else {}
+    first_stage = {
+        "raw_level": item.get("difficulty_level_raw"),
+        "final_level": extract_final_level(item),
+        "features": difficulty_rating.get("features") or {},
+        "reasoning": difficulty_rating.get("reasoning") or {},
+        "postprocess_actions": item.get("postprocess_actions")
+        or difficulty_rating.get("postprocess_actions")
+        or [],
+    }
+    risk = {
+        "reasons": list(route.get("reasons") or []),
+        "allowed_directions": list(route.get("allowed_directions") or []),
+        "structural_score": route.get("structural_score"),
+    }
+    payload = {"question": question, "first_stage": first_stage, "risk_route": risk}
+    return (
+        "【待反证审计材料】\n"
+        + json.dumps(payload, ensure_ascii=False, indent=2)
+        + "\n\n请核验首轮主张，只输出证据审计 JSON。"
+    )
+
+
+EVIDENCE_AUDIT_ACTIONS = {"保留", "升一档", "降一档", "仅标记人工复核"}
+EVIDENCE_CONTRADICTION_TYPES = {
+    "feature_conflict",
+    "reasoning_hallucination",
+    "postprocess_precondition_failed",
+    "missed_structure",
+}
+EVIDENCE_SOURCE_FIELDS = {"stem", "options", "analysis", "sub_questions"}
+
+
+def _normalized_text(value: Any) -> str:
+    return "".join(str(value or "").split())
+
+
+def _source_field_text(item: Dict[str, Any], field: str) -> str:
+    value = item.get(field)
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value or "")
+
+
+def normalize_evidence_audit(value: Any) -> Dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    verified = source.get("verified_current_evidence")
+    contradictions = source.get("contradictions")
+    required = source.get("candidate_required_conditions")
+    return {
+        "current_level_supported": source.get("current_level_supported"),
+        "verified_current_evidence": [
+            dict(item) for item in verified if isinstance(item, dict)
+        ]
+        if isinstance(verified, list)
+        else [],
+        "contradictions": [
+            dict(item) for item in contradictions if isinstance(item, dict)
+        ]
+        if isinstance(contradictions, list)
+        else [],
+        "postprocess_rule_valid": source.get("postprocess_rule_valid"),
+        "recommended_action": str(source.get("recommended_action") or "").strip(),
+        "recommended_level": str(source.get("recommended_level") or "").strip(),
+        "candidate_required_conditions": [
+            str(item).strip() for item in required if str(item).strip()
+        ]
+        if isinstance(required, list)
+        else [],
+        "candidate_conditions_satisfied": source.get("candidate_conditions_satisfied"),
+        "manual_review_required": source.get("manual_review_required"),
+        "action_basis": str(source.get("action_basis") or "").strip(),
+    }
+
+
+def validate_evidence_audit(audit: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(audit.get("current_level_supported"), bool):
+        return "current_level_supported 必须是布尔值"
+    if audit.get("recommended_action") not in EVIDENCE_AUDIT_ACTIONS:
+        return "recommended_action 非法"
+    if audit.get("recommended_level") not in LEVEL_INDEX:
+        return "recommended_level 非法"
+    if not isinstance(audit.get("candidate_conditions_satisfied"), bool):
+        return "candidate_conditions_satisfied 必须是布尔值"
+    if not isinstance(audit.get("manual_review_required"), bool):
+        return "manual_review_required 必须是布尔值"
+    if not audit.get("action_basis"):
+        return "缺少 action_basis"
+    if not isinstance(audit.get("contradictions"), list):
+        return "contradictions 必须是数组"
+    if not isinstance(audit.get("verified_current_evidence"), list):
+        return "verified_current_evidence 必须是数组"
+    return None
+
+
+def should_apply_evidence_audit(
+    item: Dict[str, Any],
+    route: Dict[str, Any],
+    audit: Dict[str, Any],
+) -> Tuple[bool, str]:
+    """只有题目原文可核验的反证才能形成相邻档候选写回。"""
+    current = extract_final_level(item)
+    if current not in LEVEL_INDEX:
+        return False, "当前等级非法"
+    if not route.get("selected"):
+        return False, "题目未被风险路由选中"
+    action = audit.get("recommended_action")
+    target = audit.get("recommended_level")
+    if action not in EVIDENCE_AUDIT_ACTIONS or target not in LEVEL_INDEX:
+        return False, "审计动作或建议等级非法"
+    if action in {"保留", "仅标记人工复核"} or target == current:
+        return False, "审计未提出可自动执行的等级变化"
+    if audit.get("current_level_supported") is not False:
+        return False, "未明确否定当前等级"
+    if audit.get("manual_review_required") is not False:
+        return False, "审计要求人工复核"
+    if audit.get("candidate_conditions_satisfied") is not True:
+        return False, "相邻候选档必要条件未全部满足"
+    distance = LEVEL_INDEX[target] - LEVEL_INDEX[current]
+    if abs(distance) != 1:
+        return False, "建议调整不是相邻一档"
+    expected_action = "升一档" if distance > 0 else "降一档"
+    if action != expected_action:
+        return False, "建议动作与建议等级不一致"
+    direction = "up" if distance > 0 else "down"
+    if direction not in set(route.get("allowed_directions") or []):
+        return False, "建议方向没有得到确定性风险路由支持"
+
+    contradictions = audit.get("contradictions")
+    if not isinstance(contradictions, list) or not contradictions:
+        return False, "缺少可核验反证"
+    verified: List[Dict[str, Any]] = []
+    for contradiction in contradictions:
+        if not isinstance(contradiction, dict):
+            continue
+        contradiction_type = contradiction.get("contradiction_type")
+        source_field = str(contradiction.get("source_field") or "")
+        excerpt = str(contradiction.get("source_excerpt") or "").strip()
+        if contradiction_type not in EVIDENCE_CONTRADICTION_TYPES:
+            continue
+        if source_field not in EVIDENCE_SOURCE_FIELDS or not excerpt:
+            continue
+        source_text = _normalized_text(_source_field_text(item, source_field))
+        if _normalized_text(excerpt) not in source_text:
+            continue
+        if not contradiction.get("current_claim") or not contradiction.get("verified_fact"):
+            continue
+        verified.append(contradiction)
+    if not verified:
+        return False, "反证引用无法在题目或解析中核验"
+
+    difficulty_rating = item.get("difficulty_rating")
+    difficulty_rating = difficulty_rating if isinstance(difficulty_rating, dict) else {}
+    actions = item.get("postprocess_actions") or difficulty_rating.get("postprocess_actions") or []
+    rule_names = {str(value.get("rule") or "") for value in actions if isinstance(value, dict)}
+    if rule_names:
+        matching = [
+            value
+            for value in verified
+            if value.get("contradiction_type") == "postprocess_precondition_failed"
+            and str(value.get("affected_rule") or "") in rule_names
+        ]
+        if audit.get("postprocess_rule_valid") is not False or not matching:
+            return False, "缺少与实际后处理规则匹配的前提失败反证"
+    return True, "存在题目原文可核验反证，且相邻候选档条件满足"
+
+
+def resolve_evidence_audit_decision(
+    item: Dict[str, Any],
+    route: Dict[str, Any],
+    audit: Dict[str, Any],
+    *,
+    audit_only: bool,
+) -> Tuple[bool, bool, str]:
+    would_apply, reason = should_apply_evidence_audit(item, route, audit)
+    if audit_only:
+        if would_apply:
+            return False, True, "audit-only：记录可核验候选调整，但保持冻结等级"
+        return False, False, f"audit-only：{reason}"
+    return would_apply, would_apply, reason
+
+
+def resolve_audit_only_mode(
+    strategy: str,
+    *,
+    requested_audit_only: bool,
+    allow_writeback: bool,
+) -> bool:
+    if requested_audit_only and allow_writeback:
+        raise ValueError("--audit-only 与 --allow-writeback 不能同时使用")
+    if strategy == "evidence_audit":
+        return not allow_writeback
+    return requested_audit_only
+
+
+def evaluate_review_response(
+    item: Dict[str, Any],
+    route: Dict[str, Any],
+    raw_response: Any,
+    *,
+    strategy: str,
+    accepted_confidences: Iterable[str],
+    audit_only: bool,
+) -> Dict[str, Any]:
+    if strategy == "evidence_audit":
+        audit = normalize_evidence_audit(raw_response)
+        error = validate_evidence_audit(audit)
+        if error:
+            return {
+                "blind_review": {},
+                "evidence_audit": audit,
+                "applied": False,
+                "would_apply": False,
+                "decision_reason": error,
+                "error": error,
+            }
+        applied, would_apply, reason = resolve_evidence_audit_decision(
+            item,
+            route,
+            audit,
+            audit_only=audit_only,
+        )
+        return {
+            "blind_review": {},
+            "evidence_audit": audit,
+            "applied": applied,
+            "would_apply": would_apply,
+            "decision_reason": reason,
+            "error": "",
+        }
+    review = normalize_blind_review(raw_response)
+    error = validate_blind_review(review)
+    if error:
+        return {
+            "blind_review": review,
+            "evidence_audit": {},
+            "applied": False,
+            "would_apply": False,
+            "decision_reason": error,
+            "error": error,
+        }
+    applied, would_apply, reason = resolve_review_decision(
+        extract_final_level(item) or "",
+        route,
+        review,
+        accepted_confidences,
+        audit_only=audit_only,
+    )
+    return {
+        "blind_review": review,
+        "evidence_audit": {},
+        "applied": applied,
+        "would_apply": would_apply,
+        "decision_reason": reason,
+        "error": "",
+    }
 
 
 def canonical_confidence(value: Any) -> str:
@@ -386,6 +653,7 @@ def build_run_signature(
     temperature: Optional[float],
     accepted_confidences: Sequence[str],
     audit_only: bool = False,
+    strategy: str = "blind_review",
 ) -> str:
     payload = {
         "pipeline_version": PIPELINE_VERSION,
@@ -395,6 +663,7 @@ def build_run_signature(
         "temperature": temperature,
         "accepted_confidences": list(accepted_confidences),
         "audit_only": bool(audit_only),
+        "strategy": strategy,
     }
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -486,6 +755,72 @@ async def call_blind_model(
     return {}, time.time() - started, prompt_tokens, completion_tokens, total_tokens, last_error or "盲审响应无效"
 
 
+async def call_evidence_audit_model(
+    prompt: str,
+    content: str,
+    session: aiohttp.ClientSession,
+    model_name: str,
+    temperature: Optional[float],
+    retries: int,
+    timeout_sec: int,
+) -> Tuple[Dict[str, Any], float, int, int, int, str]:
+    started = time.time()
+    prompt_tokens = completion_tokens = total_tokens = 0
+    last_error = ""
+    for attempt in range(retries):
+        payload: Dict[str, Any] = {
+            "model": model_name,
+            "input": [{"role": "user", "content": prompt + "\n\n" + content}],
+            "thinking": {"type": "disabled"},
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        try:
+            async with session.post(
+                f"{rating.BASE_URL}responses",
+                json=payload,
+                headers={"Authorization": f"Bearer {rating.API_KEY}"},
+                timeout=aiohttp.ClientTimeout(total=timeout_sec),
+            ) as response:
+                if response.status == 200:
+                    body = await response.json()
+                    usage = body.get("usage", {})
+                    prompt_tokens += int(usage.get("input_tokens", 0) or 0)
+                    completion_tokens += int(usage.get("output_tokens", 0) or 0)
+                    total_tokens += int(usage.get("total_tokens", 0) or 0)
+                    output_text = ""
+                    for output_item in body.get("output", []):
+                        if output_item.get("type") != "message":
+                            continue
+                        for output_content in output_item.get("content", []):
+                            if output_content.get("type") == "output_text":
+                                output_text = str(output_content.get("text") or "")
+                    parsed = normalize_evidence_audit(rating.parse_model_response(output_text))
+                    validation_error = validate_evidence_audit(parsed)
+                    if not validation_error:
+                        return parsed, time.time() - started, prompt_tokens, completion_tokens, total_tokens, ""
+                    last_error = validation_error
+                else:
+                    text = await response.text()
+                    last_error = f"HTTP {response.status}: {text[:300]}"
+                    if response.status < 500 and response.status != 429:
+                        break
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            last_error = str(exc)
+        except Exception as exc:
+            last_error = str(exc)
+        if attempt < retries - 1:
+            await asyncio.sleep(2**attempt + random.random())
+    return (
+        {},
+        time.time() - started,
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        last_error or "证据审计响应无效",
+    )
+
+
 async def process_item(
     source: Dict[str, Any],
     route: Dict[str, Any],
@@ -501,36 +836,59 @@ async def process_item(
     retries: int,
     timeout_sec: int,
     audit_only: bool,
+    strategy: str,
 ) -> None:
     async with semaphore:
         item = copy.deepcopy(source)
         before = extract_final_level(item)
         review: Dict[str, Any] = {}
+        evidence_audit: Dict[str, Any] = {}
         elapsed = prompt_tokens = completion_tokens = total_tokens = 0
         error = ""
         applied = False
         would_apply = False
         decision_reason = "未进入风险路由"
         if route["selected"]:
-            review, elapsed, prompt_tokens, completion_tokens, total_tokens, error = await call_blind_model(
-                prompt,
-                build_blind_review_content(item),
-                session,
-                model_name,
-                temperature,
-                retries,
-                timeout_sec,
-            )
-            if review:
-                applied, would_apply, decision_reason = resolve_review_decision(
-                    before,
+            if strategy == "evidence_audit":
+                evidence_audit, elapsed, prompt_tokens, completion_tokens, total_tokens, error = (
+                    await call_evidence_audit_model(
+                        prompt,
+                        build_evidence_audit_content(item, route),
+                        session,
+                        model_name,
+                        temperature,
+                        retries,
+                        timeout_sec,
+                    )
+                )
+                raw_response = evidence_audit
+            else:
+                review, elapsed, prompt_tokens, completion_tokens, total_tokens, error = await call_blind_model(
+                    prompt,
+                    build_blind_review_content(item),
+                    session,
+                    model_name,
+                    temperature,
+                    retries,
+                    timeout_sec,
+                )
+                raw_response = review
+            if raw_response:
+                decision = evaluate_review_response(
+                    item,
                     route,
-                    review,
-                    accepted_confidences,
+                    raw_response,
+                    strategy=strategy,
+                    accepted_confidences=accepted_confidences,
                     audit_only=audit_only,
                 )
+                review = decision["blind_review"]
+                evidence_audit = decision["evidence_audit"]
+                applied = decision["applied"]
+                would_apply = decision["would_apply"]
+                decision_reason = decision["decision_reason"]
             else:
-                decision_reason = "盲审失败，保持首轮等级"
+                decision_reason = "审计请求失败，保持首轮等级"
 
         after = before
         if applied:
@@ -540,6 +898,7 @@ async def process_item(
         source_tokens = int(item.get("api_total_tokens", 0) or 0)
         item["verification_agent"] = {
             "enabled": True,
+            "strategy": strategy,
             "mode": "audit_only" if audit_only else "auto_apply",
             "pipeline_version": PIPELINE_VERSION,
             "run_signature": run_signature,
@@ -550,6 +909,7 @@ async def process_item(
             "allowed_directions": route["allowed_directions"],
             "structural_score": route["structural_score"],
             "blind_review": review,
+            "evidence_audit": evidence_audit,
             "applied": applied,
             "would_apply": would_apply,
             "from": before,
@@ -574,29 +934,46 @@ async def process_item(
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser(description="冻结首轮后的独立盲审 Agent Pipeline")
+    parser = argparse.ArgumentParser(description="冻结首轮后的证据审计 Agent Pipeline")
     parser.add_argument("-i", "--input", required=True, help="冻结版首轮完整结果 JSONL")
     parser.add_argument("-o", "--output", required=True)
     parser.add_argument("-e", "--error", required=True)
-    parser.add_argument("-p", "--prompt", default=str(DEFAULT_PROMPT))
+    parser.add_argument("-p", "--prompt", default="")
     parser.add_argument("-c", "--concurrency", type=int, default=20)
     parser.add_argument("-t", "--timeout", type=int, default=180)
     parser.add_argument("-r", "--retries", type=int, default=3)
-    parser.add_argument("--model", default=os.getenv("PHYSICS_VERIFIER_MODEL", "doubao-seed-2.0-mini"))
-    parser.add_argument("--temperature", default=os.getenv("PHYSICS_VERIFIER_TEMPERATURE", "0"))
+    parser.add_argument("--model", default=os.getenv("PHYSICS_VERIFIER_MODEL", ""))
+    parser.add_argument("--temperature", default=os.getenv("PHYSICS_VERIFIER_TEMPERATURE", ""))
+    parser.add_argument(
+        "--strategy",
+        choices=("evidence_audit", "blind_review"),
+        default="evidence_audit",
+    )
     parser.add_argument("--accept-confidence", default="高")
     parser.add_argument("--max-review-calls", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--audit-only",
         action="store_true",
-        help="正常调用盲审模型并保存意见，但禁止修改冻结等级",
+        help="正常调用审计模型并保存意见，但禁止修改冻结等级",
+    )
+    parser.add_argument(
+        "--allow-writeback",
+        action="store_true",
+        help="显式允许证据审计候选写回；首次实验不建议启用",
     )
     args = parser.parse_args()
 
-    if not os.path.exists(args.prompt):
-        raise FileNotFoundError(f"找不到盲审提示词: {args.prompt}")
-    prompt = Path(args.prompt).read_text(encoding="utf-8")
+    audit_only = resolve_audit_only_mode(
+        args.strategy,
+        requested_audit_only=args.audit_only,
+        allow_writeback=args.allow_writeback,
+    )
+    default_prompt = DEFAULT_EVIDENCE_PROMPT if args.strategy == "evidence_audit" else DEFAULT_PROMPT
+    prompt_path = Path(args.prompt) if args.prompt else default_prompt
+    if not prompt_path.exists():
+        raise FileNotFoundError(f"找不到审计提示词: {prompt_path}")
+    prompt = prompt_path.read_text(encoding="utf-8")
     rows = load_jsonl(args.input)
     routes = [route_verification_risk(item) for item in rows]
     stats = Counter()
@@ -613,14 +990,19 @@ async def main() -> None:
     accepted = [value.strip() for value in args.accept_confidence.split(",") if value.strip()]
     if any(value not in {"高", "中", "低"} for value in accepted):
         raise ValueError("--accept-confidence 只能由高、中、低组成")
-    temperature = rating.resolve_temperature(args.model, args.temperature)
+    model_name = args.model or (
+        "doubao-seed-2.0-lite" if args.strategy == "evidence_audit" else "doubao-seed-2.0-mini"
+    )
+    configured_temperature = args.temperature or ("1" if "lite" in model_name else "0")
+    temperature = rating.resolve_temperature(model_name, configured_temperature)
     run_signature = build_run_signature(
         args.input,
         prompt,
-        args.model,
+        model_name,
         temperature,
         accepted,
-        audit_only=args.audit_only,
+        audit_only=audit_only,
+        strategy=args.strategy,
     )
     for path in (args.output, args.error):
         parent = os.path.dirname(os.path.abspath(path))
@@ -640,8 +1022,11 @@ async def main() -> None:
                 route["reasons"] = route["reasons"] + ["超过 max-review-calls，未调用盲审模型"]
         pending.append((item, route))
     print(f"已完成: {len(done)}，待写入: {len(pending)}")
-    mode = "只审不改" if args.audit_only else "自动写回"
-    print(f"盲审模型: {args.model}，temperature={temperature}，模式={mode}，写回置信度={accepted}")
+    mode = "只审不改" if audit_only else "自动写回"
+    print(
+        f"审计策略: {args.strategy}，模型: {model_name}，temperature={temperature}，"
+        f"模式={mode}，历史盲审置信度门槛={accepted}"
+    )
     if not pending:
         return
 
@@ -659,13 +1044,14 @@ async def main() -> None:
                     semaphore,
                     args.output,
                     args.error,
-                    args.model,
+                    model_name,
                     temperature,
                     accepted,
                     run_signature,
                     args.retries,
                     args.timeout,
-                    args.audit_only,
+                    audit_only,
+                    args.strategy,
                 )
             )
             for item, route in pending

@@ -138,41 +138,41 @@ python src/physics_boundary_second_review.py \
 
 正式复核时删除 `--dry-run`。错题包应使用 `all`，保证每道错题都复核；完整1066题输入可使用 `selective` 或 `broad`。复核输出会把分歧归为“模型确实误判”“参考标签需修订”“相邻边界均可”或“双方均需修订”。可用 `--model doubao-seed-2.0-pro` 单独指定复核模型。
 
-## 冻结首轮后的盲审 Agent Pipeline
+## 冻结首轮后的证据审计 Agent Pipeline
 
-`src/physics_difficulty_agent_pipeline.py` 不修改首轮 Prompt 或后处理。它先用确定性结构规则选择高风险题，再把题干、选项和解析发送给 `doubao-seed-2.0-mini` 做 `temperature=0` 独立盲审。盲审请求不会包含首轮等级、features、reasoning、后处理动作、来源 difficulty 或评估标签。
+`src/physics_difficulty_agent_pipeline.py` 不修改首轮 Prompt 或后处理。V2先用确定性结构规则选择高风险题，再让 Lite 核验首轮features、reasoning和后处理动作是否得到题干与官方解析支持。它不是第二个自由分类器：没有题目原文可逐字核验的反证时必须保留冻结等级。
 
-只有同时满足以下条件才自动写回：盲审结论为高置信度、相对首轮只差一档、盲审不再接受当前等级、证据字段完整、有效决策数与目标档一致，并且调整方向与风险路由一致。压轴写回还要求至少两类强压轴结构。两档以上分歧只记录，不自动跨档。
+证据审计请求会包含题目、冻结等级、首轮结构主张、后处理动作和风险原因，但继续隔离来源 difficulty 和所有评估标签。建议调整必须满足：只移动相邻一档、方向得到风险路由支持、当前等级被明确否定、候选档必要条件全部满足、至少一条反证的原文摘录能在指定题目字段中逐字核验。若试图逆转后处理，还必须指出输入中真实存在的具体rule及其失败前提。模型自报置信度和自报步骤数不再参与写回门槛。
 
-Pipeline 会在调整前保存完整 `difficulty_rating_before_verification` 快照。每行还记录由输入文件、盲审 Prompt、模型、温度和置信度门槛共同生成的 `run_signature`；断点续跑检测到签名不一致时会拒绝混写，要求更换输出文件。
+V2默认使用 `evidence_audit` 策略、`doubao-seed-2.0-lite` 和只审不改模式。只有显式添加 `--allow-writeback` 才可能写回；在审计收益经过验证前不要启用。旧 `blind_review` 策略只用于历史实验回放。
+
+Pipeline 会在调整前保存完整 `difficulty_rating_before_verification` 快照。每行还记录由输入文件、审计 Prompt、策略、模型、温度和安全模式共同生成的 `run_signature`；断点续跑检测到签名不一致时会拒绝混写，要求更换输出文件。
 
 先离线查看候选数量，不调用模型：
 
 ```bash
 python src/physics_difficulty_agent_pipeline.py \
   -i outputs/model_runs/lite_physics_erroraudit_guard_1066_run1.jsonl \
-  -o outputs/model_runs/lite_physics_erroraudit_guard_agent_run1.jsonl \
-  -e outputs/model_runs/lite_physics_erroraudit_guard_agent_run1_errors.jsonl \
+  -o outputs/model_runs/lite_physics_evidence_audit_run1.jsonl \
+  -e outputs/model_runs/lite_physics_evidence_audit_run1_errors.jsonl \
   --dry-run
 ```
 
-正式运行时删除 `--dry-run`，也可显式指定 `--model doubao-seed-2.0-mini --temperature 0`。运行后继续用 `tests/adjudication_label_regression.py` 评估；报告中的 `before_verification_evaluation` 与 `verification_agent` 会分别给出首轮基线和 Agent 的改对、改错、置信度及档位转移。
-
-在授予盲审模型自动写回权限前，推荐先使用 Lite 做只审不改实验：
+正式证据审计默认只审不改：
 
 ```bash
 python src/physics_difficulty_agent_pipeline.py \
   -i outputs/model_runs/lite_physics_erroraudit_guard_1066_run1.jsonl \
-  -o outputs/model_runs/lite_physics_agent_lite_audit_run1.jsonl \
-  -e outputs/model_runs/lite_physics_agent_lite_audit_run1_errors.jsonl \
-  -p prompts/初中物理难度盲审提示词.txt \
+  -o outputs/model_runs/lite_physics_evidence_audit_run1.jsonl \
+  -e outputs/model_runs/lite_physics_evidence_audit_run1_errors.jsonl \
+  -p prompts/初中物理难度证据审计提示词.txt \
+  --strategy evidence_audit \
   --model doubao-seed-2.0-lite \
   --temperature 1 \
-  --audit-only \
   -c 30
 ```
 
-`--audit-only` 会正常调用模型并保存盲审等级、置信度及“按现有门控本可写回”的 `would_apply`，但 `verification_applied` 始终为 `false`，最终等级与冻结输入完全一致。运行签名包含该模式，不能与自动写回结果混用同一输出文件。评测报告中的 `verification_agent.audit_comparison` 会直接比较风险题上冻结判断与盲审判断的准确率及分歧胜负。
+输出会保存 `evidence_audit`、可核验反证、`would_apply` 和门控原因，但 `verification_applied` 始终为 `false`，最终等级与冻结输入完全一致。评测报告中的 `verification_agent.audit_comparison` 会比较风险题上的冻结等级与审计建议等级；重点查看 `recommended_level_evaluation` 以及 `audit_better`、`before_better`。只有审计建议在分歧题上稳定优于冻结结果，才考虑单独测试显式写回模式。
 
 ## 代码约束
 
