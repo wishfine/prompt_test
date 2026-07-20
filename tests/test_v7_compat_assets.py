@@ -182,27 +182,19 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("一旦判断错误会使后续结论整体失效", prefix)
         self.assertIn("即使完整链只有3—4个有效决策", prefix)
         self.assertIn("直接读图或沿唯一显性链顺推，不属于决定性转换", prefix)
-        self.assertIn("决定性关系审计：", prefix)
 
-    def test_whole_task_burden_requires_shared_item_specific_evidence(self) -> None:
+    def test_production_prompt_avoids_mandatory_audit_labels(self) -> None:
         prefix = self.load_prefix()
-        self.assertIn("整题负担审计：", prefix)
-        self.assertIn("共享题目特有信息", prefix)
-        self.assertIn("至少两项不同物理关系", prefix)
-        self.assertIn("不改变 step_count", prefix)
-
-    def test_concept_logic_medium_requires_named_condition_and_counterexample(self) -> None:
-        prefix = self.load_prefix()
-        self.assertIn("概念边界审计：", prefix)
-        self.assertIn("具体条件集", prefix)
-        self.assertIn("具体反例或边界", prefix)
+        self.assertNotIn("整题负担审计：", prefix)
+        self.assertNotIn("概念边界审计：", prefix)
+        self.assertNotIn("决定性关系审计：", prefix)
+        self.assertNotIn("完整链审计：", prefix)
 
     def test_final_chain_counts_all_dependent_states_and_constraints(self) -> None:
         prefix = self.load_prefix()
         self.assertIn("从建立第一个必要状态/参数开始", prefix)
         self.assertIn("不能只统计最后一问表面上的三四个动作", prefix)
         self.assertIn("每一项独立安全约束", prefix)
-        self.assertIn("完整链审计：", prefix)
 
     def test_low_structure_gate_rejects_shared_packaging(self) -> None:
         prefix = self.load_prefix()
