@@ -14,7 +14,10 @@ data/
 └── physics_sampled_5000_per_difficulty*.jsonl  大规模抽样题库
 
 outputs/
-└── model_runs/                      模型实验结果，不作为输入数据
+├── model_runs/                      当前冻结结果，不作为输入数据
+│   └── history/                     历史模型实验版本
+└── logs/
+    └── history/                     历史运行日志
 
 prompts/                             正式生产 Prompt
 └── archive/                         冻结历史 Prompt（仅兼容回放）
@@ -119,15 +122,15 @@ python src/physics_difficulty_rating_with_cache.py \
 python tests/adjudication_label_regression.py \
   --csv data/labeled/physics_adjudicated_labels_gpt56_1066.csv \
   --jsonl data/labeled/physics_difficulty_tiku_data_0714_1000.jsonl \
-  --evaluate outputs/model_runs/lite_physics_final_candidate_1066_run1.jsonl \
-  --export-mismatches outputs/model_runs/lite_physics_final_candidate_1066_run1_mismatches.jsonl
+  --evaluate outputs/model_runs/history/lite_physics_final_candidate_1066_run1.jsonl \
+  --export-mismatches outputs/model_runs/history/lite_physics_final_candidate_1066_run1_mismatches.jsonl
 ```
 
 再查看复核候选数量，不发模型请求：
 
 ```bash
 python src/physics_boundary_second_review.py \
-  -i outputs/model_runs/lite_physics_final_candidate_1066_run1_mismatches.jsonl \
+  -i outputs/model_runs/history/lite_physics_final_candidate_1066_run1_mismatches.jsonl \
   -o outputs/model_runs/lite_physics_final_candidate_1066_run1_reviewed.jsonl \
   -e outputs/model_runs/lite_physics_final_candidate_1066_run1_review_errors.jsonl \
   --review-mode all --dry-run
