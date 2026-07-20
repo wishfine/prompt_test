@@ -167,6 +167,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             display: flex;
             gap: 8px;
         }
+        .default-review-notice {
+            max-width: 1160px;
+            margin: 0 auto 8px;
+            padding: 10px 16px;
+            border-radius: 8px;
+            background: #e8f5e9;
+            color: #2e7d32;
+            font-size: 14px;
+            font-weight: 600;
+        }
         .export-btn {
             padding: 6px 14px;
             border-radius: 8px;
@@ -407,6 +417,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             font-family: inherit;
             line-height: 1.5;
         }
+        .corrected-level-select {
+            padding: 7px 10px;
+            border: 1px solid #d0d7de;
+            border-radius: 8px;
+            background: white;
+            color: #333;
+            font-size: 13px;
+        }
         .annotation-textarea:focus {
             outline: none;
             border-color: #FF9800;
@@ -453,8 +471,12 @@ __NAV_ITEMS_PLACEHOLDER__
     </div>
 
     <div class="export-bar">
-        <button class="export-btn" onclick="exportJSONL()">导出 JSONL 标注修正包</button>
+        <button class="export-btn" onclick="exportJSONL()">导出 JSONL 完整验收结果</button>
         <button class="export-btn" onclick="exportTXT()">导出 TXT 摘要报表</button>
+    </div>
+
+    <div class="default-review-notice">
+        默认规则：未标注即视为“模型判定合理”；老师只需标记判定不准的题目。
     </div>
 
 __QUESTION_CARDS_PLACEHOLDER__
@@ -484,9 +506,11 @@ __QUESTION_CARDS_PLACEHOLDER__
         const card = btn.closest('.question-card');
         const textarea = card.querySelector('.annotation-textarea');
 
-        if (action === 'unmark') {
+        if (action === 'unmark' || action === 'correct') {
             delete annotations[qid];
             textarea.value = '';
+            const levelSelect = card.querySelector('.corrected-level-select');
+            if (levelSelect) levelSelect.value = '';
         } else {
             if (!annotations[qid]) annotations[qid] = {};
             annotations[qid].verdict = action;
@@ -494,10 +518,26 @@ __QUESTION_CARDS_PLACEHOLDER__
 
         const buttons = card.querySelectorAll('.annotation-btn');
         buttons.forEach(b => b.classList.remove('active'));
-        if (action !== 'unmark') {
+        if (action === 'wrong') {
             btn.classList.add('active');
         }
 
+        saveAnnotations(annotations);
+    }
+
+    function saveCorrectedLevel(select) {
+        const qid = select.getAttribute('data-qid');
+        const annotations = loadAnnotations();
+        const card = select.closest('.question-card');
+        const wrongBtn = card.querySelector('.annotation-btn[data-action="wrong"]');
+        if (select.value) {
+            if (!annotations[qid]) annotations[qid] = {};
+            annotations[qid].verdict = 'wrong';
+            annotations[qid].corrected_level = select.value;
+            if (wrongBtn) wrongBtn.classList.add('active');
+        } else if (annotations[qid]) {
+            delete annotations[qid].corrected_level;
+        }
         saveAnnotations(annotations);
     }
 
@@ -505,8 +545,20 @@ __QUESTION_CARDS_PLACEHOLDER__
     function saveAnnotationText(textarea) {
         const qid = textarea.getAttribute('data-qid');
         const annotations = loadAnnotations();
-        if (!annotations[qid]) annotations[qid] = {};
-        annotations[qid].reason = textarea.value;
+        const reason = textarea.value.trim();
+        const card = textarea.closest('.question-card');
+        const wrongBtn = card.querySelector('.annotation-btn[data-action="wrong"]');
+        if (reason) {
+            if (!annotations[qid]) annotations[qid] = {};
+            annotations[qid].verdict = 'wrong';
+            annotations[qid].reason = textarea.value;
+            if (wrongBtn) wrongBtn.classList.add('active');
+        } else if (annotations[qid]) {
+            delete annotations[qid].reason;
+            if (!annotations[qid].verdict || annotations[qid].verdict === 'correct') {
+                delete annotations[qid];
+            }
+        }
         saveAnnotations(annotations);
     }
 
@@ -514,36 +566,37 @@ __QUESTION_CARDS_PLACEHOLDER__
     function updateStats() {
         const annotations = loadAnnotations();
         const total = allQuestions.length;
-        const annotated = Object.keys(annotations).filter(k => annotations[k].verdict).length;
-        const correct = Object.keys(annotations).filter(k => annotations[k].verdict === 'correct').length;
+        const wrong = allQuestions.filter(q => {
+            const ann = annotations[q.question_id];
+            return ann && ann.verdict === 'wrong';
+        }).length;
+        const correct = total - wrong;
 
         const levelStats = {};
         for (let lvl = 1; lvl <= 5; lvl++) {
-            levelStats[lvl] = { total: 0, annotated: 0, correct: 0 };
+            levelStats[lvl] = { total: 0, wrong: 0, correct: 0 };
         }
         allQuestions.forEach(q => {
             const lvl = q.level_num;
             if (lvl >= 1 && lvl <= 5) {
                 levelStats[lvl].total++;
                 const ann = annotations[q.question_id];
-                if (ann && ann.verdict) {
-                    levelStats[lvl].annotated++;
-                    if (ann.verdict === 'correct') levelStats[lvl].correct++;
-                }
+                if (ann && ann.verdict === 'wrong') levelStats[lvl].wrong++;
+                else levelStats[lvl].correct++;
             }
         });
 
         let html = '<div class="stats-item">评估总数 <span class="stats-value">' + total + '</span> 题</div>';
-        html += '<div class="stats-item">已评审数 <span class="stats-value">' + annotated + '</span> 题</div>';
-        html += '<div class="stats-item">模型难度合理率 <span class="stats-value">' + (annotated > 0 ? (correct / annotated * 100).toFixed(1) + '%' : '—') + '</span></div>';
+        html += '<div class="stats-item">已标异常 <span class="stats-value">' + wrong + '</span> 题</div>';
+        html += '<div class="stats-item">模型难度合理率 <span class="stats-value">' + (total > 0 ? (correct / total * 100).toFixed(1) + '%' : '—') + '</span></div>';
         html += '<span style="color:#ddd;">|</span>';
 
         for (let lvl = 1; lvl <= 5; lvl++) {
             const s = levelStats[lvl];
-            const acc = s.annotated > 0 ? (s.correct / s.annotated * 100).toFixed(1) + '%' : '—';
+            const acc = s.total > 0 ? (s.correct / s.total * 100).toFixed(1) + '%' : '—';
             html += '<span class="stats-level stats-level-' + lvl + '">' +
                 LEVEL_NAMES[lvl].replace('难度' + lvl + ' — ', '') +
-                ': 抽样' + s.total + ' / 评审' + s.annotated + ' / 合理率' + acc + '</span>';
+                ': 抽样' + s.total + ' / 异常' + s.wrong + ' / 合理率' + acc + '</span>';
         }
 
         document.getElementById('statsBar').innerHTML = html;
@@ -555,13 +608,17 @@ __QUESTION_CARDS_PLACEHOLDER__
             const qid = card.getAttribute('data-qid');
             const ann = annotations[qid];
             if (ann) {
-                if (ann.verdict) {
+                if (ann.verdict === 'wrong') {
                     const btn = card.querySelector('.annotation-btn[data-action="' + ann.verdict + '"]');
                     if (btn) btn.classList.add('active');
                 }
                 if (ann.reason) {
                     const textarea = card.querySelector('.annotation-textarea');
                     if (textarea) textarea.value = ann.reason;
+                }
+                if (ann.corrected_level) {
+                    const levelSelect = card.querySelector('.corrected-level-select');
+                    if (levelSelect) levelSelect.value = ann.corrected_level;
                 }
             }
         });
@@ -573,20 +630,17 @@ __QUESTION_CARDS_PLACEHOLDER__
         let exportLines = [];
         allQuestions.forEach(q => {
             const ann = annotations[q.question_id];
-            if (ann && ann.verdict) {
-                exportLines.push(JSON.stringify({
-                    question_id: q.question_id,
-                    model_difficulty_level: q.difficulty_level,
-                    verdict: ann.verdict,
-                    human_notes: ann.reason || ""
-                }, null, 0));
-            }
+            const manuallyRejected = Boolean(ann && ann.verdict === 'wrong');
+            exportLines.push(JSON.stringify({
+                question_id: q.question_id,
+                model_difficulty_level: q.difficulty_level,
+                verdict: manuallyRejected ? 'wrong' : 'correct',
+                review_source: manuallyRejected ? 'manual_exception' : 'default_model_accepted',
+                human_reviewed: manuallyRejected,
+                human_difficulty_level: manuallyRejected ? (ann.corrected_level || "") : q.difficulty_level,
+                human_notes: manuallyRejected ? (ann.reason || "") : ""
+            }, null, 0));
         });
-
-        if (exportLines.length === 0) {
-            alert("目前没有任何标注修改意见，请先点击 ✓ 或 ✗ 选项！");
-            return;
-        }
 
         const blob = new Blob([exportLines.join('\\n')], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
@@ -604,30 +658,29 @@ __QUESTION_CARDS_PLACEHOLDER__
         let text = "==================================================\\n";
         text += "        初中物理验收 500 题人工评议摘要报表\\n";
         text += "==================================================\\n\\n";
-        
-        let correctCount = 0;
+
         let wrongCount = 0;
         let details = "";
 
         allQuestions.forEach(q => {
             const ann = annotations[q.question_id];
-            if (ann && ann.verdict) {
-                const statusStr = ann.verdict === 'correct' ? "【判定合理】" : "【判定有误】";
-                if (ann.verdict === 'correct') correctCount++; else wrongCount++;
-                
+            if (ann && ann.verdict === 'wrong') {
+                wrongCount++;
                 details += `题目ID: ${q.question_id}\\n`;
                 details += `模型定位: ${q.difficulty_level} (原始教师定位: ${q.raw_difficulty}档)\\n`;
-                details += `评议结论: ${statusStr}\\n`;
+                details += `评议结论: 【判定有误】\\n`;
+                if (ann.corrected_level) details += `建议正确档位: ${ann.corrected_level}\\n`;
                 if (ann.reason) details += `评审备注: ${ann.reason}\\n`;
                 details += "--------------------------------------------------\\n";
             }
         });
 
-        text += `评审总数: ${correctCount + wrongCount} 道\\n`;
-        text += `判定合理: ${correctCount} 道\\n`;
-        text += `判定不准: ${wrongCount} 道\\n`;
-        text += `合理率: ${correctCount + wrongCount > 0 ? (correctCount / (correctCount + wrongCount) * 100).toFixed(1) + '%' : 'N/A'}\\n\\n`;
-        text += "================== 详细评议列表 ==================\\n\\n";
+        const correctCount = allQuestions.length - wrongCount;
+        text += `默认验收总数: ${allQuestions.length} 道\\n`;
+        text += `判定合理（未标异常）: ${correctCount} 道\\n`;
+        text += `人工标记不准: ${wrongCount} 道\\n`;
+        text += `合理率: ${allQuestions.length > 0 ? (correctCount / allQuestions.length * 100).toFixed(1) + '%' : 'N/A'}\\n\\n`;
+        text += "================== 异常题详细列表 ==================\\n\\n";
         text += details;
 
         const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
@@ -826,15 +879,25 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
             # 验收意见栏
             cards_html += f"""
                 <div class="annotation-section">
-                    <div class="annotation-title">人工评议验收</div>
+                    <div class="annotation-title">人工评议验收（默认模型判定合理）</div>
                     <div class="annotation-row">
                         <label>验收意见：</label>
-                        <button class="annotation-btn btn-correct" data-qid="{escape(question_id)}" data-action="correct" onclick="setAnnotation(this, 'correct')">✓ 模型判定合理</button>
                         <button class="annotation-btn btn-wrong" data-qid="{escape(question_id)}" data-action="wrong" onclick="setAnnotation(this, 'wrong')">✗ 模型判定不准</button>
-                        <button class="annotation-btn btn-unmark" data-qid="{escape(question_id)}" data-action="unmark" onclick="setAnnotation(this, 'unmark')">— 清除状态</button>
+                        <button class="annotation-btn btn-unmark" data-qid="{escape(question_id)}" data-action="unmark" onclick="setAnnotation(this, 'unmark')">✓ 恢复默认合理</button>
                     </div>
                     <div class="annotation-row">
-                        <label>修改意见与错误原因归类 (如有错误，请指出正确档位与缺陷，如模型把送分判为基础)：</label>
+                        <label>建议正确档位：</label>
+                        <select class="corrected-level-select" data-qid="{escape(question_id)}" onchange="saveCorrectedLevel(this)">
+                            <option value="">仅标错，暂不指定档位</option>
+                            <option value="送分题">送分题</option>
+                            <option value="基础题">基础题</option>
+                            <option value="中等题">中等题</option>
+                            <option value="拔高题">拔高题</option>
+                            <option value="压轴题">压轴题</option>
+                        </select>
+                    </div>
+                    <div class="annotation-row">
+                        <label>修改意见与错误原因（输入内容后会自动标记为“判定不准”）：</label>
                     </div>
                     <textarea class="annotation-textarea" data-qid="{escape(question_id)}" placeholder="请说明缺陷具体原因及您的推荐档级..." oninput="saveAnnotationText(this)"></textarea>
                 </div>
