@@ -1,0 +1,20 @@
+{
+  "name": "physics_teacher_review_20260721_60",
+  "review_source": "data/labeled/复核标注不一致案例.md",
+  "question_source": "data/labeled/physics_difficulty_tiku_data_0714_1000.jsonl",
+  "question_count": 60,
+  "question_id_type": "string",
+  "input_removed_fields": [
+    "difficulty"
+  ],
+  "teacher_distribution": {
+    "送分题": 0,
+    "基础题": 18,
+    "中等题": 26,
+    "拔高题": 11,
+    "压轴题": 5
+  },
+  "evaluation_csv": "data/labeled/physics_teacher_review_20260721_60.csv",
+  "inference_jsonl": "data/samples/physics_teacher_review_20260721_60.jsonl",
+  "note": "这是老师挑选的复核争议题集合，不可用作全题库总体准确率估计。"
+}
