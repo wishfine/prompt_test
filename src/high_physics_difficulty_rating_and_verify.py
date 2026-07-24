@@ -43,6 +43,7 @@ from high_physics_pipeline_core import (
     REQUIRED_FEATURE_FIELDS,
     enrich_stage1_rating,
     finalize_level,
+    normalize_stage1_rating,
     prepare_question,
     recalculate_verification,
 )
@@ -372,7 +373,7 @@ def build_pipeline_error(
     """构造可续跑的错误记录；第二阶段失败时保留已付费的第一阶段结果。"""
     record = {
         **copy.deepcopy(output_base),
-        "pipeline_version": "high_physics_two_stage_v3",
+        "pipeline_version": "high_physics_two_stage_v4",
         "model_name": MODEL_NAME,
         "failed_stage": "stage2" if stage1 is not None else "stage1",
         "rating_error": str(error),
@@ -432,7 +433,15 @@ async def call_stage1(
                 for key in total_usage:
                     total_usage[key] += current_usage[key]
                 parsed = _parse_json_object(_extract_output_text(body))
-                enriched = enrich_stage1_rating(parsed)
+                raw_features = copy.deepcopy(parsed.get("features"))
+                normalized, normalization_log = normalize_stage1_rating(
+                    parsed
+                )
+                enriched = enrich_stage1_rating(
+                    normalized,
+                    features_model_raw=raw_features,
+                    normalization_log=normalization_log,
+                )
                 return enriched, total_usage, time.time() - started
             last_error = f"HTTP {status}: {error_text[:400]}"
             if cache_id and "PreviousResponseNotFound" in error_text:
@@ -609,7 +618,7 @@ async def process_question(
             }
             result = {
                 **output_base,
-                "pipeline_version": "high_physics_two_stage_v3",
+                "pipeline_version": "high_physics_two_stage_v4",
                 "model_name": MODEL_NAME,
                 "temperature": TEMPERATURE,
                 "difficulty_rating_stage1": stage1,

@@ -107,6 +107,36 @@ FEATURE_OPTIONS: dict[str, set[str]] = {
     "error_risk": {"无明显易错点", "轻微易错点", "明显易错点", "高易错点"},
 }
 
+FEATURE_VALUE_ALIASES: dict[str, dict[str, str]] = {
+    "state_count": {
+        "三个及以上": "3个及以上",
+        "多个状态": "3个及以上",
+        "多个": "3个及以上",
+    },
+    "object_count": {
+        "四个对象": "三个及以上对象",
+        "四个及以上对象": "三个及以上对象",
+    },
+    "numerical_complexity": {
+        "科学记数": "常规小数或科学记数",
+    },
+    "information_carrier": {
+        "纯文字加示意图": "多载体综合",
+        "纯文字加单一示意图": "多载体综合",
+        "纯文字+单一示意图": "多载体综合",
+    },
+    "knowledge_L2": {
+        "万有引力": "曲线运动与万有引力",
+    },
+    "variable_relation": {
+        "函数关系": "函数或图像关系",
+    },
+}
+
+PHYSICS_METHOD_ALIASES = {
+    "隔离法": "整体法与隔离法",
+}
+
 REQUIRED_FEATURE_FIELDS = (
     "knowledge_L1",
     "knowledge_L2",
@@ -206,6 +236,212 @@ def multiplier_for_high_count(high_count: int) -> float:
     if high_count >= 3:
         return 0.85
     return 1.0
+
+
+def _normalization_entry(
+    *,
+    field: str,
+    raw: Any,
+    normalized: Any,
+    action: str,
+) -> dict[str, Any]:
+    return {
+        "field": field,
+        "raw": copy.deepcopy(raw),
+        "normalized": copy.deepcopy(normalized),
+        "action": action,
+    }
+
+
+def normalize_stage1_rating(
+    stage1_rating: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """对模型近义枚举做字段级白名单归一化并保留审计日志。
+
+    不使用编辑距离或全局模糊匹配。无法安全解释的普通枚举仍交由
+    ``validate_feature_schema`` 拒绝；``physics_methods`` 中未知方法
+    因不参与高难乘数而保守删除并记录。
+    """
+    rating = copy.deepcopy(stage1_rating)
+    features = rating.get("features")
+    if not isinstance(features, dict):
+        return rating, []
+    log: list[dict[str, Any]] = []
+
+    for field, aliases in FEATURE_VALUE_ALIASES.items():
+        value = features.get(field)
+        if field == "knowledge_L2":
+            if not isinstance(value, list):
+                continue
+            normalized_values: list[Any] = []
+            for item in value:
+                normalized_item = (
+                    aliases.get(item, item)
+                    if isinstance(item, str)
+                    else item
+                )
+                if normalized_item != item:
+                    log.append(
+                        _normalization_entry(
+                            field=field,
+                            raw=item,
+                            normalized=normalized_item,
+                            action="alias_mapping",
+                        )
+                    )
+                if normalized_item not in normalized_values:
+                    normalized_values.append(normalized_item)
+                elif normalized_item in normalized_values:
+                    log.append(
+                        _normalization_entry(
+                            field=field,
+                            raw=normalized_item,
+                            normalized=normalized_item,
+                            action="deduplicate",
+                        )
+                    )
+            features[field] = normalized_values
+            continue
+        normalized_value = (
+            aliases.get(value, value)
+            if isinstance(value, str)
+            else value
+        )
+        if normalized_value != value:
+            features[field] = normalized_value
+            log.append(
+                _normalization_entry(
+                    field=field,
+                    raw=value,
+                    normalized=normalized_value,
+                    action="alias_mapping",
+                )
+            )
+
+    if features.get("variable_relation") == "范围关系":
+        range_structure = (
+            features.get("classification_discussion") != "无"
+            or features.get("parameter_operation") != "无参数"
+            or features.get("calculation_complexity") == "参数或范围计算"
+        )
+        normalized_relation = (
+            "分段或非线性关系" if range_structure else "无变量关系"
+        )
+        features["variable_relation"] = normalized_relation
+        log.append(
+            _normalization_entry(
+                field="variable_relation",
+                raw="范围关系",
+                normalized=normalized_relation,
+                action="contextual_mapping",
+            )
+        )
+
+    if features.get("model_relation") == "同一模型多对象":
+        has_multiple_states = (
+            features.get("state_count") in {"2个", "3个及以上"}
+            or features.get("state_transition") != "无状态转换"
+        )
+        normalized_relation = (
+            "同一模型多状态" if has_multiple_states else "单一模型"
+        )
+        features["model_relation"] = normalized_relation
+        log.append(
+            _normalization_entry(
+                field="model_relation",
+                raw="同一模型多对象",
+                normalized=normalized_relation,
+                action="contextual_mapping",
+            )
+        )
+
+    raw_object_relation = features.get("object_relation")
+    if raw_object_relation in {"相互作用", "碰撞相互作用"}:
+        strong_coupling_context = (
+            raw_object_relation == "碰撞相互作用"
+            or features.get("model_relation")
+            in {"模型切换", "多模型耦合"}
+            or features.get("equation_structure")
+            in {"2-3个方程联立", "4个以上方程或不等式组"}
+        )
+        normalized_relation = (
+            "双向耦合" if strong_coupling_context else "单向影响"
+        )
+        features["object_relation"] = normalized_relation
+        log.append(
+            _normalization_entry(
+                field="object_relation",
+                raw=raw_object_relation,
+                normalized=normalized_relation,
+                action="contextual_mapping",
+            )
+        )
+
+    methods = features.get("physics_methods")
+    if isinstance(methods, list):
+        normalized_methods: list[Any] = []
+        for method in methods:
+            if not isinstance(method, str):
+                normalized_methods.append(method)
+                continue
+            normalized_method = PHYSICS_METHOD_ALIASES.get(method, method)
+            if normalized_method != method:
+                log.append(
+                    _normalization_entry(
+                        field="physics_methods",
+                        raw=method,
+                        normalized=normalized_method,
+                        action="alias_mapping",
+                    )
+                )
+            if normalized_method not in PHYSICS_METHODS:
+                log.append(
+                    _normalization_entry(
+                        field="physics_methods",
+                        raw=method,
+                        normalized=None,
+                        action="drop_unknown_method",
+                    )
+                )
+                continue
+            if normalized_method in normalized_methods:
+                log.append(
+                    _normalization_entry(
+                        field="physics_methods",
+                        raw=normalized_method,
+                        normalized=normalized_method,
+                        action="deduplicate",
+                    )
+                )
+                continue
+            normalized_methods.append(normalized_method)
+        features["physics_methods"] = normalized_methods
+
+    knowledge_l2 = features.get("knowledge_L2")
+    if (
+        isinstance(knowledge_l2, list)
+        and knowledge_l2
+        and all(value in KNOWLEDGE_L2_TO_L1 for value in knowledge_l2)
+    ):
+        l1_order = ["力学", "电磁学", "热学", "光学", "近代物理", "物理实验"]
+        derived_l1_set = {
+            KNOWLEDGE_L2_TO_L1[value] for value in knowledge_l2
+        }
+        derived_l1 = [
+            value for value in l1_order if value in derived_l1_set
+        ]
+        if features.get("knowledge_L1") != derived_l1:
+            log.append(
+                _normalization_entry(
+                    field="knowledge_L1",
+                    raw=features.get("knowledge_L1"),
+                    normalized=derived_l1,
+                    action="derive_from_knowledge_L2",
+                )
+            )
+            features["knowledge_L1"] = derived_l1
+
+    return rating, log
 
 
 def recalculate_verification(
@@ -605,12 +841,22 @@ def detect_high_difficulty_features(features: dict[str, Any]) -> HighDifficultyD
     )
 
 
-def enrich_stage1_rating(stage1_rating: dict[str, Any]) -> dict[str, Any]:
+def enrich_stage1_rating(
+    stage1_rating: dict[str, Any],
+    *,
+    features_model_raw: dict[str, Any] | None = None,
+    normalization_log: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """保存原始正确率，应用高难特征乘数并映射第一步档位。"""
     rating = copy.deepcopy(stage1_rating)
     features = rating.get("features")
     validate_feature_schema(features)
-    rating["features_model_raw"] = copy.deepcopy(features)
+    rating["features_model_raw"] = copy.deepcopy(
+        features if features_model_raw is None else features_model_raw
+    )
+    audit_log = copy.deepcopy(normalization_log or [])
+    rating["enum_normalization_applied"] = bool(audit_log)
+    rating["enum_normalization_log"] = audit_log
     distinct_points = list(
         dict.fromkeys(str(value).strip() for value in features["knowledge_points"])
     )
@@ -841,6 +1087,22 @@ def finalize_level(
     normalized_suggestion = normalize_level(model_suggested_level)
     suggested_index = LEVEL_INDEX.get(normalized_suggestion, current_index)
     manual = False
+    bucket_changed = (
+        original_high_count is not None
+        and reviewed_high_count is not None
+        and _multiplier_bucket(original_high_count)
+        != _multiplier_bucket(reviewed_high_count)
+    )
+
+    if bucket_changed:
+        return FinalizationResult(
+            final_level=current_level,
+            needs_manual_review=True,
+            model_suggested_level=normalized_suggestion or current_level,
+            adjustment_desc=(
+                f"乘数桶变化·维持{current_level}·转人工复核"
+            ),
+        )
 
     if reasonableness == "合理":
         final_index = current_index

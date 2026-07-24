@@ -424,6 +424,171 @@ class MultiplierTests(unittest.TestCase):
             )
 
 
+class Stage1NormalizationTests(unittest.TestCase):
+    def test_controlled_aliases_are_normalized_and_logged(self) -> None:
+        rating = {
+            "features": base_features(
+                state_count="三个及以上",
+                object_count="四个对象",
+                numerical_complexity="科学记数",
+                information_carrier="纯文字加示意图",
+                variable_relation="函数关系",
+                knowledge_L2=["万有引力"],
+            ),
+            "reason": "测试",
+            "predicted_accuracy": 70.0,
+        }
+        normalized, log = core.normalize_stage1_rating(rating)
+        features = normalized["features"]
+        self.assertEqual(features["state_count"], "3个及以上")
+        self.assertEqual(features["object_count"], "三个及以上对象")
+        self.assertEqual(
+            features["numerical_complexity"],
+            "常规小数或科学记数",
+        )
+        self.assertEqual(features["information_carrier"], "多载体综合")
+        self.assertEqual(features["variable_relation"], "函数或图像关系")
+        self.assertEqual(
+            features["knowledge_L2"],
+            ["曲线运动与万有引力"],
+        )
+        self.assertEqual(features["knowledge_L1"], ["力学"])
+        self.assertTrue(log)
+        self.assertTrue(
+            all(
+                set(item) == {"field", "raw", "normalized", "action"}
+                for item in log
+            )
+        )
+
+    def test_unknown_physics_methods_are_dropped_and_duplicates_are_deduplicated(self) -> None:
+        rating = {
+            "features": base_features(
+                physics_methods=[
+                    "隔离法",
+                    "控制变量法",
+                    "整体法与隔离法",
+                ]
+            ),
+            "reason": "测试",
+            "predicted_accuracy": 70.0,
+        }
+        normalized, log = core.normalize_stage1_rating(rating)
+        self.assertEqual(
+            normalized["features"]["physics_methods"],
+            ["整体法与隔离法"],
+        )
+        self.assertIn(
+            {
+                "field": "physics_methods",
+                "raw": "控制变量法",
+                "normalized": None,
+                "action": "drop_unknown_method",
+            },
+            log,
+        )
+
+    def test_knowledge_l1_is_derived_from_normalized_l2(self) -> None:
+        rating = {
+            "features": base_features(
+                knowledge_L1=["力学", "电磁学"],
+                knowledge_L2=["热学", "原子与原子核"],
+            ),
+            "reason": "测试",
+            "predicted_accuracy": 70.0,
+        }
+        normalized, log = core.normalize_stage1_rating(rating)
+        self.assertEqual(
+            normalized["features"]["knowledge_L1"],
+            ["热学", "近代物理"],
+        )
+        self.assertTrue(
+            any(
+                item["field"] == "knowledge_L1"
+                and item["action"] == "derive_from_knowledge_L2"
+                for item in log
+            )
+        )
+
+    def test_ambiguous_range_relation_uses_other_fields(self) -> None:
+        parameterized = {
+            "features": base_features(
+                variable_relation="范围关系",
+                parameter_operation="单参数",
+            ),
+            "reason": "测试",
+            "predicted_accuracy": 70.0,
+        }
+        plain = copy.deepcopy(parameterized)
+        plain["features"]["parameter_operation"] = "无参数"
+        normalized_parameterized, _ = core.normalize_stage1_rating(
+            parameterized
+        )
+        normalized_plain, _ = core.normalize_stage1_rating(plain)
+        self.assertEqual(
+            normalized_parameterized["features"]["variable_relation"],
+            "分段或非线性关系",
+        )
+        self.assertEqual(
+            normalized_plain["features"]["variable_relation"],
+            "无变量关系",
+        )
+
+    def test_ambiguous_model_and_object_relations_use_conservative_context(self) -> None:
+        rating = {
+            "features": base_features(
+                model_relation="同一模型多对象",
+                object_relation="相互作用",
+                state_count="1个",
+                state_transition="无状态转换",
+                equation_structure="单方程",
+            ),
+            "reason": "测试",
+            "predicted_accuracy": 70.0,
+        }
+        normalized, _ = core.normalize_stage1_rating(rating)
+        self.assertEqual(
+            normalized["features"]["model_relation"],
+            "单一模型",
+        )
+        self.assertEqual(
+            normalized["features"]["object_relation"],
+            "单向影响",
+        )
+
+    def test_enriched_result_preserves_raw_features_and_normalization_log(self) -> None:
+        raw = {
+            "features": base_features(state_count="三个及以上"),
+            "reason": "测试",
+            "predicted_accuracy": 70.0,
+        }
+        normalized, log = core.normalize_stage1_rating(raw)
+        enriched = core.enrich_stage1_rating(
+            normalized,
+            features_model_raw=raw["features"],
+            normalization_log=log,
+        )
+        self.assertEqual(
+            enriched["features_model_raw"]["state_count"],
+            "三个及以上",
+        )
+        self.assertEqual(enriched["features"]["state_count"], "3个及以上")
+        self.assertTrue(enriched["enum_normalization_applied"])
+        self.assertEqual(enriched["enum_normalization_log"], log)
+
+    def test_normalization_leaves_non_string_method_for_schema_error(self) -> None:
+        raw = {
+            "features": base_features(
+                physics_methods=[{"name": "非法对象"}]
+            ),
+            "reason": "测试",
+            "predicted_accuracy": 70.0,
+        }
+        normalized, _ = core.normalize_stage1_rating(raw)
+        with self.assertRaisesRegex(ValueError, "字符串"):
+            core.enrich_stage1_rating(normalized)
+
+
 class InputPreparationTests(unittest.TestCase):
     def test_difficulty_is_removed_and_subquestions_are_not_mutated(self) -> None:
         source = {
@@ -606,6 +771,20 @@ class FinalAdjustmentTests(unittest.TestCase):
         )
         self.assertEqual(result.final_level, "难度5档")
         self.assertTrue(result.needs_manual_review)
+
+    def test_multiplier_bucket_change_blocks_underrated_upgrade(self) -> None:
+        result = core.finalize_level(
+            current_level="难度4档",
+            reasonableness="偏低",
+            model_suggested_level="难度5档",
+            multiplier_reasonableness="不合理",
+            input_sufficiency="充分",
+            original_high_count=2,
+            reviewed_high_count=4,
+        )
+        self.assertEqual(result.final_level, "难度4档")
+        self.assertTrue(result.needs_manual_review)
+        self.assertIn("乘数桶变化", result.adjustment_desc)
 
 
 class VerificationRecalculationTests(unittest.TestCase):

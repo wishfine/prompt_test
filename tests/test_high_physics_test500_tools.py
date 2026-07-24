@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import build_high_physics_test500 as builder  # noqa: E402
 import evaluate_high_physics_test500 as evaluator  # noqa: E402
+import upgrade_high_physics_v3_results as upgrader  # noqa: E402
 
 
 class HighPhysicsTest500ToolTests(unittest.TestCase):
@@ -51,6 +52,42 @@ class HighPhysicsTest500ToolTests(unittest.TestCase):
         self.assertEqual(report["within_one_level_rate"], 0.6667)
         self.assertEqual(report["severe_deviation_count"], 1)
         self.assertEqual(report["under_predicted"], 1)
+
+    def test_v3_upgrade_recalculates_final_level_with_bucket_guard(self) -> None:
+        row = {
+            "question_id": "1",
+            "pipeline_version": "high_physics_two_stage_v3",
+            "difficulty_rating_stage1": {
+                "difficulty_level_step1": "难度4档",
+                "high_difficulty_feature_count": 2,
+            },
+            "difficulty_level_step1": "难度4档",
+            "verification": {
+                "rating_reasonableness": "偏低",
+                "adjusted_difficulty_level": "难度5档",
+                "multiplier_reasonableness": "不合理",
+                "reviewed_high_difficulty_features": [
+                    "多对象强耦合",
+                    "多过程或多状态强耦合",
+                    "多约束联合",
+                    "复杂分类讨论",
+                ],
+            },
+            "final_difficulty_level": "难度5档",
+            "input_quality": {"input_sufficiency": "充分"},
+        }
+        upgraded = upgrader.upgrade_record(row)
+        self.assertEqual(upgraded["final_difficulty_level"], "难度4档")
+        self.assertTrue(upgraded["needs_manual_review"])
+        self.assertIn("乘数桶变化", upgraded["final_adjustment"])
+        self.assertEqual(
+            upgraded["pipeline_version"],
+            "high_physics_two_stage_v4",
+        )
+        self.assertEqual(
+            upgraded["upgraded_from_pipeline_version"],
+            "high_physics_two_stage_v3",
+        )
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ class RunnerAssetTests(unittest.TestCase):
         self.assertIn("FEATURE_EXTRACTION_PROMPT_PREFIX", source)
         self.assertIn("VERIFICATION_PROMPT_PREFIX", source)
         self.assertIn("enrich_stage1_rating", source)
+        self.assertIn("normalize_stage1_rating", source)
         self.assertIn("finalize_level", source)
 
     def test_verification_rejects_duplicate_high_features(self) -> None:
