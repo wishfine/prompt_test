@@ -572,6 +572,75 @@ class FinalAdjustmentTests(unittest.TestCase):
         )
         self.assertTrue(result.needs_manual_review)
 
+    def test_inconsistent_overrated_suggestion_is_not_applied(self) -> None:
+        result = core.finalize_level(
+            current_level="难度4档",
+            reasonableness="偏高",
+            model_suggested_level="难度4档",
+            multiplier_reasonableness="合理",
+            input_sufficiency="充分",
+        )
+        self.assertEqual(result.final_level, "难度4档")
+        self.assertTrue(result.needs_manual_review)
+
+    def test_inconsistent_underrated_suggestion_is_not_applied(self) -> None:
+        result = core.finalize_level(
+            current_level="难度4档",
+            reasonableness="偏低",
+            model_suggested_level="难度4档",
+            multiplier_reasonableness="合理",
+            input_sufficiency="充分",
+        )
+        self.assertEqual(result.final_level, "难度4档")
+        self.assertTrue(result.needs_manual_review)
+
+    def test_unreasonable_multiplier_and_overrated_review_does_not_downgrade(self) -> None:
+        result = core.finalize_level(
+            current_level="难度5档",
+            reasonableness="偏高",
+            model_suggested_level="难度4档",
+            multiplier_reasonableness="不合理",
+            input_sufficiency="充分",
+            original_high_count=2,
+            reviewed_high_count=4,
+        )
+        self.assertEqual(result.final_level, "难度5档")
+        self.assertTrue(result.needs_manual_review)
+
+
+class VerificationRecalculationTests(unittest.TestCase):
+    def test_program_recalculates_review_multiplier_accuracy_and_level(self) -> None:
+        verification = core.recalculate_verification(
+            current_level="难度4档",
+            original_high_count=2,
+            verification={
+                "reviewed_original_predicted_accuracy": 80.0,
+                "reviewed_high_difficulty_features": [
+                    "多对象强耦合",
+                    "多过程或多状态强耦合",
+                    "多约束联合",
+                ],
+            },
+        )
+        self.assertEqual(verification["reviewed_high_difficulty_feature_count"], 3)
+        self.assertEqual(verification["reviewed_multiplier"], 0.85)
+        self.assertEqual(verification["reviewed_predicted_accuracy"], 68.0)
+        self.assertEqual(verification["reviewed_difficulty_level"], "难度3档")
+        self.assertEqual(verification["multiplier_reasonableness"], "不合理")
+        self.assertEqual(verification["rating_reasonableness"], "偏高")
+        self.assertEqual(verification["adjusted_difficulty_level"], "难度3档")
+
+    def test_reviewed_accuracy_must_be_between_zero_and_one_hundred(self) -> None:
+        with self.assertRaisesRegex(ValueError, "0 到 100"):
+            core.recalculate_verification(
+                current_level="难度3档",
+                original_high_count=0,
+                verification={
+                    "reviewed_original_predicted_accuracy": 120,
+                    "reviewed_high_difficulty_features": [],
+                },
+            )
+
 
 class PromptAssetTests(unittest.TestCase):
     def test_prompt_config_contains_both_stages_and_continuous_boundaries(self) -> None:
@@ -590,6 +659,11 @@ class PromptAssetTests(unittest.TestCase):
         self.assertIn("predicted_accuracy < 38", stage1)
         self.assertIn("组合乘数效应", stage1)
         self.assertIn("普通高考的全体考生", stage1)
+        self.assertIn("90—97", stage1)
+        self.assertIn("避免反复机械输出", stage1)
+        self.assertIn("reviewed_original_predicted_accuracy", stage2)
+        self.assertIn("不要自行输出 multiplier", stage2)
+        self.assertIn("不是难度4档或难度5档的必要条件", stage2)
         blocks = re.findall(r'\{\n  "features":.*?\n\}', stage1, re.S)
         self.assertTrue(blocks)
         example = json.loads(blocks[-1])

@@ -208,6 +208,69 @@ def multiplier_for_high_count(high_count: int) -> float:
     return 1.0
 
 
+def recalculate_verification(
+    *,
+    current_level: str,
+    original_high_count: int,
+    verification: dict[str, Any],
+) -> dict[str, Any]:
+    """根据二阶段复核事实重新计算乘数、正确率和建议档位。
+
+    第二阶段模型只复核原始正确率和高难特征。乘数、乘数后正确率、
+    档位及升降方向全部由程序派生，避免模型输出互相矛盾的字段。
+    """
+    if current_level not in LEVEL_INDEX:
+        raise ValueError(f"无效 current_level：{current_level!r}")
+    try:
+        reviewed_accuracy = float(
+            verification["reviewed_original_predicted_accuracy"]
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "reviewed_original_predicted_accuracy 缺失或不是数值"
+        ) from exc
+    if not 0.0 <= reviewed_accuracy <= 100.0:
+        raise ValueError(
+            "reviewed_original_predicted_accuracy 必须在 0 到 100 之间"
+        )
+
+    reviewed_features = verification.get("reviewed_high_difficulty_features")
+    if not isinstance(reviewed_features, list):
+        raise ValueError("reviewed_high_difficulty_features 必须为数组")
+    reviewed_count = len(reviewed_features)
+    reviewed_multiplier = multiplier_for_high_count(reviewed_count)
+    reviewed_adjusted_accuracy = round(
+        reviewed_accuracy * reviewed_multiplier,
+        1,
+    )
+    reviewed_level = map_accuracy_to_level(reviewed_adjusted_accuracy)
+    current_index = LEVEL_INDEX[current_level]
+    reviewed_index = LEVEL_INDEX[reviewed_level]
+    if reviewed_index == current_index:
+        reasonableness = "合理"
+    elif reviewed_index < current_index:
+        reasonableness = "偏高"
+    else:
+        reasonableness = "偏低"
+
+    normalized = copy.deepcopy(verification)
+    normalized["reviewed_original_predicted_accuracy"] = reviewed_accuracy
+    normalized["reviewed_high_difficulty_feature_count"] = reviewed_count
+    normalized["reviewed_multiplier"] = reviewed_multiplier
+    normalized["reviewed_predicted_accuracy"] = reviewed_adjusted_accuracy
+    normalized["reviewed_difficulty_level"] = reviewed_level
+    normalized["multiplier_reasonableness"] = (
+        "合理"
+        if _multiplier_bucket(original_high_count)
+        == _multiplier_bucket(reviewed_count)
+        else "不合理"
+    )
+    normalized["rating_reasonableness"] = reasonableness
+    # 保留旧输出字段名，便于现有评测和下游读取；值由程序计算而非模型决定。
+    normalized["adjusted_difficulty_level"] = reviewed_level
+    return normalized
+
+
 def validate_feature_schema(features: dict[str, Any]) -> None:
     """验证第一阶段 feature 的完整性和枚举合法性。"""
     if not isinstance(features, dict):
@@ -784,13 +847,25 @@ def finalize_level(
         if normalized_suggestion and suggested_index != current_index:
             manual = True
     elif reasonableness == "偏高":
-        final_index = max(0, current_index - 1)
-        if normalized_suggestion and suggested_index >= current_index:
+        direction_consistent = bool(
+            normalized_suggestion and suggested_index < current_index
+        )
+        # 复核若同时否定原乘数，说明“特征/乘数复核”和“档位方向”
+        # 尚未形成稳定一致的自动决策；历史回放中该组合几乎全部恶化。
+        if not direction_consistent or multiplier_reasonableness != "合理":
+            final_index = current_index
             manual = True
+        else:
+            final_index = max(0, current_index - 1)
     elif reasonableness == "偏低":
-        final_index = min(4, current_index + 1)
-        if normalized_suggestion and suggested_index <= current_index:
+        direction_consistent = bool(
+            normalized_suggestion and suggested_index > current_index
+        )
+        if not direction_consistent:
+            final_index = current_index
             manual = True
+        else:
+            final_index = min(4, current_index + 1)
     else:
         final_index = current_index
         manual = True

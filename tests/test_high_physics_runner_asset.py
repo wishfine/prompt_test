@@ -52,10 +52,8 @@ class RunnerAssetTests(unittest.TestCase):
             "difficulty_source": "测试",
             "feature_corrections": [],
             "missed_features": ["无"],
+            "reviewed_original_predicted_accuracy": 68.0,
             "reviewed_high_difficulty_features": ["多约束联合", "多约束联合"],
-            "multiplier_reasonableness": "合理",
-            "rating_reasonableness": "合理",
-            "adjusted_difficulty_level": "难度3档",
             "analysis": "测试",
         }
         with self.assertRaisesRegex(ValueError, "不得重复"):
@@ -66,10 +64,8 @@ class RunnerAssetTests(unittest.TestCase):
             "difficulty_source": " ",
             "feature_corrections": [],
             "missed_features": ["无"],
+            "reviewed_original_predicted_accuracy": 68.0,
             "reviewed_high_difficulty_features": [],
-            "multiplier_reasonableness": "合理",
-            "rating_reasonableness": "合理",
-            "adjusted_difficulty_level": "难度3档",
             "analysis": "测试",
         }
         with self.assertRaisesRegex(ValueError, "difficulty_source"):
@@ -80,10 +76,8 @@ class RunnerAssetTests(unittest.TestCase):
             "difficulty_source": "测试",
             "feature_corrections": ["不是对象"],
             "missed_features": ["无"],
+            "reviewed_original_predicted_accuracy": 68.0,
             "reviewed_high_difficulty_features": [],
-            "multiplier_reasonableness": "合理",
-            "rating_reasonableness": "合理",
-            "adjusted_difficulty_level": "难度3档",
             "analysis": "测试",
         }
         with self.assertRaisesRegex(ValueError, "必须为对象"):
@@ -93,6 +87,25 @@ class RunnerAssetTests(unittest.TestCase):
         base["reviewed_high_difficulty_features"] = [{"name": "多约束联合"}]
         with self.assertRaisesRegex(ValueError, "每项必须为字符串"):
             runner.validate_verification(base)
+
+    def test_verification_rejects_non_feature_correction_field(self) -> None:
+        value = {
+            "difficulty_source": "测试",
+            "feature_corrections": [
+                {
+                    "field": "difficulty_level_step1",
+                    "from": "难度4档",
+                    "to": "难度3档",
+                    "evidence": "档位不属于 feature 字段",
+                }
+            ],
+            "missed_features": ["无"],
+            "reviewed_original_predicted_accuracy": 68.0,
+            "reviewed_high_difficulty_features": [],
+            "analysis": "测试",
+        }
+        with self.assertRaisesRegex(ValueError, "非法 feature 修正字段"):
+            runner.validate_verification(value)
 
     def test_stage2_error_record_preserves_paid_stage1_result(self) -> None:
         record = runner.build_pipeline_error(

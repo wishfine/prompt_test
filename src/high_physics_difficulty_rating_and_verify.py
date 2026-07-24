@@ -40,10 +40,11 @@ except ImportError as exc:  # pragma: no cover - 服务器 venv 中执行
 
 from high_physics_pipeline_core import (
     HIGH_DIFFICULTY_FEATURE_NAMES,
+    REQUIRED_FEATURE_FIELDS,
     enrich_stage1_rating,
     finalize_level,
-    normalize_level,
     prepare_question,
+    recalculate_verification,
 )
 
 
@@ -297,10 +298,8 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
         "difficulty_source",
         "feature_corrections",
         "missed_features",
+        "reviewed_original_predicted_accuracy",
         "reviewed_high_difficulty_features",
-        "multiplier_reasonableness",
-        "rating_reasonableness",
-        "adjusted_difficulty_level",
         "analysis",
     )
     missing = [field for field in required if field not in result]
@@ -322,6 +321,11 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
                 f"feature_corrections[{index}] 缺少字段："
                 f"{sorted(correction_missing)}"
             )
+        if correction["field"] not in REQUIRED_FEATURE_FIELDS:
+            raise ValueError(
+                "非法 feature 修正字段："
+                f"{correction['field']!r}"
+            )
     if not isinstance(result["missed_features"], list):
         raise ValueError("missed_features 必须为数组")
     if any(not isinstance(name, str) for name in result["missed_features"]):
@@ -340,15 +344,20 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
     ]
     if invalid_high:
         raise ValueError(f"第二阶段含非法高难特征：{invalid_high}")
-    if result["multiplier_reasonableness"] not in {"合理", "不合理"}:
-        raise ValueError("multiplier_reasonableness 只能为合理/不合理")
-    if result["rating_reasonableness"] not in {"合理", "偏高", "偏低"}:
-        raise ValueError("rating_reasonableness 只能为合理/偏高/偏低")
-    level = normalize_level(result["adjusted_difficulty_level"])
-    if not level:
-        raise ValueError("adjusted_difficulty_level 必须为难度1档到难度5档")
+    try:
+        reviewed_accuracy = float(
+            result["reviewed_original_predicted_accuracy"]
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "reviewed_original_predicted_accuracy 必须为数值"
+        ) from exc
+    if not 0.0 <= reviewed_accuracy <= 100.0:
+        raise ValueError(
+            "reviewed_original_predicted_accuracy 必须在 0 到 100 之间"
+        )
     normalized = copy.deepcopy(result)
-    normalized["adjusted_difficulty_level"] = level
+    normalized["reviewed_original_predicted_accuracy"] = reviewed_accuracy
     return normalized
 
 
@@ -363,7 +372,7 @@ def build_pipeline_error(
     """构造可续跑的错误记录；第二阶段失败时保留已付费的第一阶段结果。"""
     record = {
         **copy.deepcopy(output_base),
-        "pipeline_version": "high_physics_two_stage_v2",
+        "pipeline_version": "high_physics_two_stage_v3",
         "model_name": MODEL_NAME,
         "failed_stage": "stage2" if stage1 is not None else "stage1",
         "rating_error": str(error),
@@ -492,8 +501,15 @@ async def call_stage2(
                 for key in total_usage:
                     total_usage[key] += current_usage[key]
                 parsed = _parse_json_object(_extract_output_text(body))
+                validated = validate_verification(parsed)
                 return (
-                    validate_verification(parsed),
+                    recalculate_verification(
+                        current_level=stage1["difficulty_level_step1"],
+                        original_high_count=stage1[
+                            "high_difficulty_feature_count"
+                        ],
+                        verification=validated,
+                    ),
                     total_usage,
                     time.time() - started,
                 )
@@ -593,7 +609,7 @@ async def process_question(
             }
             result = {
                 **output_base,
-                "pipeline_version": "high_physics_two_stage_v2",
+                "pipeline_version": "high_physics_two_stage_v3",
                 "model_name": MODEL_NAME,
                 "temperature": TEMPERATURE,
                 "difficulty_rating_stage1": stage1,
