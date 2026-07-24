@@ -163,9 +163,9 @@ ACCURACY_ANCHOR_RANGES: dict[str, tuple[float, float]] = {
     "教材直接原型": (92.0, 100.0),
     "低结构基础应用": (88.0, 92.0),
     "熟悉标准模型": (85.0, 88.0),
-    "常规综合": (70.0, 85.0),
-    "较长标准综合": (58.0, 70.0),
-    "较难综合": (38.0, 58.0),
+    "常规综合": (55.0, 85.0),
+    "较长标准综合": (20.0, 70.0),
+    "较难综合": (10.0, 58.0),
     "压轴复杂结构": (0.0, 38.0),
 }
 
@@ -370,6 +370,10 @@ def _accuracy_scale_audit(
             "low_structure_score_conflict": None,
             "option_probability_multiplication_risk": None,
             "error_risk_local_adjustment_confirmed": None,
+            "complex_anchor_conflict": None,
+            "high_burden_score_conflict": None,
+            "heterogeneous_task_breadth_conflict": None,
+            "standard_model_score_inflation_risk": None,
         }
     if missing:
         raise ValueError(
@@ -420,6 +424,76 @@ def _accuracy_scale_audit(
         and features.get("critical_state") == "无临界"
         and features.get("classification_discussion") == "无"
     )
+    high_burden_structure = (
+        features.get("step_count") in {"9-12步", "12步以上"}
+        or (
+            features.get("process_count") == "三个及以上过程"
+            and features.get("state_count") == "3个及以上"
+            and (
+                features.get("subquestion_dependency") == "后问依赖前问"
+                or features.get("shared_model_across_subquestions") is True
+                or features.get("process_state_relation")
+                in {"前后状态强依赖", "连续变化伴随边界"}
+            )
+        )
+    )
+    complex_structure_signals = sum(
+        (
+            features.get("step_count") in {"6-8步", "9-12步", "12步以上"},
+            features.get("model_relation") in {"模型切换", "多模型耦合"},
+            features.get("constraint_structure") == "多约束联合筛选",
+            features.get("equation_structure")
+            in {"2-3个方程联立", "4个以上方程或不等式组"},
+            features.get("hidden_conditions")
+            in {"单个隐含条件", "多个隐含条件"},
+            features.get("subquestion_dependency") == "后问依赖前问",
+        )
+    )
+    complex_anchor_conflict = (
+        (
+            high_burden_structure
+            or complex_structure_signals >= 3
+        )
+        and anchor
+        in {
+            "教材直接原型",
+            "低结构基础应用",
+            "熟悉标准模型",
+            "常规综合",
+        }
+    )
+    heterogeneous_breadth_signals = sum(
+        (
+            features.get("knowledge_count") == "4个及以上",
+            features.get("formula_count") in {"4-6个", "7个以上"},
+            features.get("graph_structure")
+            in {"多图独立", "多图联合转换"},
+            features.get("experiment_requirement")
+            in {
+                "标准数据处理",
+                "控制变量或故障分析",
+                "误差反演",
+                "方案设计或可行性验证",
+            },
+            features.get("primary_problem_structure") == "复合题",
+        )
+    )
+    heterogeneous_task_breadth_conflict = (
+        features.get("subquestion_dependency") == "相互独立"
+        and heterogeneous_breadth_signals >= 2
+        and anchor in {"教材直接原型", "低结构基础应用"}
+    )
+    high_burden_score_conflict = (
+        high_burden_structure and base_accuracy >= 58.0
+    )
+    standard_model_score_inflation_risk = (
+        features.get("knowledge_depth") == "标准模型"
+        and (
+            high_burden_structure
+            or complex_structure_signals >= 3
+        )
+        and base_accuracy >= 58.0
+    )
     return {
         "metadata_complete": True,
         "anchor_range_consistent": anchor_consistent,
@@ -437,6 +511,14 @@ def _accuracy_scale_audit(
         "error_risk_local_adjustment_confirmed": self_check[
             "error_risk_only_used_for_local_adjustment"
         ],
+        "complex_anchor_conflict": complex_anchor_conflict,
+        "high_burden_score_conflict": high_burden_score_conflict,
+        "heterogeneous_task_breadth_conflict": (
+            heterogeneous_task_breadth_conflict
+        ),
+        "standard_model_score_inflation_risk": (
+            standard_model_score_inflation_risk
+        ),
     }
 
 

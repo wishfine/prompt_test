@@ -99,6 +99,8 @@ def accuracy_scale_diagnostics(
     records_with_stage1 = metadata_complete = 0
     anchor_inconsistent = low_structure_conflict = 0
     option_risk = error_risk_not_local = unsupported_count = 0
+    complex_anchor_conflict = high_burden_score_conflict = 0
+    heterogeneous_task_conflict = standard_model_inflation = 0
 
     for row in predictions.values():
         stage1 = row.get("difficulty_rating_stage1")
@@ -129,6 +131,18 @@ def accuracy_scale_diagnostics(
         unsupported = audit.get("unsupported_boundary_evidence")
         if isinstance(unsupported, list):
             unsupported_count += len(unsupported)
+        complex_anchor_conflict += (
+            audit.get("complex_anchor_conflict") is True
+        )
+        high_burden_score_conflict += (
+            audit.get("high_burden_score_conflict") is True
+        )
+        heterogeneous_task_conflict += (
+            audit.get("heterogeneous_task_breadth_conflict") is True
+        )
+        standard_model_inflation += (
+            audit.get("standard_model_score_inflation_risk") is True
+        )
 
     return {
         "records_with_stage1": records_with_stage1,
@@ -138,6 +152,14 @@ def accuracy_scale_diagnostics(
         "option_probability_multiplication_risk_count": option_risk,
         "error_risk_not_local_count": error_risk_not_local,
         "unsupported_boundary_evidence_count": unsupported_count,
+        "complex_anchor_conflict_count": complex_anchor_conflict,
+        "high_burden_score_conflict_count": high_burden_score_conflict,
+        "heterogeneous_task_breadth_conflict_count": (
+            heterogeneous_task_conflict
+        ),
+        "standard_model_score_inflation_risk_count": (
+            standard_model_inflation
+        ),
         "unique_original_accuracy_count": len(score_dist),
         "top_original_accuracy_values": [
             {"score": score, "count": count}

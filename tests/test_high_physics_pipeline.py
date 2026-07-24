@@ -453,6 +453,10 @@ class MultiplierTests(unittest.TestCase):
                 "low_structure_score_conflict": False,
                 "option_probability_multiplication_risk": False,
                 "error_risk_local_adjustment_confirmed": True,
+                "complex_anchor_conflict": False,
+                "high_burden_score_conflict": False,
+                "heterogeneous_task_breadth_conflict": False,
+                "standard_model_score_inflation_risk": False,
             },
         )
 
@@ -509,6 +513,71 @@ class MultiplierTests(unittest.TestCase):
         self.assertTrue(audit["below_85_evidence_present"])
         self.assertEqual(audit["unsupported_boundary_evidence"], [])
         self.assertFalse(audit["low_structure_score_conflict"])
+
+    def test_accuracy_scale_audit_flags_high_burden_score_and_anchor_conflicts(self) -> None:
+        output = core.enrich_stage1_rating(
+            {
+                "features": base_features(
+                    knowledge_depth="标准模型",
+                    primary_problem_structure="复合题",
+                    step_count="9-12步",
+                    process_count="三个及以上过程",
+                    state_count="3个及以上",
+                    process_state_relation="前后状态强依赖",
+                    subquestion_dependency="后问依赖前问",
+                    shared_model_across_subquestions=True,
+                    model_relation="模型切换",
+                    reasoning_chain="多层因果",
+                    formula_count="4-6个",
+                    equation_structure="4个以上方程或不等式组",
+                ),
+                "reason": "课内标准模型组成的长链递进综合题。",
+                "accuracy_anchor": "常规综合",
+                "boundary_crossing_evidence": [
+                    "THREE_PLUS_DEPENDENT_DECISIONS",
+                    "DEPENDENT_SUBQUESTIONS",
+                ],
+                "accuracy_self_check": {
+                    "below_88_justified": True,
+                    "below_85_justified": True,
+                    "options_treated_as_independent_tasks": False,
+                    "error_risk_only_used_for_local_adjustment": True,
+                },
+                "predicted_accuracy": 72.0,
+            }
+        )
+        audit = output["accuracy_scale_audit"]
+        self.assertTrue(audit["complex_anchor_conflict"])
+        self.assertTrue(audit["high_burden_score_conflict"])
+        self.assertTrue(audit["standard_model_score_inflation_risk"])
+        self.assertFalse(audit["heterogeneous_task_breadth_conflict"])
+
+    def test_accuracy_scale_audit_flags_heterogeneous_independent_task_breadth(self) -> None:
+        output = core.enrich_stage1_rating(
+            {
+                "features": base_features(
+                    knowledge_points=["器材选择", "仪器读数", "误差分析", "图像处理"],
+                    knowledge_count="4个及以上",
+                    primary_problem_structure="实验探究",
+                    subquestion_dependency="相互独立",
+                    formula_count="4-6个",
+                    experiment_requirement="标准数据处理",
+                ),
+                "reason": "多个相互独立但异质的实验评分任务。",
+                "accuracy_anchor": "低结构基础应用",
+                "boundary_crossing_evidence": [],
+                "accuracy_self_check": {
+                    "below_88_justified": False,
+                    "below_85_justified": False,
+                    "options_treated_as_independent_tasks": False,
+                    "error_risk_only_used_for_local_adjustment": True,
+                },
+                "predicted_accuracy": 89.0,
+            }
+        )
+        audit = output["accuracy_scale_audit"]
+        self.assertTrue(audit["heterogeneous_task_breadth_conflict"])
+        self.assertFalse(audit["high_burden_score_conflict"])
 
     def test_accuracy_scale_metadata_rejects_unknown_controlled_values(self) -> None:
         with self.assertRaisesRegex(ValueError, "accuracy_anchor"):
@@ -967,6 +1036,10 @@ class PromptAssetTests(unittest.TestCase):
         self.assertIn("普通高考的全体考生", stage1)
         self.assertIn("92—96", stage1)
         self.assertIn("模板分数", stage1)
+        self.assertIn("局部模型熟悉度", stage1)
+        self.assertIn("整题完成负担", stage1)
+        self.assertIn("多个异质评分任务", stage1)
+        self.assertIn("这些范围互相重叠", stage1)
         self.assertIn("reviewed_original_predicted_accuracy", stage2)
         self.assertIn("不要自行输出 multiplier", stage2)
         self.assertIn("不是难度4档或难度5档的必要条件", stage2)

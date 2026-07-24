@@ -20,7 +20,7 @@ class RunnerAssetTests(unittest.TestCase):
     def test_runner_exists_and_compiles(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn('"high_physics_two_stage_v5"', source)
+        self.assertIn('"high_physics_two_stage_v6"', source)
 
     def test_runner_exposes_required_operational_controls(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
