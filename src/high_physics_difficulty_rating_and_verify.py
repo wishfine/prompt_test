@@ -373,7 +373,7 @@ def build_pipeline_error(
     """构造可续跑的错误记录；第二阶段失败时保留已付费的第一阶段结果。"""
     record = {
         **copy.deepcopy(output_base),
-        "pipeline_version": "high_physics_two_stage_v4",
+        "pipeline_version": "high_physics_two_stage_v5",
         "model_name": MODEL_NAME,
         "failed_stage": "stage2" if stage1 is not None else "stage1",
         "rating_error": str(error),
@@ -618,7 +618,7 @@ async def process_question(
             }
             result = {
                 **output_base,
-                "pipeline_version": "high_physics_two_stage_v4",
+                "pipeline_version": "high_physics_two_stage_v5",
                 "model_name": MODEL_NAME,
                 "temperature": TEMPERATURE,
                 "difficulty_rating_stage1": stage1,

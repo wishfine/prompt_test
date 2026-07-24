@@ -53,6 +53,53 @@ class HighPhysicsTest500ToolTests(unittest.TestCase):
         self.assertEqual(report["severe_deviation_count"], 1)
         self.assertEqual(report["under_predicted"], 1)
 
+    def test_evaluator_reports_accuracy_scale_audit_diagnostics(self) -> None:
+        predictions = {
+            "1": {
+                "difficulty_rating_stage1": {
+                    "accuracy_anchor": "教材直接原型",
+                    "original_predicted_accuracy": 94.0,
+                    "accuracy_scale_audit": {
+                        "metadata_complete": True,
+                        "anchor_range_consistent": True,
+                        "low_structure_score_conflict": False,
+                        "option_probability_multiplication_risk": False,
+                        "error_risk_local_adjustment_confirmed": True,
+                        "unsupported_boundary_evidence": [],
+                    },
+                }
+            },
+            "2": {
+                "difficulty_rating_stage1": {
+                    "accuracy_anchor": "熟悉标准模型",
+                    "original_predicted_accuracy": 78.0,
+                    "accuracy_scale_audit": {
+                        "metadata_complete": True,
+                        "anchor_range_consistent": False,
+                        "low_structure_score_conflict": True,
+                        "option_probability_multiplication_risk": True,
+                        "error_risk_local_adjustment_confirmed": False,
+                        "unsupported_boundary_evidence": [
+                            "MODEL_NOT_FULLY_EXPLICIT"
+                        ],
+                    },
+                }
+            },
+        }
+        report = evaluator.accuracy_scale_diagnostics(predictions)
+        self.assertEqual(report["records_with_stage1"], 2)
+        self.assertEqual(report["metadata_complete_count"], 2)
+        self.assertEqual(report["anchor_range_inconsistent_count"], 1)
+        self.assertEqual(report["low_structure_score_conflict_count"], 1)
+        self.assertEqual(report["option_probability_multiplication_risk_count"], 1)
+        self.assertEqual(report["error_risk_not_local_count"], 1)
+        self.assertEqual(report["unsupported_boundary_evidence_count"], 1)
+        self.assertEqual(report["unique_original_accuracy_count"], 2)
+        self.assertEqual(
+            report["anchor_distribution"],
+            {"教材直接原型": 1, "熟悉标准模型": 1},
+        )
+
     def test_v3_upgrade_recalculates_final_level_with_bucket_guard(self) -> None:
         row = {
             "question_id": "1",

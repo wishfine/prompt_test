@@ -90,6 +90,63 @@ def evaluate(
     }
 
 
+def accuracy_scale_diagnostics(
+    predictions: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """汇总 V5 第一阶段正确率标尺的软审计信号。"""
+    anchor_dist: Counter[str] = Counter()
+    score_dist: Counter[float] = Counter()
+    records_with_stage1 = metadata_complete = 0
+    anchor_inconsistent = low_structure_conflict = 0
+    option_risk = error_risk_not_local = unsupported_count = 0
+
+    for row in predictions.values():
+        stage1 = row.get("difficulty_rating_stage1")
+        if not isinstance(stage1, dict):
+            continue
+        records_with_stage1 += 1
+        anchor = stage1.get("accuracy_anchor")
+        if isinstance(anchor, str) and anchor:
+            anchor_dist[anchor] += 1
+        try:
+            score_dist[float(stage1["original_predicted_accuracy"])] += 1
+        except (KeyError, TypeError, ValueError):
+            pass
+        audit = stage1.get("accuracy_scale_audit")
+        if not isinstance(audit, dict):
+            continue
+        metadata_complete += audit.get("metadata_complete") is True
+        anchor_inconsistent += audit.get("anchor_range_consistent") is False
+        low_structure_conflict += (
+            audit.get("low_structure_score_conflict") is True
+        )
+        option_risk += (
+            audit.get("option_probability_multiplication_risk") is True
+        )
+        error_risk_not_local += (
+            audit.get("error_risk_local_adjustment_confirmed") is False
+        )
+        unsupported = audit.get("unsupported_boundary_evidence")
+        if isinstance(unsupported, list):
+            unsupported_count += len(unsupported)
+
+    return {
+        "records_with_stage1": records_with_stage1,
+        "metadata_complete_count": metadata_complete,
+        "anchor_range_inconsistent_count": anchor_inconsistent,
+        "low_structure_score_conflict_count": low_structure_conflict,
+        "option_probability_multiplication_risk_count": option_risk,
+        "error_risk_not_local_count": error_risk_not_local,
+        "unsupported_boundary_evidence_count": unsupported_count,
+        "unique_original_accuracy_count": len(score_dist),
+        "top_original_accuracy_values": [
+            {"score": score, "count": count}
+            for score, count in score_dist.most_common(15)
+        ],
+        "anchor_distribution": dict(anchor_dist),
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--labels", required=True)
@@ -104,6 +161,9 @@ def main() -> None:
     reports = {
         "final": evaluate(labels, predictions, "final_difficulty_level"),
         "step1": evaluate(labels, predictions, "difficulty_level_step1"),
+        "accuracy_scale_diagnostics": accuracy_scale_diagnostics(
+            predictions
+        ),
     }
     print(json.dumps(reports, ensure_ascii=False, indent=2))
 

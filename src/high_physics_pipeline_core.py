@@ -159,6 +159,37 @@ HIGH_DIFFICULTY_FEATURE_NAMES = (
     "高阶实验设计或误差反演",
 )
 
+ACCURACY_ANCHOR_RANGES: dict[str, tuple[float, float]] = {
+    "教材直接原型": (92.0, 100.0),
+    "低结构基础应用": (88.0, 92.0),
+    "熟悉标准模型": (85.0, 88.0),
+    "常规综合": (70.0, 85.0),
+    "较长标准综合": (58.0, 70.0),
+    "较难综合": (38.0, 58.0),
+    "压轴复杂结构": (0.0, 38.0),
+}
+
+BOUNDARY_CROSSING_EVIDENCE = {
+    "THREE_PLUS_DEPENDENT_DECISIONS",
+    "MODEL_NOT_FULLY_EXPLICIT",
+    "MULTI_STATE_DEPENDENCY",
+    "MULTI_RELATION_COMBINATION",
+    "GRAPH_HIDDEN_QUANTITY_INFERENCE",
+    "EXPERIMENT_DATA_REASONING",
+    "DEPENDENT_SUBQUESTIONS",
+    "HIDDEN_CONDITION",
+    "MULTI_OBJECT_COUPLING",
+    "JOINT_CONSTRAINTS",
+    "CONCEPTUAL_MODEL_CONFLICT",
+}
+
+ACCURACY_SELF_CHECK_FIELDS = {
+    "below_88_justified",
+    "below_85_justified",
+    "options_treated_as_independent_tasks",
+    "error_risk_only_used_for_local_adjustment",
+}
+
 QUESTION_MODEL_FIELDS = (
     "parent_id",
     "question_id",
@@ -236,6 +267,177 @@ def multiplier_for_high_count(high_count: int) -> float:
     if high_count >= 3:
         return 0.85
     return 1.0
+
+
+def _supported_boundary_evidence(
+    features: dict[str, Any],
+    evidence: list[str],
+) -> list[str]:
+    """返回与结构化 features 相互支持的 85 分跨界证据。"""
+    step_count = features.get("step_count")
+    process_state_relation = features.get("process_state_relation")
+    knowledge_count = features.get("knowledge_count")
+    supported = {
+        "THREE_PLUS_DEPENDENT_DECISIONS": step_count
+        in {"3-5步", "6-8步", "9-12步", "12步以上"},
+        "MODEL_NOT_FULLY_EXPLICIT": features.get("model_explicitness")
+        != "模型完全显性",
+        "MULTI_STATE_DEPENDENCY": (
+            features.get("state_count") in {"2个", "3个及以上"}
+            and process_state_relation
+            in {"前后状态强依赖", "连续变化伴随边界"}
+        ),
+        "MULTI_RELATION_COMBINATION": (
+            features.get("formula_count")
+            in {"2-3个", "4-6个", "7个以上"}
+            or features.get("equation_structure")
+            in {"2-3个方程联立", "4个以上方程或不等式组"}
+            or features.get("reasoning_chain")
+            in {"多层因果", "逆向推理或临界分析"}
+        ),
+        "GRAPH_HIDDEN_QUANTITY_INFERENCE": features.get("graph_structure")
+        in {"单图反推隐藏量", "多图联合转换"},
+        "EXPERIMENT_DATA_REASONING": features.get("experiment_requirement")
+        in {
+            "标准数据处理",
+            "控制变量或故障分析",
+            "误差反演",
+            "方案设计或可行性验证",
+        },
+        "DEPENDENT_SUBQUESTIONS": features.get("subquestion_dependency")
+        == "后问依赖前问",
+        "HIDDEN_CONDITION": features.get("hidden_conditions")
+        in {"单个隐含条件", "多个隐含条件"},
+        "MULTI_OBJECT_COUPLING": (
+            features.get("object_count")
+            in {"两个对象", "三个及以上对象"}
+            and features.get("object_relation")
+            in {"双向耦合", "共同受约束"}
+        ),
+        "JOINT_CONSTRAINTS": features.get("constraint_structure")
+        == "多约束联合筛选",
+        "CONCEPTUAL_MODEL_CONFLICT": (
+            features.get("primary_problem_structure") == "概念辨析"
+            and knowledge_count in {"2-3个", "4个及以上"}
+            and features.get("reasoning_chain")
+            in {"多层因果", "逆向推理或临界分析"}
+        ),
+    }
+    return [name for name in evidence if supported.get(name, False)]
+
+
+def _accuracy_scale_audit(
+    *,
+    rating: dict[str, Any],
+    features: dict[str, Any],
+    base_accuracy: float,
+) -> dict[str, Any]:
+    """软审计原始正确率标尺，不修改模型分数。"""
+    metadata_fields = (
+        "accuracy_anchor",
+        "boundary_crossing_evidence",
+        "accuracy_self_check",
+    )
+    missing = [field for field in metadata_fields if field not in rating]
+    anchor = rating.get("accuracy_anchor")
+    if anchor is not None and anchor not in ACCURACY_ANCHOR_RANGES:
+        raise ValueError(f"accuracy_anchor 含非法值：{anchor!r}")
+    evidence = rating.get("boundary_crossing_evidence")
+    if evidence is not None:
+        if not isinstance(evidence, list):
+            raise ValueError("boundary_crossing_evidence 必须为数组")
+        if any(not isinstance(value, str) for value in evidence):
+            raise ValueError("boundary_crossing_evidence 每项必须为字符串")
+        if len(evidence) != len(set(evidence)):
+            raise ValueError("boundary_crossing_evidence 不得重复")
+        invalid_evidence = [
+            value for value in evidence
+            if value not in BOUNDARY_CROSSING_EVIDENCE
+        ]
+        if invalid_evidence:
+            raise ValueError(
+                "boundary_crossing_evidence 含非法值："
+                f"{invalid_evidence}"
+            )
+    if len(missing) == len(metadata_fields):
+        return {
+            "metadata_complete": False,
+            "missing_metadata_fields": missing,
+            "anchor_range_consistent": None,
+            "below_88_justified": None,
+            "below_85_evidence_present": None,
+            "unsupported_boundary_evidence": [],
+            "low_structure_score_conflict": None,
+            "option_probability_multiplication_risk": None,
+            "error_risk_local_adjustment_confirmed": None,
+        }
+    if missing:
+        raise ValueError(
+            "正确率标尺元数据必须同时提供，缺少字段："
+            f"{missing}"
+        )
+
+    self_check = rating["accuracy_self_check"]
+    if not isinstance(self_check, dict):
+        raise ValueError("accuracy_self_check 必须为对象")
+    missing_checks = ACCURACY_SELF_CHECK_FIELDS - self_check.keys()
+    if missing_checks:
+        raise ValueError(
+            "accuracy_self_check 缺少字段："
+            f"{sorted(missing_checks)}"
+        )
+    invalid_checks = [
+        field for field in ACCURACY_SELF_CHECK_FIELDS
+        if not isinstance(self_check[field], bool)
+    ]
+    if invalid_checks:
+        raise ValueError(
+            "accuracy_self_check 以下字段必须为布尔值："
+            f"{invalid_checks}"
+        )
+
+    low, high = ACCURACY_ANCHOR_RANGES[anchor]
+    anchor_consistent = (
+        low <= base_accuracy <= high
+        if anchor == "教材直接原型"
+        else low <= base_accuracy < high
+    )
+    supported_evidence = _supported_boundary_evidence(features, evidence)
+    unsupported_evidence = [
+        value for value in evidence if value not in supported_evidence
+    ]
+    below_85_evidence_present = (
+        True if base_accuracy >= 85.0 else bool(supported_evidence)
+    )
+    low_structure = (
+        features.get("step_count") == "1-2步"
+        and features.get("model_explicitness") == "模型完全显性"
+        and features.get("reasoning_chain")
+        in {"直接套用", "简单因果"}
+        and features.get("calculation_complexity")
+        in {"直接判断", "简单代数"}
+        and features.get("hidden_conditions") == "无"
+        and features.get("critical_state") == "无临界"
+        and features.get("classification_discussion") == "无"
+    )
+    return {
+        "metadata_complete": True,
+        "anchor_range_consistent": anchor_consistent,
+        "below_88_justified": self_check["below_88_justified"],
+        "below_85_evidence_present": below_85_evidence_present,
+        "unsupported_boundary_evidence": unsupported_evidence,
+        "low_structure_score_conflict": (
+            base_accuracy < 85.0
+            and low_structure
+            and not below_85_evidence_present
+        ),
+        "option_probability_multiplication_risk": self_check[
+            "options_treated_as_independent_tasks"
+        ],
+        "error_risk_local_adjustment_confirmed": self_check[
+            "error_risk_only_used_for_local_adjustment"
+        ],
+    }
 
 
 def _normalization_entry(
@@ -898,6 +1100,11 @@ def enrich_stage1_rating(
 
     adjusted_accuracy = round(base_accuracy * multiplier, 1)
     rating["original_predicted_accuracy"] = base_accuracy
+    rating["accuracy_scale_audit"] = _accuracy_scale_audit(
+        rating=rating,
+        features=features,
+        base_accuracy=base_accuracy,
+    )
     rating["active_features"] = active_features
     rating["active_feature_count"] = len(active_features)
     rating["high_difficulty_features"] = high.names
