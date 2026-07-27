@@ -5,19 +5,14 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
-from openpyxl.chart import BarChart, Reference
 from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-
-LEVELS = [f"难度{i}档" for i in range(1, 6)]
-LEVEL_INDEX = {level: index + 1 for index, level in enumerate(LEVELS)}
 
 GROUP_COLORS = {
     "标识": "475569",
@@ -26,6 +21,31 @@ GROUP_COLORS = {
     "最终结果": "EA580C",
     "最终分数": "0F766E",
 }
+
+STAGE1_FIELD_NAMES = {
+    "original_predicted_accuracy": "原始预测正确率",
+    "predicted_accuracy": "乘数后预测正确率",
+    "multiplier_applied": "应用乘数",
+    "high_difficulty_feature_count": "高难特征数量",
+    "active_feature_count": "活跃特征数量",
+    "difficulty_level_step1": "映射档位",
+}
+
+STAGE2_FIELD_NAMES = {
+    "reviewed_predicted_accuracy": "复核后预测正确率",
+    "rating_reasonableness": "评级合理性",
+    "multiplier_reasonableness": "乘数合理性",
+    "adjusted_difficulty_level": "建议调整档位",
+}
+
+STAGE1_PRIORITY_FIELDS = [
+    "original_predicted_accuracy",
+    "multiplier_applied",
+    "predicted_accuracy",
+    "difficulty_level_step1",
+    "high_difficulty_feature_count",
+    "active_feature_count",
+]
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -39,15 +59,6 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
                 raise ValueError(f"{path} 第{line_number}行缺少 question_id")
             rows.append(row)
     return rows
-
-
-def read_labels(path: Path | None) -> dict[str, dict[str, Any]]:
-    if path is None:
-        return {}
-    return {
-        str(row["question_id"]): row
-        for row in read_jsonl(path)
-    }
 
 
 def flatten(value: Any, prefix: str = "") -> dict[str, Any]:
@@ -86,6 +97,20 @@ def ordered_union(
                 seen.add(field)
                 fields.append(field)
     return fields
+
+
+def prioritize_fields(fields: list[str], priority: list[str]) -> list[str]:
+    priority_fields = [field for field in priority if field in fields]
+    return priority_fields + [
+        field for field in fields if field not in priority_fields
+    ]
+
+
+def display_field_name(stage: str, field: str) -> str:
+    translations = (
+        STAGE1_FIELD_NAMES if stage == "第一阶段" else STAGE2_FIELD_NAMES
+    )
+    return f"{stage}.{translations.get(field, field)}"
 
 
 def style_header(ws, groups: list[str]) -> None:
@@ -128,7 +153,6 @@ def width_for_header(header: str) -> float:
 def create_detail_sheet(
     wb: Workbook,
     results: list[dict[str, Any]],
-    labels: dict[str, dict[str, Any]],
 ) -> tuple[list[str], list[str]]:
     ws = wb.active
     ws.title = "评级明细"
@@ -141,18 +165,15 @@ def create_detail_sheet(
         flatten(row.get("verification") or {})
         for row in results
     ]
-    stage1_fields = ordered_union(stage1_rows)
+    stage1_fields = prioritize_fields(
+        ordered_union(stage1_rows),
+        STAGE1_PRIORITY_FIELDS,
+    )
     stage2_fields = ordered_union(stage2_rows)
 
     final_headers = [
-        "GPT5.6复核标签",
-        "第一阶段档位",
         "模型建议档位",
         "最终档位",
-        "是否一致",
-        "档位差",
-        "是否一档内",
-        "是否严重偏差",
         "最终调整说明",
         "是否需要人工复核",
         "第二阶段状态",
@@ -160,8 +181,8 @@ def create_detail_sheet(
     ]
     headers = (
         ["题目ID"]
-        + [f"第一阶段.{field}" for field in stage1_fields]
-        + [f"第二阶段.{field}" for field in stage2_fields]
+        + [display_field_name("第一阶段", field) for field in stage1_fields]
+        + [display_field_name("第二阶段", field) for field in stage2_fields]
         + final_headers
         + ["最终分数"]
     )
@@ -180,17 +201,7 @@ def create_detail_sheet(
         stage2_rows,
     ):
         question_id = str(result["question_id"])
-        label = labels.get(question_id, {}).get(
-            "reviewed_difficulty_level",
-            "",
-        )
-        step1_level = result.get("difficulty_level_step1", "")
         final_level = result.get("final_difficulty_level", "")
-        gap = (
-            LEVEL_INDEX[final_level] - LEVEL_INDEX[label]
-            if label in LEVEL_INDEX and final_level in LEVEL_INDEX
-            else ""
-        )
         verification = result.get("verification") or {}
         final_score = verification.get("reviewed_predicted_accuracy")
         if final_score is None:
@@ -198,26 +209,8 @@ def create_detail_sheet(
                 result.get("difficulty_rating_stage1") or {}
             ).get("predicted_accuracy")
         final_values = [
-            label,
-            step1_level,
             result.get("model_suggested_level", ""),
             final_level,
-            (
-                "一致"
-                if label and final_level and label == final_level
-                else "不一致" if label and final_level else ""
-            ),
-            gap,
-            (
-                "是"
-                if isinstance(gap, int) and abs(gap) <= 1
-                else "否" if isinstance(gap, int) else ""
-            ),
-            (
-                "是"
-                if isinstance(gap, int) and abs(gap) >= 2
-                else "否" if isinstance(gap, int) else ""
-            ),
             result.get("final_adjustment", ""),
             "是" if result.get("needs_manual_review") is True else "否",
             result.get("verification_status", "success"),
@@ -265,12 +258,10 @@ def create_detail_sheet(
 def create_question_sheet(
     wb: Workbook,
     results: list[dict[str, Any]],
-    labels: dict[str, dict[str, Any]],
 ) -> None:
     ws = wb.create_sheet("题目信息")
     headers = [
         "题目ID",
-        "GPT5.6复核标签",
         "题干",
         "选项",
         "解析",
@@ -284,10 +275,6 @@ def create_question_sheet(
         quality = result.get("input_quality") or {}
         ws.append([
             question_id,
-            labels.get(question_id, {}).get(
-                "reviewed_difficulty_level",
-                "",
-            ),
             excel_value(result.get("stem")),
             excel_value(result.get("options")),
             excel_value(result.get("analysis")),
@@ -296,117 +283,13 @@ def create_question_sheet(
             quality.get("input_sufficiency", ""),
         ])
     style_header(ws, ["标识"] + ["最终结果"] * (len(headers) - 1))
-    widths = [22, 18, 60, 45, 70, 40, 40, 16]
+    widths = [22, 60, 45, 70, 40, 40, 16]
     for index, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(index)].width = width
     for row in ws.iter_rows(min_row=2):
         row[0].number_format = "@"
         for cell in row:
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-
-
-def create_summary_sheet(
-    wb: Workbook,
-    results: list[dict[str, Any]],
-    labels: dict[str, dict[str, Any]],
-) -> None:
-    ws = wb.create_sheet("汇总")
-    truth = Counter()
-    prediction = Counter()
-    confusion = {
-        level: Counter()
-        for level in LEVELS
-    }
-    exact = within_one = severe = evaluated = 0
-    for result in results:
-        question_id = str(result["question_id"])
-        label = labels.get(question_id, {}).get(
-            "reviewed_difficulty_level",
-        )
-        pred = result.get("final_difficulty_level")
-        if label not in LEVEL_INDEX or pred not in LEVEL_INDEX:
-            continue
-        evaluated += 1
-        truth[label] += 1
-        prediction[pred] += 1
-        confusion[label][pred] += 1
-        gap = LEVEL_INDEX[pred] - LEVEL_INDEX[label]
-        exact += gap == 0
-        within_one += abs(gap) <= 1
-        severe += abs(gap) >= 2
-
-    ws.append(["指标", "数值"])
-    ws.append(["结果题数", len(results)])
-    ws.append(["有效评测数", evaluated])
-    ws.append(["完全一致率", exact / evaluated if evaluated else None])
-    ws.append(["一档内比例", within_one / evaluated if evaluated else None])
-    ws.append(["严重偏差数", severe])
-    ws["B4"].number_format = "0.00%"
-    ws["B5"].number_format = "0.00%"
-
-    start = 9
-    ws.cell(start, 1, "档位")
-    ws.cell(start, 2, "GPT5.6标签")
-    ws.cell(start, 3, "模型预测")
-    for offset, level in enumerate(LEVELS, start=1):
-        ws.cell(start + offset, 1, level)
-        ws.cell(start + offset, 2, truth[level])
-        ws.cell(start + offset, 3, prediction[level])
-
-    chart = BarChart()
-    chart.type = "col"
-    chart.style = 10
-    chart.title = "标签与模型档位分布"
-    chart.y_axis.title = "题目数"
-    chart.x_axis.title = "难度档位"
-    chart.add_data(
-        Reference(
-            ws,
-            min_col=2,
-            max_col=3,
-            min_row=start,
-            max_row=start + len(LEVELS),
-        ),
-        titles_from_data=True,
-    )
-    chart.set_categories(
-        Reference(
-            ws,
-            min_col=1,
-            min_row=start + 1,
-            max_row=start + len(LEVELS),
-        )
-    )
-    chart.height = 8
-    chart.width = 15
-    ws.add_chart(chart, "E2")
-
-    matrix_start = 17
-    ws.cell(matrix_start, 1, "真实\\预测")
-    for column, level in enumerate(LEVELS, start=2):
-        ws.cell(matrix_start, column, level)
-    for row_index, truth_level in enumerate(LEVELS, start=1):
-        ws.cell(matrix_start + row_index, 1, truth_level)
-        for column_index, pred_level in enumerate(LEVELS, start=2):
-            ws.cell(
-                matrix_start + row_index,
-                column_index,
-                confusion[truth_level][pred_level],
-            )
-
-    for row in (1, start, matrix_start):
-        for cell in ws[row]:
-            if cell.value is not None:
-                cell.fill = PatternFill(
-                    "solid",
-                    fgColor=GROUP_COLORS["最终结果"],
-                )
-                cell.font = Font(color="FFFFFF", bold=True)
-    ws.column_dimensions["A"].width = 22
-    for column in range(2, 7):
-        ws.column_dimensions[get_column_letter(column)].width = 16
-    ws.sheet_view.showGridLines = False
-
 
 def create_field_guide(
     wb: Workbook,
@@ -418,13 +301,19 @@ def create_field_guide(
     for field in stage1_fields:
         ws.append([
             "第一阶段",
-            f"第一阶段.{field}",
-            "第一阶段模型输出或程序派生字段",
+            display_field_name("第一阶段", field),
+            (
+                "模型原始预测正确率（乘数前）"
+                if field == "original_predicted_accuracy"
+                else "程序应用高难特征乘数后的第一阶段正确率"
+                if field == "predicted_accuracy"
+                else "第一阶段模型输出或程序派生字段"
+            ),
         ])
     for field in stage2_fields:
         ws.append([
             "第二阶段",
-            f"第二阶段.{field}",
+            display_field_name("第二阶段", field),
             "第二阶段结构审计输出或程序复核字段",
         ])
     ws.append([
@@ -447,7 +336,6 @@ def create_field_guide(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True)
-    parser.add_argument("--labels")
     parser.add_argument("--output", required=True)
     return parser
 
@@ -455,15 +343,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     results = read_jsonl(Path(args.input))
-    labels = read_labels(Path(args.labels) if args.labels else None)
     wb = Workbook()
     stage1_fields, stage2_fields = create_detail_sheet(
         wb,
         results,
-        labels,
     )
-    create_question_sheet(wb, results, labels)
-    create_summary_sheet(wb, results, labels)
+    create_question_sheet(wb, results)
     create_field_guide(wb, stage1_fields, stage2_fields)
     wb.calculation.fullCalcOnLoad = True
     wb.calculation.forceFullCalc = True
