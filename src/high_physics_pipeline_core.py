@@ -135,6 +135,12 @@ FEATURE_VALUE_ALIASES: dict[str, dict[str, str]] = {
     "variable_relation": {
         "函数关系": "函数或图像关系",
     },
+    "model_relation": {
+        "单一模型多状态": "同一模型多状态",
+    },
+    "calculation_complexity": {
+        "参数计算": "参数或范围计算",
+    },
     "experiment_requirement": {
         "方案设计": "方案设计或可行性验证",
         "方案设计与器材选择": "方案设计或可行性验证",

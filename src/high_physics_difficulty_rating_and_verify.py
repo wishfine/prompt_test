@@ -432,7 +432,7 @@ def build_pipeline_error(
     """构造可续跑的错误记录；第二阶段失败时保留已付费的第一阶段结果。"""
     record = {
         **copy.deepcopy(output_base),
-        "pipeline_version": "high_physics_two_stage_v7_2",
+        "pipeline_version": "high_physics_two_stage_v7_2_1",
         "model_name": MODEL_NAME,
         "failed_stage": "stage2" if stage1 is not None else "stage1",
         "rating_error": str(error),
@@ -447,6 +447,60 @@ def build_pipeline_error(
             round(stage1_elapsed, 2) if stage1_elapsed is not None else None
         )
     return record
+
+
+def build_stage2_fallback_result(
+    *,
+    output_base: dict[str, Any],
+    stage1: dict[str, Any],
+    stage2_error: Exception,
+    stage1_usage: dict[str, int] | None,
+    stage1_elapsed: float | None,
+) -> dict[str, Any]:
+    """第二阶段失败时保留第一阶段档位，并显式转人工复核。"""
+    level = stage1["difficulty_level_step1"]
+    usage = stage1_usage or {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+    }
+    reviewed_high_count = int(
+        stage1.get("high_difficulty_feature_count") or 0
+    )
+    return {
+        **copy.deepcopy(output_base),
+        "pipeline_version": "high_physics_two_stage_v7_2_1",
+        "model_name": MODEL_NAME,
+        "temperature": TEMPERATURE,
+        "stage2_auto_adjustment_enabled": ENABLE_STAGE2_AUTO_ADJUST,
+        "difficulty_rating_stage1": copy.deepcopy(stage1),
+        "difficulty_level_step1": level,
+        "verification": None,
+        "verification_status": "failed_fallback_to_stage1",
+        "stage2_error": str(stage2_error),
+        "reviewed_high_difficulty_feature_count": reviewed_high_count,
+        "model_suggested_level": level,
+        "final_difficulty_level": level,
+        "final_adjustment": (
+            f"第二阶段失败·回退第一阶段{level}·转人工复核"
+        ),
+        "needs_manual_review": True,
+        "api_stage1_time_seconds": (
+            round(stage1_elapsed, 2)
+            if stage1_elapsed is not None
+            else None
+        ),
+        "api_stage2_time_seconds": None,
+        "api_stage1_usage": copy.deepcopy(usage),
+        "api_stage2_usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        },
+        # 第二阶段失败响应的实际计费量通常不可得；这里只保存可核实的
+        # 第一阶段 usage，避免伪造第二阶段 token。
+        "api_total_usage": copy.deepcopy(usage),
+    }
 
 
 async def call_stage1(
@@ -683,14 +737,35 @@ async def process_question(
                 retries=retries,
                 timeout=timeout,
             )
-            verification, usage2, elapsed2 = await call_stage2(
-                session=session,
-                question_text=question_text,
-                image_urls=prepared.selected_image_urls,
-                stage1=stage1,
-                retries=retries,
-                timeout=timeout,
-            )
+            try:
+                verification, usage2, elapsed2 = await call_stage2(
+                    session=session,
+                    question_text=question_text,
+                    image_urls=prepared.selected_image_urls,
+                    stage1=stage1,
+                    retries=retries,
+                    timeout=timeout,
+                )
+            except Exception as stage2_exc:
+                fallback = build_stage2_fallback_result(
+                    output_base=output_base,
+                    stage1=stage1,
+                    stage2_error=stage2_exc,
+                    stage1_usage=usage1,
+                    stage1_elapsed=elapsed1,
+                )
+                await append_jsonl(output_path, fallback)
+                await append_jsonl(
+                    error_path,
+                    build_pipeline_error(
+                        output_base=output_base,
+                        error=stage2_exc,
+                        stage1=stage1,
+                        stage1_usage=usage1,
+                        stage1_elapsed=elapsed1,
+                    ),
+                )
+                return
             reviewed_high_count = len(
                 verification["reviewed_high_difficulty_features"]
             )
@@ -711,7 +786,7 @@ async def process_question(
             }
             result = {
                 **output_base,
-                "pipeline_version": "high_physics_two_stage_v7_2",
+                "pipeline_version": "high_physics_two_stage_v7_2_1",
                 "model_name": MODEL_NAME,
                 "temperature": TEMPERATURE,
                 "stage2_auto_adjustment_enabled": (

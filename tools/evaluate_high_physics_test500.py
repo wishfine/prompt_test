@@ -154,6 +154,13 @@ def review_diagnostics(
     reviewed_direction_distribution: Counter[str] = Counter()
 
     for row in predictions.values():
+        top_level_manual_review_count += (
+            row.get("needs_manual_review") is True
+        )
+        final_differs_from_step1_count += (
+            row.get("final_difficulty_level")
+            != row.get("difficulty_level_step1")
+        )
         verification = row.get("verification")
         if not isinstance(verification, dict):
             continue
@@ -167,9 +174,6 @@ def review_diagnostics(
         multiplier_bucket_change_count += (
             verification.get("multiplier_reasonableness") == "不合理"
         )
-        top_level_manual_review_count += (
-            row.get("needs_manual_review") is True
-        )
         corrections = verification.get("supported_feature_corrections")
         if isinstance(corrections, list):
             supported_feature_correction_count += len(corrections)
@@ -179,11 +183,6 @@ def review_diagnostics(
         direction = verification.get("reviewed_direction")
         if isinstance(direction, str) and direction:
             reviewed_direction_distribution[direction] += 1
-        final_differs_from_step1_count += (
-            row.get("final_difficulty_level")
-            != row.get("difficulty_level_step1")
-        )
-
     return {
         "records_with_verification": records_with_verification,
         "structural_revision_count": structural_revision_count,

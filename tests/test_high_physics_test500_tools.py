@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import build_high_physics_test500 as builder  # noqa: E402
 import compare_high_physics_runs as comparer  # noqa: E402
 import evaluate_high_physics_test500 as evaluator  # noqa: E402
+import export_high_physics_stable_errors as stable_exporter  # noqa: E402
 import upgrade_high_physics_v3_results as upgrader  # noqa: E402
 
 
@@ -83,6 +84,13 @@ class HighPhysicsTest500ToolTests(unittest.TestCase):
                     "reviewed_direction": "维持",
                 },
             },
+            "3": {
+                "difficulty_level_step1": "难度2档",
+                "final_difficulty_level": "难度2档",
+                "needs_manual_review": True,
+                "verification": None,
+                "verification_status": "failed_fallback_to_stage1",
+            },
         }
         report = evaluator.review_diagnostics(predictions)
         self.assertEqual(report["records_with_verification"], 2)
@@ -92,7 +100,7 @@ class HighPhysicsTest500ToolTests(unittest.TestCase):
             1,
         )
         self.assertEqual(report["multiplier_bucket_change_count"], 1)
-        self.assertEqual(report["top_level_manual_review_count"], 1)
+        self.assertEqual(report["top_level_manual_review_count"], 2)
         self.assertEqual(report["final_differs_from_step1_count"], 0)
 
     def test_evaluator_reports_accuracy_scale_audit_diagnostics(self) -> None:
@@ -174,6 +182,44 @@ class HighPhysicsTest500ToolTests(unittest.TestCase):
             report["boundary_flip_counts"]["38_boundary_1to4_vs_5"],
             1,
         )
+
+    def test_stable_error_export_requires_same_wrong_prediction(self) -> None:
+        labels = {
+            "1": {"reviewed_difficulty_level": "难度2档"},
+            "2": {"reviewed_difficulty_level": "难度5档"},
+        }
+        base_result = {
+            "stem": "题目",
+            "difficulty_rating_stage1": {
+                "features": {
+                    "step_count": "3-5步",
+                    "model_explicitness": "模型完全显性",
+                    "state_count": "1个",
+                    "process_state_relation": "单一关系",
+                    "shared_model_across_subquestions": False,
+                },
+                "whole_question_burden": "较高",
+                "task_completion_structure": "单一评分任务",
+            },
+        }
+        runs = [
+            {
+                "1": {**base_result, "final_difficulty_level": "难度3档"},
+                "2": {**base_result, "final_difficulty_level": "难度4档"},
+            },
+            {
+                "1": {**base_result, "final_difficulty_level": "难度3档"},
+                "2": {**base_result, "final_difficulty_level": "难度5档"},
+            },
+            {
+                "1": {**base_result, "final_difficulty_level": "难度3档"},
+                "2": {**base_result, "final_difficulty_level": "难度4档"},
+            },
+        ]
+        rows = stable_exporter.stable_error_rows(labels, runs)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["question_id"], "1")
+        self.assertEqual(rows[0]["transition"], "2_to_3")
 
     def test_v3_upgrade_recalculates_final_level_with_bucket_guard(self) -> None:
         row = {

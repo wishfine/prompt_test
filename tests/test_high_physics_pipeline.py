@@ -764,6 +764,26 @@ class Stage1NormalizationTests(unittest.TestCase):
         )
         self.assertEqual(len(log), 2)
 
+    def test_v7_2_failure_aliases_are_normalized(self) -> None:
+        rating = {
+            "features": base_features(
+                model_relation="单一模型多状态",
+                calculation_complexity="参数计算",
+            ),
+            "reason": "测试",
+            "predicted_accuracy": 52.0,
+        }
+        normalized, log = core.normalize_stage1_rating(rating)
+        self.assertEqual(
+            normalized["features"]["model_relation"],
+            "同一模型多状态",
+        )
+        self.assertEqual(
+            normalized["features"]["calculation_complexity"],
+            "参数或范围计算",
+        )
+        self.assertEqual(len(log), 2)
+
     def test_v7_1_derives_threshold_review_and_keeps_model_raw(self) -> None:
         rating = {
             "features": base_features(graph_structure="单一示意图"),

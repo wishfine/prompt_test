@@ -20,7 +20,7 @@ class RunnerAssetTests(unittest.TestCase):
     def test_runner_exists_and_compiles(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn('"high_physics_two_stage_v7_2"', source)
+        self.assertIn('"high_physics_two_stage_v7_2_1"', source)
 
     def test_prompt_distinguishes_answer_and_shared_model_dependency(self) -> None:
         prompt = (
@@ -168,6 +168,33 @@ class RunnerAssetTests(unittest.TestCase):
             68.0,
         )
         self.assertEqual(record["api_stage1_usage"]["total_tokens"], 15)
+
+    def test_stage2_failure_falls_back_to_stage1_and_marks_manual(self) -> None:
+        result = runner.build_stage2_fallback_result(
+            output_base={
+                "question_id": "100",
+                "input_quality": {"input_sufficiency": "充分"},
+            },
+            stage1={
+                "difficulty_level_step1": "难度4档",
+                "high_difficulty_feature_count": 2,
+            },
+            stage2_error=RuntimeError("敏感内容拦截"),
+            stage1_usage={
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+            },
+            stage1_elapsed=1.25,
+        )
+        self.assertEqual(result["final_difficulty_level"], "难度4档")
+        self.assertEqual(
+            result["verification_status"],
+            "failed_fallback_to_stage1",
+        )
+        self.assertTrue(result["needs_manual_review"])
+        self.assertEqual(result["api_total_usage"]["total_tokens"], 15)
+        self.assertIn("敏感内容拦截", result["stage2_error"])
 
     def test_per_level_sampling_is_balanced_and_does_not_mutate_rows(self) -> None:
         rows = [
