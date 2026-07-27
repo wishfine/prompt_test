@@ -20,7 +20,7 @@ class RunnerAssetTests(unittest.TestCase):
     def test_runner_exists_and_compiles(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn('"high_physics_two_stage_v7"', source)
+        self.assertIn('"high_physics_two_stage_v7_1"', source)
 
     def test_runner_exposes_required_operational_controls(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
@@ -48,12 +48,20 @@ class RunnerAssetTests(unittest.TestCase):
         self.assertIn("enrich_stage1_rating", source)
         self.assertIn("normalize_stage1_rating", source)
         self.assertIn("finalize_level", source)
+        self.assertIn("ENABLE_STAGE2_AUTO_ADJUST", source)
 
     def test_verification_rejects_duplicate_high_features(self) -> None:
         value = {
             "difficulty_source": "测试",
             "feature_corrections": [],
             "missed_features": ["无"],
+            "has_structural_revision": False,
+            "adjacent_boundary_review": {
+                "boundaries_checked": ["58边界"],
+                "verdict": "维持",
+                "decisive_evidence": ["无结构修正"],
+            },
+            "confidence": "高",
             "reviewed_original_predicted_accuracy": 68.0,
             "reviewed_high_difficulty_features": ["多约束联合", "多约束联合"],
             "analysis": "测试",
@@ -66,6 +74,13 @@ class RunnerAssetTests(unittest.TestCase):
             "difficulty_source": " ",
             "feature_corrections": [],
             "missed_features": ["无"],
+            "has_structural_revision": False,
+            "adjacent_boundary_review": {
+                "boundaries_checked": ["58边界"],
+                "verdict": "维持",
+                "decisive_evidence": ["无结构修正"],
+            },
+            "confidence": "高",
             "reviewed_original_predicted_accuracy": 68.0,
             "reviewed_high_difficulty_features": [],
             "analysis": "测试",
@@ -78,6 +93,13 @@ class RunnerAssetTests(unittest.TestCase):
             "difficulty_source": "测试",
             "feature_corrections": ["不是对象"],
             "missed_features": ["无"],
+            "has_structural_revision": False,
+            "adjacent_boundary_review": {
+                "boundaries_checked": ["58边界"],
+                "verdict": "维持",
+                "decisive_evidence": ["无结构修正"],
+            },
+            "confidence": "高",
             "reviewed_original_predicted_accuracy": 68.0,
             "reviewed_high_difficulty_features": [],
             "analysis": "测试",
@@ -102,6 +124,13 @@ class RunnerAssetTests(unittest.TestCase):
                 }
             ],
             "missed_features": ["无"],
+            "has_structural_revision": True,
+            "adjacent_boundary_review": {
+                "boundaries_checked": ["58边界"],
+                "verdict": "应更简单一档",
+                "decisive_evidence": ["尝试修正非 feature 字段"],
+            },
+            "confidence": "高",
             "reviewed_original_predicted_accuracy": 68.0,
             "reviewed_high_difficulty_features": [],
             "analysis": "测试",

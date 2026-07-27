@@ -126,6 +126,9 @@ FEATURE_VALUE_ALIASES: dict[str, dict[str, str]] = {
         "纯文字加单一示意图": "多载体综合",
         "纯文字+单一示意图": "多载体综合",
     },
+    "graph_structure": {
+        "单一示意图": "无图表",
+    },
     "knowledge_L2": {
         "万有引力": "曲线运动与万有引力",
     },
@@ -694,6 +697,14 @@ def _v7_accuracy_scale_audit(
         in {"显性顺序衔接", "前后状态强依赖", "连续变化伴随边界"}
         and base_accuracy >= 58.0
     )
+    multi_experiment_high_score_conflict = (
+        features.get("primary_problem_structure") == "实验探究"
+        and task_structure == "多个异质独立任务"
+        and features.get("step_count")
+        in {"3-5步", "6-8步", "9-12步", "12步以上"}
+        and features.get("experiment_requirement") != "无"
+        and base_accuracy >= 88.0
+    )
     return {
         "metadata_version": "v7_threshold_review",
         "metadata_complete": True,
@@ -711,6 +722,9 @@ def _v7_accuracy_scale_audit(
             high_burden_structure and base_accuracy >= 58.0
         ),
         "three_state_boundary_review_risk": three_state_boundary_risk,
+        "multi_experiment_high_score_conflict": (
+            multi_experiment_high_score_conflict
+        ),
         "standard_model_score_inflation_risk": (
             familiarity in {"教材直接结论", "熟悉标准模型"}
             and (high_burden_structure or complex_structure_signals >= 3)
@@ -971,6 +985,27 @@ def normalize_stage1_rating(
             )
             features["knowledge_L1"] = derived_l1
 
+    try:
+        base_accuracy = float(rating.get("predicted_accuracy"))
+    except (TypeError, ValueError):
+        base_accuracy = None
+    raw_threshold_review = rating.get("threshold_review")
+    if base_accuracy is not None and isinstance(raw_threshold_review, dict):
+        expected_threshold_review = _expected_threshold_review(base_accuracy)
+        if raw_threshold_review != expected_threshold_review:
+            rating["threshold_review_model_raw"] = copy.deepcopy(
+                raw_threshold_review
+            )
+            rating["threshold_review"] = expected_threshold_review
+            log.append(
+                _normalization_entry(
+                    field="threshold_review",
+                    raw=raw_threshold_review,
+                    normalized=expected_threshold_review,
+                    action="derive_from_predicted_accuracy",
+                )
+            )
+
     return rating, log
 
 
@@ -979,6 +1014,10 @@ def recalculate_verification(
     current_level: str,
     original_high_count: int,
     verification: dict[str, Any],
+    original_high_features: list[str] | None = None,
+    original_accuracy: float | None = None,
+    original_features: dict[str, Any] | None = None,
+    allow_auto_adjustment: bool = False,
 ) -> dict[str, Any]:
     """根据二阶段复核事实重新计算乘数、正确率和建议档位。
 
@@ -1003,6 +1042,51 @@ def recalculate_verification(
     reviewed_features = verification.get("reviewed_high_difficulty_features")
     if not isinstance(reviewed_features, list):
         raise ValueError("reviewed_high_difficulty_features 必须为数组")
+    proposed_corrections = verification.get("feature_corrections")
+    if not isinstance(proposed_corrections, list):
+        raise ValueError("feature_corrections 必须为数组")
+    supported_corrections: list[dict[str, Any]] = []
+    unsupported_corrections: list[dict[str, Any]] = []
+    for correction in proposed_corrections:
+        field = correction.get("field") if isinstance(correction, dict) else None
+        from_value = correction.get("from") if isinstance(correction, dict) else None
+        to_value = correction.get("to") if isinstance(correction, dict) else None
+        original_value = (
+            original_features.get(field)
+            if isinstance(original_features, dict) and field in original_features
+            else None
+        )
+        target_is_legal = (
+            field in FEATURE_OPTIONS
+            and to_value in FEATURE_OPTIONS[field]
+        ) or (
+            field == "shared_model_across_subquestions"
+            and isinstance(to_value, bool)
+        )
+        correction_supported = (
+            isinstance(original_features, dict)
+            and field in original_features
+            and from_value == original_value
+            and to_value != from_value
+            and target_is_legal
+        )
+        if correction_supported:
+            supported_corrections.append(copy.deepcopy(correction))
+        else:
+            unsupported_corrections.append(copy.deepcopy(correction))
+    high_features_changed = (
+        original_high_features is not None
+        and set(reviewed_features) != set(original_high_features)
+    )
+    structural_revision_supported = bool(supported_corrections) or (
+        high_features_changed
+    )
+    model_structural_claim = verification.get("has_structural_revision")
+    if not structural_revision_supported and original_accuracy is not None:
+        model_reviewed_accuracy = reviewed_accuracy
+        reviewed_accuracy = float(original_accuracy)
+    else:
+        model_reviewed_accuracy = reviewed_accuracy
     reviewed_count = len(reviewed_features)
     reviewed_multiplier = multiplier_for_high_count(reviewed_count)
     reviewed_adjusted_accuracy = round(
@@ -1013,13 +1097,39 @@ def recalculate_verification(
     current_index = LEVEL_INDEX[current_level]
     reviewed_index = LEVEL_INDEX[reviewed_level]
     if reviewed_index == current_index:
-        reasonableness = "合理"
+        reviewed_direction = "维持"
+        proposed_reasonableness = "合理"
     elif reviewed_index < current_index:
-        reasonableness = "偏高"
+        reviewed_direction = "应更简单一档"
+        proposed_reasonableness = "偏高"
     else:
-        reasonableness = "偏低"
+        reviewed_direction = "应更难一档"
+        proposed_reasonableness = "偏低"
+
+    boundary_review = verification.get("adjacent_boundary_review") or {}
+    boundary_verdict = boundary_review.get("verdict")
+    confidence = verification.get("confidence")
+    boundary_verdict_consistent = boundary_verdict == reviewed_direction
+    auto_adjustment_eligible = (
+        allow_auto_adjustment
+        and structural_revision_supported
+        and confidence == "高"
+        and reviewed_direction != "维持"
+        and boundary_verdict_consistent
+    )
+    reasonableness = (
+        proposed_reasonableness if auto_adjustment_eligible else "合理"
+    )
 
     normalized = copy.deepcopy(verification)
+    normalized["has_structural_revision_model_raw"] = model_structural_claim
+    normalized["has_structural_revision"] = structural_revision_supported
+    normalized["supported_feature_corrections"] = supported_corrections
+    normalized["unsupported_feature_corrections"] = unsupported_corrections
+    normalized["high_difficulty_features_changed"] = high_features_changed
+    normalized["reviewed_original_predicted_accuracy_model_raw"] = (
+        model_reviewed_accuracy
+    )
     normalized["reviewed_original_predicted_accuracy"] = reviewed_accuracy
     normalized["reviewed_high_difficulty_feature_count"] = reviewed_count
     normalized["reviewed_multiplier"] = reviewed_multiplier
@@ -1032,8 +1142,17 @@ def recalculate_verification(
         else "不合理"
     )
     normalized["rating_reasonableness"] = reasonableness
+    normalized["reviewed_direction"] = reviewed_direction
+    normalized["boundary_verdict_consistent"] = boundary_verdict_consistent
+    normalized["auto_adjustment_eligible"] = auto_adjustment_eligible
+    normalized["stage2_auto_adjustment_enabled"] = allow_auto_adjustment
+    normalized["review_requires_manual"] = (
+        reviewed_direction != "维持" and not auto_adjustment_eligible
+    )
     # 保留旧输出字段名，便于现有评测和下游读取；值由程序计算而非模型决定。
-    normalized["adjusted_difficulty_level"] = reviewed_level
+    normalized["adjusted_difficulty_level"] = (
+        reviewed_level if auto_adjustment_eligible else current_level
+    )
     return normalized
 
 

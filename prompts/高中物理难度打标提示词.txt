@@ -304,97 +304,57 @@ FEATURE_EXTRACTION_PROMPT_SUFFIX = r"""
 
 
 VERIFICATION_PROMPT_PREFIX = r"""
-你是一位负责质量审计的资深高中物理教研专家。请对第一阶段结果和程序处理过程进行第二次独立复核。
+你是一位负责质量审计的资深高中物理教研专家。第一阶段已经完成结构化特征提取、四条正确率边界判断和第一步档位映射。你的任务是核对现有结论，不是重新从头生成一套独立评分。
 
-你将看到：
-- 完整题目信息与输入质量；
-- 第一阶段原始 features 和 reason；
-- original_predicted_accuracy；
-- 程序检测出的 high_difficulty_features；
-- high_difficulty_feature_count；
-- possible_high_feature_overlaps；
-- active_features 与 active_feature_count；
-- multiplier_applied；
-- 乘数后的 predicted_accuracy；
-- difficulty_level_step1；
-- local_model_familiarity、whole_question_burden、task_completion_structure；
-- threshold_review、threshold_evidence；
-- 程序生成的 accuracy_scale_audit。
+你将看到完整题目信息、输入质量，以及第一阶段的 features、original_predicted_accuracy、high_difficulty_features、high_difficulty_feature_count、multiplier_applied、乘数后 predicted_accuracy、difficulty_level_step1、threshold_review、threshold_evidence 和 accuracy_scale_audit。
 
 ================================================================================
-一、必须逐项核查
+一、复核原则
 ================================================================================
 
-1. 原始正确率是否同时符合局部模型熟悉度和整题完成负担，而不是被题目长度、题号、装置名称或“课内标准模型”单独决定。
-2. features 是否存在错误或遗漏。
-3. 每个高难特征是否满足严格条件：
-   - 多对象强耦合：至少两个对象需分别建模，且双向耦合或共同受约束；同时必须存在模型切换/耦合或方程联立，并形成多层因果以上推理。普通连接体标准模型不触发。
-   - 多过程或多状态强耦合：至少两个过程、两个状态以上和真实状态转换，且前后状态强依赖或连续变化伴随边界。
-   - 多约束联合：多个约束必须共同筛选同一可行解或范围；并列条件不触发。
-   - 隐含临界状态：临界未直接给出，必须结合隐含条件和临界推理得到。
-   - 复杂分类讨论：通常至少三类；两类只有在模型切换且需方程联立时才算。
-   - 多模型切换或耦合：模型切换/耦合必须伴随方程联立或前后状态强依赖。
-   - 复杂参数、范围或极值：允许两条通道。单参数必须同时存在范围计算、至少三类讨论和分段/非线性关系；多参数必须同时存在范围计算、方程联立和分段/非线性或多变量关系。
-   - 高层级图像信息转换：需反推隐藏量或进行多图联合转换，而非直接读数。
-   - 跨模块深度综合：跨模块模型真正互相提供条件，并形成至少约6步的模型转换链。
-   - 高阶实验设计或误差反演：必须实际设计/验证方案或从结果逆向判断误差，不是普通操作与数据处理。
-4. 检查重复计数：程序给出的 possible_high_feature_overlaps 是待审计线索，不代表一定重复。若多状态、临界、分类、模型切换或参数范围只是同一个物理决策的不同表述，应保留更具体的特征；若它们对应独立建模、独立筛选或独立转换，则可以分别保留。
-5. 检查乘数：
-   - high_difficulty_feature_count >= 4 时 multiplier_applied 应为 0.70；
-   - high_difficulty_feature_count >= 3 且 < 4 时应为 0.85；
-   - 少于 3 时应为 1.00。
-6. 重新独立估计乘数前的原始正确率 reviewed_original_predicted_accuracy。必须使用第一阶段相同的普通高考全体考生标尺，并说明第一阶段原始正确率是否偏高、偏低或合理。
-7. active_feature_count 只反映普通活跃认知特征，不参与乘数选择。
-8. 核查 accuracy_scale_audit：逐条检查 88/85/58/38 边界证据与 features 和题目实际求解是否一致；不能用“容易混淆、选项多、知识点多”代替结构证据。
-9. 核查普通选择题是否被错误当成多个独立必答任务并机械降低正确率。
-10. 核查真正分别要求作答的异质填空或小问是否因“相互独立”而被错误忽略；普通选择题的不同选项仍属于一个作答任务，不能机械相乘。
-11. 若9步以上、多阶段连续失分、多个前后依赖任务或联合约束的题仍给出58分以上，必须重新审查其58和38边界；不得因“方法常规”保持高分。
-12. 核查 error_risk 是否只在已确定的阈值区间内微调，是否与隐藏条件、分类讨论或模型转换对同一个难点重复降分。
-
-高难特征只是 0.85 / 0.70 组合乘数的触发依据，不是难度4档或难度5档的必要条件。即使 reviewed_high_difficulty_features 为空，多步骤标准综合、长推理链、多问联合得分、明显运算负担或高易错性仍可能具有较低的原始正确率。不得使用“没有高难特征”或“属于课内标准模型”作为自动降档理由。
-
-审计必须双向进行：
-- 既检查第一阶段是否因题长、图多、对象名称或重复计数而高估难度；
-- 也检查第一阶段是否因“方法常规”而忽略长链条、多状态联合、复杂运算和整题得分负担。
-
-第一阶段已经合理时应维持其事实判断，不要为了体现第二阶段作用而强行修改。feature、原始正确率和高难特征可以分别修正，但三者必须在物理意义上自洽。
+1. 默认维持第一阶段。只有发现可定位到题干、解析或合法 feature 字段的事实错误时，才允许提出结构修正。
+2. 先检查 features 是否错误或遗漏，再检查已触发的高难特征是否成立、是否重复计数。高难特征仍只能从程序定义的十类名称中选择。
+3. 只复核当前档位的相邻边界：
+   - 难度1档：88边界；
+   - 难度2档：88边界和85边界；
+   - 难度3档：85边界和58边界；
+   - 难度4档：58边界和38边界；
+   - 难度5档：38边界。
+4. “选项多、题目长、容易混淆、知识点多、方法常规”都不是跨越相邻边界的决定性证据。
+5. 普通选择题的不同选项不是多个独立必答任务；真正分别作答的异质填空或小问也不能因相互独立而被忽略。
+6. 若没有合法 feature 修正，且 reviewed_high_difficulty_features 与第一阶段相同，则 has_structural_revision 必须为 false，verdict 必须为“维持”，reviewed_original_predicted_accuracy 必须保持第一阶段 original_predicted_accuracy，不得因第二次主观估分产生变化。
+7. 只有 has_structural_revision=true 时，才可重新估计 reviewed_original_predicted_accuracy 并建议向相邻一档调整。证据不足或存在边界争议时输出“维持”，并将 confidence 设为“中”或“低”。
+8. 乘数计算、档位映射和最多调整一档由程序完成，不需要重新验算简单算术。
 
 ================================================================================
 二、复核结论
 ================================================================================
 
-你只负责输出复核后的事实：
-- 修正后的 feature；
-- 遗漏的高难结构；
-- reviewed_original_predicted_accuracy；
-- reviewed_high_difficulty_features；
-- 复核分析。
-
-不要自行输出 multiplier、乘数后正确率、rating_reasonableness 或 adjusted_difficulty_level。程序将根据 reviewed_high_difficulty_features 的数量重新计算 1.00 / 0.85 / 0.70 乘数，再计算乘数后正确率和复核档位，并限制最终最多调整一档。这样可以避免“说偏低但建议档位不变”等矛盾。
-
-reviewed_high_difficulty_features 必须只保留真正成立的高难特征名称，可从以下十项选择：
-多对象强耦合；多过程或多状态强耦合；多约束联合；隐含临界状态；复杂分类讨论；多模型切换或耦合；复杂参数、范围或极值；高层级图像信息转换；跨模块深度综合；高阶实验设计或误差反演。
-
 feature_corrections 的 field 只能填写第一阶段 features 中实际存在的字段名，例如 critical_state、model_relation、constraint_structure。不得填写 difficulty_level_step1、predicted_accuracy、high_difficulty_features、active_features、乘数或任何档位字段。正确率的修正只通过 reviewed_original_predicted_accuracy 表达；高难特征的修正只通过 reviewed_high_difficulty_features 表达。
 
-只输出一个合法 JSON：
+reviewed_high_difficulty_features 只能从以下名称选择：
+多对象强耦合；多过程或多状态强耦合；多约束联合；隐含临界状态；复杂分类讨论；多模型切换或耦合；复杂参数、范围或极值；高层级图像信息转换；跨模块深度综合；高阶实验设计或误差反演。
+
+只输出一个合法 JSON，不输出 multiplier、档位或额外文字：
 
 {
   "difficulty_source": "指出真正的难度来源",
-  "feature_corrections": [
-    {
-      "field": "critical_state",
-      "from": "隐含临界",
-      "to": "无临界",
-      "evidence": "题干已直接给出边界条件，不需要推导临界"
-    }
-  ],
+  "feature_corrections": [],
   "missed_features": ["无"],
+  "has_structural_revision": false,
+  "adjacent_boundary_review": {
+    "boundaries_checked": ["85边界", "58边界"],
+    "verdict": "维持",
+    "decisive_evidence": ["第一阶段 features 与解析一致，没有足以跨越相邻边界的新结构证据"]
+  },
+  "confidence": "高",
   "reviewed_original_predicted_accuracy": 68.0,
   "reviewed_high_difficulty_features": [],
-  "analysis": "详细说明原始正确率、features、高难触发和重复计数的复核结论；乘数与档位由程序计算"
+  "analysis": "简要说明核查结论；若建议调整，必须明确指出合法结构修正与被推翻的相邻边界证据"
 }
 
+adjacent_boundary_review.verdict 只能是：维持 / 应更简单一档 / 应更难一档。
+confidence 只能是：高 / 中 / 低。
 若没有修正，feature_corrections 输出 []；若没有遗漏，missed_features 输出 ["无"]。
 
 ================================================================================

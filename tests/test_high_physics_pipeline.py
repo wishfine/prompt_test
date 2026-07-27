@@ -764,6 +764,38 @@ class Stage1NormalizationTests(unittest.TestCase):
         )
         self.assertEqual(len(log), 2)
 
+    def test_v7_1_derives_threshold_review_and_keeps_model_raw(self) -> None:
+        rating = {
+            "features": base_features(graph_structure="单一示意图"),
+            "reason": "测试",
+            "threshold_review": {
+                "can_reach_88": False,
+                "can_reach_85": False,
+                "can_reach_58": True,
+                "can_reach_38": True,
+            },
+            "predicted_accuracy": 52.0,
+        }
+        normalized, log = core.normalize_stage1_rating(rating)
+        self.assertEqual(
+            normalized["features"]["graph_structure"],
+            "无图表",
+        )
+        self.assertEqual(
+            normalized["threshold_review"],
+            {
+                "can_reach_88": False,
+                "can_reach_85": False,
+                "can_reach_58": False,
+                "can_reach_38": True,
+            },
+        )
+        self.assertIn("threshold_review_model_raw", normalized)
+        self.assertEqual(
+            {entry["field"] for entry in log},
+            {"graph_structure", "threshold_review"},
+        )
+
     def test_unknown_physics_methods_are_dropped_and_duplicates_are_deduplicated(self) -> None:
         rating = {
             "features": base_features(
@@ -1095,7 +1127,26 @@ class VerificationRecalculationTests(unittest.TestCase):
         verification = core.recalculate_verification(
             current_level="难度4档",
             original_high_count=2,
+            original_high_features=[],
+            original_accuracy=52.0,
+            original_features=base_features(),
+            allow_auto_adjustment=True,
             verification={
+                "feature_corrections": [
+                    {
+                        "field": "model_relation",
+                        "from": "单一模型",
+                        "to": "多模型耦合",
+                        "evidence": "需要切换模型",
+                    }
+                ],
+                "has_structural_revision": True,
+                "adjacent_boundary_review": {
+                    "boundaries_checked": ["58边界"],
+                    "verdict": "应更简单一档",
+                    "decisive_evidence": ["原模型关系提取过高"],
+                },
+                "confidence": "高",
                 "reviewed_original_predicted_accuracy": 80.0,
                 "reviewed_high_difficulty_features": [
                     "多对象强耦合",
@@ -1111,6 +1162,76 @@ class VerificationRecalculationTests(unittest.TestCase):
         self.assertEqual(verification["multiplier_reasonableness"], "不合理")
         self.assertEqual(verification["rating_reasonableness"], "偏高")
         self.assertEqual(verification["adjusted_difficulty_level"], "难度3档")
+        self.assertTrue(verification["auto_adjustment_eligible"])
+
+    def test_score_only_stage2_change_is_ignored(self) -> None:
+        verification = core.recalculate_verification(
+            current_level="难度2档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=86.0,
+            original_features=base_features(),
+            verification={
+                "feature_corrections": [],
+                "has_structural_revision": True,
+                "adjacent_boundary_review": {
+                    "boundaries_checked": ["88边界", "85边界"],
+                    "verdict": "应更难一档",
+                    "decisive_evidence": ["第二次主观估分更低"],
+                },
+                "confidence": "高",
+                "reviewed_original_predicted_accuracy": 80.0,
+                "reviewed_high_difficulty_features": [],
+            },
+        )
+        self.assertFalse(verification["has_structural_revision"])
+        self.assertEqual(
+            verification["reviewed_original_predicted_accuracy"],
+            86.0,
+        )
+        self.assertEqual(verification["reviewed_difficulty_level"], "难度2档")
+        self.assertEqual(verification["rating_reasonableness"], "合理")
+        self.assertEqual(
+            verification["adjusted_difficulty_level"],
+            "难度2档",
+        )
+        self.assertFalse(verification["auto_adjustment_eligible"])
+
+    def test_stage2_auto_adjustment_is_disabled_by_default(self) -> None:
+        verification = core.recalculate_verification(
+            current_level="难度3档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=68.0,
+            original_features=base_features(),
+            verification={
+                "feature_corrections": [
+                    {
+                        "field": "model_relation",
+                        "from": "单一模型",
+                        "to": "多模型耦合",
+                        "evidence": "解析显示需要切换模型",
+                    }
+                ],
+                "has_structural_revision": True,
+                "adjacent_boundary_review": {
+                    "boundaries_checked": ["85边界", "58边界"],
+                    "verdict": "应更难一档",
+                    "decisive_evidence": ["存在模型切换"],
+                },
+                "confidence": "高",
+                "reviewed_original_predicted_accuracy": 52.0,
+                "reviewed_high_difficulty_features": [],
+            },
+        )
+        self.assertTrue(verification["has_structural_revision"])
+        self.assertFalse(verification["stage2_auto_adjustment_enabled"])
+        self.assertFalse(verification["auto_adjustment_eligible"])
+        self.assertEqual(
+            verification["adjusted_difficulty_level"],
+            "难度3档",
+        )
+        self.assertTrue(verification["review_requires_manual"])
 
     def test_reviewed_accuracy_must_be_between_zero_and_one_hundred(self) -> None:
         with self.assertRaisesRegex(ValueError, "0 到 100"):
@@ -1118,6 +1239,14 @@ class VerificationRecalculationTests(unittest.TestCase):
                 current_level="难度3档",
                 original_high_count=0,
                 verification={
+                    "feature_corrections": [],
+                    "has_structural_revision": False,
+                    "adjacent_boundary_review": {
+                        "boundaries_checked": ["85边界"],
+                        "verdict": "维持",
+                        "decisive_evidence": ["无结构修正"],
+                    },
+                    "confidence": "高",
                     "reviewed_original_predicted_accuracy": 120,
                     "reviewed_high_difficulty_features": [],
                 },
@@ -1148,8 +1277,9 @@ class PromptAssetTests(unittest.TestCase):
         self.assertIn("threshold_review", stage1)
         self.assertIn("threshold_evidence", stage1)
         self.assertIn("reviewed_original_predicted_accuracy", stage2)
-        self.assertIn("不要自行输出 multiplier", stage2)
-        self.assertIn("不是难度4档或难度5档的必要条件", stage2)
+        self.assertIn("has_structural_revision", stage2)
+        self.assertIn("adjacent_boundary_review", stage2)
+        self.assertIn("默认维持第一阶段", stage2)
         self.assertNotIn('"accuracy_anchor"', stage1)
         self.assertNotIn('"boundary_crossing_evidence"', stage1)
         self.assertNotIn('"accuracy_self_check"', stage1)

@@ -55,6 +55,9 @@ API_KEY = os.getenv("API_KEY", "not-needed")
 BASE_URL = os.getenv("BASE_URL", "http://172.22.0.35:4466/v1").rstrip("/") + "/"
 MODEL_NAME = os.getenv("MODEL_NAME", "doubao-seed-2.0-lite")
 TEMPERATURE_RAW = os.getenv("TEMPERATURE", "")
+ENABLE_STAGE2_AUTO_ADJUST = (
+    os.getenv("ENABLE_STAGE2_AUTO_ADJUST", "0").strip() == "1"
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT = ROOT / "data" / "high-physics-sample25k.jsonl"
@@ -299,6 +302,9 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
         "difficulty_source",
         "feature_corrections",
         "missed_features",
+        "has_structural_revision",
+        "adjacent_boundary_review",
+        "confidence",
         "reviewed_original_predicted_accuracy",
         "reviewed_high_difficulty_features",
         "analysis",
@@ -367,6 +373,50 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
         )
     normalized["feature_corrections"] = valid_corrections
     normalized["verification_normalization_log"] = normalization_log
+    if not isinstance(result["has_structural_revision"], bool):
+        raise ValueError("has_structural_revision 必须为布尔值")
+    boundary_review = result["adjacent_boundary_review"]
+    if not isinstance(boundary_review, dict):
+        raise ValueError("adjacent_boundary_review 必须为对象")
+    boundary_fields = {
+        "boundaries_checked",
+        "verdict",
+        "decisive_evidence",
+    }
+    boundary_missing = boundary_fields - boundary_review.keys()
+    if boundary_missing:
+        raise ValueError(
+            "adjacent_boundary_review 缺少字段："
+            f"{sorted(boundary_missing)}"
+        )
+    checked = boundary_review["boundaries_checked"]
+    if (
+        not isinstance(checked, list)
+        or not checked
+        or any(
+            value not in {"88边界", "85边界", "58边界", "38边界"}
+            for value in checked
+        )
+    ):
+        raise ValueError("boundaries_checked 必须为非空合法边界数组")
+    if boundary_review["verdict"] not in {
+        "维持",
+        "应更简单一档",
+        "应更难一档",
+    }:
+        raise ValueError("adjacent_boundary_review.verdict 含非法值")
+    decisive_evidence = boundary_review["decisive_evidence"]
+    if (
+        not isinstance(decisive_evidence, list)
+        or not decisive_evidence
+        or any(
+            not isinstance(value, str) or not value.strip()
+            for value in decisive_evidence
+        )
+    ):
+        raise ValueError("decisive_evidence 必须为非空字符串数组")
+    if result["confidence"] not in {"高", "中", "低"}:
+        raise ValueError("confidence 只能是高、中或低")
     normalized["reviewed_original_predicted_accuracy"] = reviewed_accuracy
     return normalized
 
@@ -382,7 +432,7 @@ def build_pipeline_error(
     """构造可续跑的错误记录；第二阶段失败时保留已付费的第一阶段结果。"""
     record = {
         **copy.deepcopy(output_base),
-        "pipeline_version": "high_physics_two_stage_v7",
+        "pipeline_version": "high_physics_two_stage_v7_1",
         "model_name": MODEL_NAME,
         "failed_stage": "stage2" if stage1 is not None else "stage1",
         "rating_error": str(error),
@@ -552,6 +602,14 @@ async def call_stage2(
                         original_high_count=stage1[
                             "high_difficulty_feature_count"
                         ],
+                        original_high_features=stage1[
+                            "high_difficulty_features"
+                        ],
+                        original_accuracy=stage1[
+                            "original_predicted_accuracy"
+                        ],
+                        original_features=stage1["features"],
+                        allow_auto_adjustment=ENABLE_STAGE2_AUTO_ADJUST,
                         verification=validated,
                     ),
                     total_usage,
@@ -653,17 +711,28 @@ async def process_question(
             }
             result = {
                 **output_base,
-                "pipeline_version": "high_physics_two_stage_v7",
+                "pipeline_version": "high_physics_two_stage_v7_1",
                 "model_name": MODEL_NAME,
                 "temperature": TEMPERATURE,
+                "stage2_auto_adjustment_enabled": (
+                    ENABLE_STAGE2_AUTO_ADJUST
+                ),
                 "difficulty_rating_stage1": stage1,
                 "difficulty_level_step1": stage1["difficulty_level_step1"],
                 "verification": verification,
                 "reviewed_high_difficulty_feature_count": reviewed_high_count,
                 "model_suggested_level": final.model_suggested_level,
                 "final_difficulty_level": final.final_level,
-                "final_adjustment": final.adjustment_desc,
-                "needs_manual_review": final.needs_manual_review,
+                "final_adjustment": (
+                    f"二阶段建议改档但未满足结构证据守卫·维持"
+                    f"{final.final_level}·转人工复核"
+                    if verification.get("review_requires_manual") is True
+                    else final.adjustment_desc
+                ),
+                "needs_manual_review": (
+                    final.needs_manual_review
+                    or verification.get("review_requires_manual") is True
+                ),
                 "api_stage1_time_seconds": round(elapsed1, 2),
                 "api_stage2_time_seconds": round(elapsed2, 2),
                 "api_stage1_usage": usage1,

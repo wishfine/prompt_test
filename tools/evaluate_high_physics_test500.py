@@ -106,6 +106,7 @@ def accuracy_scale_diagnostics(
     heterogeneous_task_conflict = standard_model_inflation = 0
     threshold_inconsistent = threshold_evidence_incomplete = 0
     three_state_boundary_risk = 0
+    multi_experiment_high_score_conflict = 0
 
     for row in predictions.values():
         stage1 = row.get("difficulty_rating_stage1")
@@ -165,6 +166,9 @@ def accuracy_scale_diagnostics(
         three_state_boundary_risk += (
             audit.get("three_state_boundary_review_risk") is True
         )
+        multi_experiment_high_score_conflict += (
+            audit.get("multi_experiment_high_score_conflict") is True
+        )
 
     return {
         "records_with_stage1": records_with_stage1,
@@ -185,6 +189,9 @@ def accuracy_scale_diagnostics(
         "threshold_review_inconsistent_count": threshold_inconsistent,
         "threshold_evidence_incomplete_count": threshold_evidence_incomplete,
         "three_state_boundary_review_risk_count": three_state_boundary_risk,
+        "multi_experiment_high_score_conflict_count": (
+            multi_experiment_high_score_conflict
+        ),
         "unique_original_accuracy_count": len(score_dist),
         "top_original_accuracy_values": [
             {"score": score, "count": count}
