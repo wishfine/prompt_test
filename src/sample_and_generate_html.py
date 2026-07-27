@@ -24,6 +24,27 @@ SAMPLE_PLAN = {
     "压轴题": 60
 }
 
+
+def build_sample_plan(sample_size: int) -> Dict[str, int]:
+    """按既有 500 题配比缩放抽样计划，并保证总数精确。"""
+    if sample_size <= 0:
+        raise ValueError("sample_size 必须大于 0")
+    total_weight = sum(SAMPLE_PLAN.values())
+    exact = {
+        level: sample_size * weight / total_weight
+        for level, weight in SAMPLE_PLAN.items()
+    }
+    plan = {level: int(value) for level, value in exact.items()}
+    remainder = sample_size - sum(plan.values())
+    ranked = sorted(
+        SAMPLE_PLAN,
+        key=lambda level: (exact[level] - plan[level], SAMPLE_PLAN[level]),
+        reverse=True,
+    )
+    for level in ranked[:remainder]:
+        plan[level] += 1
+    return plan
+
 LEVEL_MAP = {
     "送分题": 1,
     "基础题": 2,
@@ -51,7 +72,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>初中物理评级验收面板 (500题纯图片可视化优化版)</title>
+    <title>初中物理评级验收面板 (__REVIEW_COUNT__题纯图片可视化优化版)</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -459,7 +480,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
     <div class="header">
-        <h1>初中物理评级验收面板 (500题纯图片可视化优化版)</h1>
+        <h1>初中物理评级验收面板 (__REVIEW_COUNT__题纯图片可视化优化版)</h1>
     </div>
 
     <div class="stats-bar" id="statsBar">
@@ -491,12 +512,12 @@ __QUESTION_CARDS_PLACEHOLDER__
 
     function loadAnnotations() {
         try {
-            return JSON.parse(localStorage.getItem('physics_difficulty_annotations_500') || '{}');
+            return JSON.parse(localStorage.getItem('physics_difficulty_annotations___REVIEW_COUNT__') || '{}');
         } catch { return {}; }
     }
 
     function saveAnnotations(annotations) {
-        localStorage.setItem('physics_difficulty_annotations_500', JSON.stringify(annotations));
+        localStorage.setItem('physics_difficulty_annotations___REVIEW_COUNT__', JSON.stringify(annotations));
         updateStats();
     }
 
@@ -646,7 +667,7 @@ __QUESTION_CARDS_PLACEHOLDER__
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'physics_difficulty_human_annotations_500.jsonl';
+        a.download = 'physics_difficulty_human_annotations___REVIEW_COUNT__.jsonl';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -656,7 +677,7 @@ __QUESTION_CARDS_PLACEHOLDER__
     function exportTXT() {
         const annotations = loadAnnotations();
         let text = "==================================================\\n";
-        text += "        初中物理验收 500 题人工评议摘要报表\\n";
+        text += "        初中物理验收 __REVIEW_COUNT__ 题人工评议摘要报表\\n";
         text += "==================================================\\n\\n";
 
         let wrongCount = 0;
@@ -687,7 +708,7 @@ __QUESTION_CARDS_PLACEHOLDER__
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'physics_difficulty_review_report_500.txt';
+        a.download = 'physics_difficulty_review_report___REVIEW_COUNT__.txt';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -915,6 +936,10 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
     html_content = html_content.replace("__LEVEL_NAMES_PLACEHOLDER__", json.dumps(LEVEL_NAMES, ensure_ascii=False))
     html_content = html_content.replace("__LEVEL_MAP_PLACEHOLDER__", json.dumps(LEVEL_MAP, ensure_ascii=False))
     html_content = html_content.replace("__QUESTIONS_JSON_PLACEHOLDER__", questions_json)
+    html_content = html_content.replace(
+        "__REVIEW_COUNT__",
+        str(len(all_questions_list)),
+    )
 
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
@@ -935,6 +960,8 @@ def main():
                         help="不再二次抽样，按模型最终等级渲染输入中的全部有效结果")
     parser.add_argument("--seed", type=int, default=20260720,
                         help="按档抽样时使用的固定随机种子")
+    parser.add_argument("--sample-size", type=int, default=500,
+                        help="按模型档位抽样的总题数，默认 500；--all-results 时忽略")
 
     args = parser.parse_args()
 
@@ -1015,8 +1042,14 @@ def main():
             print(f"  {level}: {len(items)} 道")
     else:
         rng = random.Random(args.seed)
+        sample_plan = build_sample_plan(args.sample_size)
+        if len(aligned_data) < args.sample_size:
+            raise ValueError(
+                f"有效打标结果仅 {len(aligned_data)} 道，无法抽取 {args.sample_size} 道"
+            )
         print(f"\n================ 抽样计划执行（seed={args.seed}） ================")
-        for level, target_count in SAMPLE_PLAN.items():
+        remaining_by_level = {}
+        for level, target_count in sample_plan.items():
             pool = grouped_data[level]
             pool_size = len(pool)
 
@@ -1030,6 +1063,28 @@ def main():
             sampled_data.extend(sampled_items)
             level_num = LEVEL_MAP[level]
             sampled_for_html[level_num] = sampled_items
+            sampled_ids = {id(item) for item in sampled_items}
+            remaining_by_level[level] = [
+                item for item in pool if id(item) not in sampled_ids
+            ]
+
+        missing = args.sample_size - len(sampled_data)
+        if missing:
+            refill_pool = [
+                item
+                for level in SAMPLE_PLAN
+                for item in remaining_by_level[level]
+            ]
+            if len(refill_pool) < missing:
+                raise ValueError(
+                    f"可用有效结果不足，尚缺 {missing} 道，无法补足抽样"
+                )
+            refill = rng.sample(refill_pool, missing)
+            sampled_data.extend(refill)
+            for item in refill:
+                level = item["difficulty_rating"]["difficulty_level"]
+                sampled_for_html[LEVEL_MAP[level]].append(item)
+            print(f"  ↪ 从其他档剩余题目补足 {missing} 道，总数达到 {args.sample_size}")
 
     # 6. 导出抽样 JSONL
     print(f"\n正在导出抽样后的 JSONL 副本至: {args.output_jsonl} ...")

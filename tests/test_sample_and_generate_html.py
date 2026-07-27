@@ -12,6 +12,24 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SampleAndGenerateHtmlTests(unittest.TestCase):
+    def test_sample_plan_scales_to_requested_total(self) -> None:
+        self.assertEqual(
+            MODULE.build_sample_plan(1500),
+            {
+                "送分题": 300,
+                "基础题": 360,
+                "中等题": 360,
+                "拔高题": 300,
+                "压轴题": 180,
+            },
+        )
+        self.assertEqual(sum(MODULE.build_sample_plan(1501).values()), 1501)
+
+    def test_review_count_uses_dynamic_placeholder(self) -> None:
+        template = MODULE.HTML_TEMPLATE
+        self.assertIn("__REVIEW_COUNT__题", template)
+        self.assertIn("annotations___REVIEW_COUNT__", template)
+
     def test_unmarked_questions_default_to_model_accepted(self) -> None:
         template = MODULE.HTML_TEMPLATE
         self.assertIn("未标注即视为“模型判定合理”", template)
