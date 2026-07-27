@@ -119,6 +119,7 @@ FEATURE_VALUE_ALIASES: dict[str, dict[str, str]] = {
     },
     "numerical_complexity": {
         "科学记数": "常规小数或科学记数",
+        "分数运算": "常规小数或科学记数",
     },
     "information_carrier": {
         "纯文字加示意图": "多载体综合",
@@ -130,6 +131,10 @@ FEATURE_VALUE_ALIASES: dict[str, dict[str, str]] = {
     },
     "variable_relation": {
         "函数关系": "函数或图像关系",
+    },
+    "experiment_requirement": {
+        "方案设计": "方案设计或可行性验证",
+        "方案设计与器材选择": "方案设计或可行性验证",
     },
 }
 
@@ -189,6 +194,43 @@ ACCURACY_SELF_CHECK_FIELDS = {
     "options_treated_as_independent_tasks",
     "error_risk_only_used_for_local_adjustment",
 }
+
+LOCAL_MODEL_FAMILIARITY_OPTIONS = {
+    "教材直接结论",
+    "熟悉标准模型",
+    "深层课内模型",
+    "陌生迁移",
+}
+
+WHOLE_QUESTION_BURDEN_OPTIONS = {
+    "低",
+    "中",
+    "较高",
+    "高",
+    "极高",
+}
+
+TASK_COMPLETION_STRUCTURE_OPTIONS = {
+    "单一评分任务",
+    "多个同质独立任务",
+    "多个异质独立任务",
+    "多个前后依赖任务",
+    "多阶段连续失分任务",
+}
+
+THRESHOLD_REVIEW_KEYS = (
+    "can_reach_88",
+    "can_reach_85",
+    "can_reach_58",
+    "can_reach_38",
+)
+
+THRESHOLD_EVIDENCE_KEYS = (
+    "boundary_88",
+    "boundary_85",
+    "boundary_58",
+    "boundary_38",
+)
 
 QUESTION_MODEL_FIELDS = (
     "parent_id",
@@ -326,7 +368,7 @@ def _supported_boundary_evidence(
     return [name for name in evidence if supported.get(name, False)]
 
 
-def _accuracy_scale_audit(
+def _legacy_accuracy_scale_audit(
     *,
     rating: dict[str, Any],
     features: dict[str, Any],
@@ -520,6 +562,210 @@ def _accuracy_scale_audit(
             standard_model_score_inflation_risk
         ),
     }
+
+
+def _expected_threshold_review(base_accuracy: float) -> dict[str, bool]:
+    """由连续正确率机械派生四个阈值判断。"""
+    return {
+        "can_reach_88": base_accuracy >= 88.0,
+        "can_reach_85": base_accuracy >= 85.0,
+        "can_reach_58": base_accuracy >= 58.0,
+        "can_reach_38": base_accuracy >= 38.0,
+    }
+
+
+def _v7_accuracy_scale_audit(
+    *,
+    rating: dict[str, Any],
+    features: dict[str, Any],
+    base_accuracy: float,
+) -> dict[str, Any]:
+    """审计 V7 的局部熟悉度、整题负担和逐阈值判断。"""
+    metadata_fields = (
+        "local_model_familiarity",
+        "whole_question_burden",
+        "task_completion_structure",
+        "threshold_review",
+        "threshold_evidence",
+    )
+    missing = [field for field in metadata_fields if field not in rating]
+    if missing:
+        raise ValueError(f"V7 正确率标尺缺少字段：{missing}")
+
+    familiarity = rating["local_model_familiarity"]
+    burden = rating["whole_question_burden"]
+    task_structure = rating["task_completion_structure"]
+    if familiarity not in LOCAL_MODEL_FAMILIARITY_OPTIONS:
+        raise ValueError(
+            f"local_model_familiarity 含非法值：{familiarity!r}"
+        )
+    if burden not in WHOLE_QUESTION_BURDEN_OPTIONS:
+        raise ValueError(f"whole_question_burden 含非法值：{burden!r}")
+    if task_structure not in TASK_COMPLETION_STRUCTURE_OPTIONS:
+        raise ValueError(
+            f"task_completion_structure 含非法值：{task_structure!r}"
+        )
+
+    threshold_review = rating["threshold_review"]
+    if not isinstance(threshold_review, dict):
+        raise ValueError("threshold_review 必须为对象")
+    missing_review = [
+        key for key in THRESHOLD_REVIEW_KEYS if key not in threshold_review
+    ]
+    if missing_review:
+        raise ValueError(f"threshold_review 缺少字段：{missing_review}")
+    invalid_review = [
+        key
+        for key in THRESHOLD_REVIEW_KEYS
+        if not isinstance(threshold_review[key], bool)
+    ]
+    if invalid_review:
+        raise ValueError(
+            f"threshold_review 以下字段必须为布尔值：{invalid_review}"
+        )
+
+    threshold_evidence = rating["threshold_evidence"]
+    if not isinstance(threshold_evidence, dict):
+        raise ValueError("threshold_evidence 必须为对象")
+    missing_evidence = [
+        key for key in THRESHOLD_EVIDENCE_KEYS
+        if key not in threshold_evidence
+    ]
+    if missing_evidence:
+        raise ValueError(f"threshold_evidence 缺少字段：{missing_evidence}")
+    invalid_evidence = [
+        key
+        for key in THRESHOLD_EVIDENCE_KEYS
+        if not isinstance(threshold_evidence[key], str)
+        or not threshold_evidence[key].strip()
+    ]
+    if invalid_evidence:
+        raise ValueError(
+            f"threshold_evidence 以下字段必须为非空字符串：{invalid_evidence}"
+        )
+
+    expected_review = _expected_threshold_review(base_accuracy)
+    threshold_consistent = all(
+        threshold_review[key] is expected_review[key]
+        for key in THRESHOLD_REVIEW_KEYS
+    )
+    if not threshold_consistent:
+        raise ValueError(
+            "threshold_review 与 predicted_accuracy 所在连续区间不一致；"
+            f"分数 {base_accuracy} 应对应 {expected_review}"
+        )
+
+    low_structure = (
+        features.get("step_count") == "1-2步"
+        and features.get("model_explicitness") == "模型完全显性"
+        and features.get("reasoning_chain") in {"直接套用", "简单因果"}
+        and features.get("hidden_conditions") == "无"
+        and features.get("critical_state") == "无临界"
+        and features.get("classification_discussion") == "无"
+    )
+    high_burden_structure = (
+        features.get("step_count") in {"9-12步", "12步以上"}
+        or (
+            features.get("process_count") == "三个及以上过程"
+            and features.get("state_count") == "3个及以上"
+            and (
+                features.get("subquestion_dependency") == "后问依赖前问"
+                or features.get("shared_model_across_subquestions") is True
+                or features.get("process_state_relation")
+                in {"前后状态强依赖", "连续变化伴随边界"}
+            )
+        )
+    )
+    complex_structure_signals = sum(
+        (
+            features.get("step_count") in {"6-8步", "9-12步", "12步以上"},
+            features.get("model_relation") in {"模型切换", "多模型耦合"},
+            features.get("constraint_structure") == "多约束联合筛选",
+            features.get("equation_structure")
+            in {"2-3个方程联立", "4个以上方程或不等式组"},
+            features.get("hidden_conditions")
+            in {"单个隐含条件", "多个隐含条件"},
+            features.get("subquestion_dependency") == "后问依赖前问",
+        )
+    )
+    three_state_boundary_risk = (
+        features.get("state_count") == "3个及以上"
+        and features.get("process_state_relation")
+        in {"显性顺序衔接", "前后状态强依赖", "连续变化伴随边界"}
+        and base_accuracy >= 58.0
+    )
+    return {
+        "metadata_version": "v7_threshold_review",
+        "metadata_complete": True,
+        "missing_metadata_fields": [],
+        "threshold_review_consistent": True,
+        "threshold_evidence_complete": True,
+        "expected_threshold_review": expected_review,
+        "low_structure_score_conflict": (
+            low_structure
+            and base_accuracy < 85.0
+            and task_structure
+            in {"单一评分任务", "多个同质独立任务"}
+        ),
+        "high_burden_score_conflict": (
+            high_burden_structure and base_accuracy >= 58.0
+        ),
+        "three_state_boundary_review_risk": three_state_boundary_risk,
+        "standard_model_score_inflation_risk": (
+            familiarity in {"教材直接结论", "熟悉标准模型"}
+            and (high_burden_structure or complex_structure_signals >= 3)
+            and base_accuracy >= 58.0
+        ),
+        # 保留旧诊断键，便于既有评测脚本读取。
+        "anchor_range_consistent": None,
+        "below_88_justified": not threshold_review["can_reach_88"],
+        "below_85_evidence_present": not threshold_review["can_reach_85"],
+        "unsupported_boundary_evidence": [],
+        "option_probability_multiplication_risk": False,
+        "error_risk_local_adjustment_confirmed": None,
+        "complex_anchor_conflict": None,
+        "heterogeneous_task_breadth_conflict": None,
+    }
+
+
+def _accuracy_scale_audit(
+    *,
+    rating: dict[str, Any],
+    features: dict[str, Any],
+    base_accuracy: float,
+) -> dict[str, Any]:
+    """优先审计 V7 元数据，同时保持 V6/旧结果可读取。"""
+    v7_fields = {
+        "local_model_familiarity",
+        "whole_question_burden",
+        "task_completion_structure",
+        "threshold_review",
+        "threshold_evidence",
+    }
+    legacy_fields = {
+        "accuracy_anchor",
+        "boundary_crossing_evidence",
+        "accuracy_self_check",
+    }
+    if v7_fields & rating.keys():
+        return _v7_accuracy_scale_audit(
+            rating=rating,
+            features=features,
+            base_accuracy=base_accuracy,
+        )
+    if legacy_fields & rating.keys():
+        return _legacy_accuracy_scale_audit(
+            rating=rating,
+            features=features,
+            base_accuracy=base_accuracy,
+        )
+    audit = _legacy_accuracy_scale_audit(
+        rating=rating,
+        features=features,
+        base_accuracy=base_accuracy,
+    )
+    audit["missing_metadata_fields"] = sorted(v7_fields)
+    return audit
 
 
 def _normalization_entry(

@@ -613,10 +613,97 @@ class MultiplierTests(unittest.TestCase):
         self.assertEqual(
             set(output["accuracy_scale_audit"]["missing_metadata_fields"]),
             {
-                "accuracy_anchor",
-                "boundary_crossing_evidence",
-                "accuracy_self_check",
+                "local_model_familiarity",
+                "whole_question_burden",
+                "task_completion_structure",
+                "threshold_review",
+                "threshold_evidence",
             },
+        )
+
+    def test_v7_threshold_review_is_validated_against_continuous_score(self) -> None:
+        output = core.enrich_stage1_rating(
+            {
+                "features": base_features(),
+                "reason": "熟悉模型中的一次简单转换。",
+                "local_model_familiarity": "熟悉标准模型",
+                "whole_question_burden": "中",
+                "task_completion_structure": "单一评分任务",
+                "threshold_review": {
+                    "can_reach_88": False,
+                    "can_reach_85": True,
+                    "can_reach_58": True,
+                    "can_reach_38": True,
+                },
+                "threshold_evidence": {
+                    "boundary_88": "需要一次方向转换。",
+                    "boundary_85": "模型完全显性。",
+                    "boundary_58": "无连续综合链。",
+                    "boundary_38": "无压轴结构。",
+                },
+                "predicted_accuracy": 86.4,
+            }
+        )
+        audit = output["accuracy_scale_audit"]
+        self.assertEqual(audit["metadata_version"], "v7_threshold_review")
+        self.assertTrue(audit["threshold_review_consistent"])
+        self.assertEqual(output["difficulty_level_step1"], "难度2档")
+
+    def test_v7_threshold_review_rejects_score_mismatch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "连续区间不一致"):
+            core.enrich_stage1_rating(
+                {
+                    "features": base_features(),
+                    "reason": "测试",
+                    "local_model_familiarity": "熟悉标准模型",
+                    "whole_question_burden": "中",
+                    "task_completion_structure": "单一评分任务",
+                    "threshold_review": {
+                        "can_reach_88": False,
+                        "can_reach_85": False,
+                        "can_reach_58": True,
+                        "can_reach_38": True,
+                    },
+                    "threshold_evidence": {
+                        "boundary_88": "测试",
+                        "boundary_85": "测试",
+                        "boundary_58": "测试",
+                        "boundary_38": "测试",
+                    },
+                    "predicted_accuracy": 86.0,
+                }
+            )
+
+    def test_v7_flags_three_state_score_for_boundary_review(self) -> None:
+        output = core.enrich_stage1_rating(
+            {
+                "features": base_features(
+                    state_count="3个及以上",
+                    process_state_relation="前后状态强依赖",
+                ),
+                "reason": "三个前后依赖状态。",
+                "local_model_familiarity": "熟悉标准模型",
+                "whole_question_burden": "较高",
+                "task_completion_structure": "多个前后依赖任务",
+                "threshold_review": {
+                    "can_reach_88": False,
+                    "can_reach_85": False,
+                    "can_reach_58": True,
+                    "can_reach_38": True,
+                },
+                "threshold_evidence": {
+                    "boundary_88": "多状态。",
+                    "boundary_85": "存在状态依赖。",
+                    "boundary_58": "模型显性。",
+                    "boundary_38": "没有压轴结构。",
+                },
+                "predicted_accuracy": 62.0,
+            }
+        )
+        self.assertTrue(
+            output["accuracy_scale_audit"][
+                "three_state_boundary_review_risk"
+            ]
         )
 
 
@@ -656,6 +743,26 @@ class Stage1NormalizationTests(unittest.TestCase):
                 for item in log
             )
         )
+
+    def test_v6_observed_aliases_are_normalized(self) -> None:
+        rating = {
+            "features": base_features(
+                numerical_complexity="分数运算",
+                experiment_requirement="方案设计与器材选择",
+            ),
+            "reason": "测试",
+            "predicted_accuracy": 70.0,
+        }
+        normalized, log = core.normalize_stage1_rating(rating)
+        self.assertEqual(
+            normalized["features"]["numerical_complexity"],
+            "常规小数或科学记数",
+        )
+        self.assertEqual(
+            normalized["features"]["experiment_requirement"],
+            "方案设计或可行性验证",
+        )
+        self.assertEqual(len(log), 2)
 
     def test_unknown_physics_methods_are_dropped_and_duplicates_are_deduplicated(self) -> None:
         rating = {
@@ -1034,34 +1141,41 @@ class PromptAssetTests(unittest.TestCase):
         self.assertIn("predicted_accuracy < 38", stage1)
         self.assertIn("组合乘数效应", stage1)
         self.assertIn("普通高考的全体考生", stage1)
-        self.assertIn("92—96", stage1)
         self.assertIn("模板分数", stage1)
         self.assertIn("局部模型熟悉度", stage1)
         self.assertIn("整题完成负担", stage1)
-        self.assertIn("多个异质评分任务", stage1)
-        self.assertIn("这些范围互相重叠", stage1)
+        self.assertIn("task_completion_structure", stage1)
+        self.assertIn("threshold_review", stage1)
+        self.assertIn("threshold_evidence", stage1)
         self.assertIn("reviewed_original_predicted_accuracy", stage2)
         self.assertIn("不要自行输出 multiplier", stage2)
         self.assertIn("不是难度4档或难度5档的必要条件", stage2)
-        self.assertIn("accuracy_anchor", stage1)
-        self.assertIn("boundary_crossing_evidence", stage1)
-        self.assertIn("accuracy_self_check", stage1)
+        self.assertNotIn('"accuracy_anchor"', stage1)
+        self.assertNotIn('"boundary_crossing_evidence"', stage1)
+        self.assertNotIn('"accuracy_self_check"', stage1)
         self.assertIn("普通单选题或多选题整体只算一个作答任务", stage1)
         self.assertIn("error_risk 不负责决定正确率所属的大区间", stage1)
-        self.assertIn("CONCEPTUAL_MODEL_CONFLICT", stage1)
-        self.assertIn("低于 85", stage1)
+        self.assertIn("四条边界的固定判断顺序", stage1)
         self.assertIn("accuracy_scale_audit", stage2)
         blocks = re.findall(r'\{\n  "features":.*?\n\}', stage1, re.S)
         self.assertTrue(blocks)
         example = json.loads(blocks[-1])
         core.validate_feature_schema(example["features"])
         self.assertIn(
-            example["accuracy_anchor"],
-            core.ACCURACY_ANCHOR_RANGES,
+            example["local_model_familiarity"],
+            core.LOCAL_MODEL_FAMILIARITY_OPTIONS,
         )
+        self.assertIn(
+            example["whole_question_burden"],
+            core.WHOLE_QUESTION_BURDEN_OPTIONS,
+        )
+        self.assertIn(
+            example["task_completion_structure"],
+            core.TASK_COMPLETION_STRUCTURE_OPTIONS,
+        )
+        enriched = core.enrich_stage1_rating(example)
         self.assertTrue(
-            set(example["boundary_crossing_evidence"])
-            <= core.BOUNDARY_CROSSING_EVIDENCE
+            enriched["accuracy_scale_audit"]["threshold_review_consistent"]
         )
 
 

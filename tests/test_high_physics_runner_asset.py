@@ -20,7 +20,7 @@ class RunnerAssetTests(unittest.TestCase):
     def test_runner_exists_and_compiles(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn('"high_physics_two_stage_v6"', source)
+        self.assertIn('"high_physics_two_stage_v7"', source)
 
     def test_runner_exposes_required_operational_controls(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
@@ -90,7 +90,7 @@ class RunnerAssetTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "每项必须为字符串"):
             runner.validate_verification(base)
 
-    def test_verification_rejects_non_feature_correction_field(self) -> None:
+    def test_verification_ignores_non_feature_correction_field(self) -> None:
         value = {
             "difficulty_source": "测试",
             "feature_corrections": [
@@ -106,8 +106,12 @@ class RunnerAssetTests(unittest.TestCase):
             "reviewed_high_difficulty_features": [],
             "analysis": "测试",
         }
-        with self.assertRaisesRegex(ValueError, "非法 feature 修正字段"):
-            runner.validate_verification(value)
+        normalized = runner.validate_verification(value)
+        self.assertEqual(normalized["feature_corrections"], [])
+        self.assertEqual(
+            normalized["verification_normalization_log"][0]["action"],
+            "ignore_non_feature_correction",
+        )
 
     def test_stage2_error_record_preserves_paid_stage1_result(self) -> None:
         record = runner.build_pipeline_error(

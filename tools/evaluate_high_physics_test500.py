@@ -93,14 +93,19 @@ def evaluate(
 def accuracy_scale_diagnostics(
     predictions: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """汇总 V5 第一阶段正确率标尺的软审计信号。"""
+    """汇总 V6/V7 第一阶段正确率标尺的审计信号。"""
     anchor_dist: Counter[str] = Counter()
+    familiarity_dist: Counter[str] = Counter()
+    burden_dist: Counter[str] = Counter()
+    task_structure_dist: Counter[str] = Counter()
     score_dist: Counter[float] = Counter()
     records_with_stage1 = metadata_complete = 0
     anchor_inconsistent = low_structure_conflict = 0
     option_risk = error_risk_not_local = unsupported_count = 0
     complex_anchor_conflict = high_burden_score_conflict = 0
     heterogeneous_task_conflict = standard_model_inflation = 0
+    threshold_inconsistent = threshold_evidence_incomplete = 0
+    three_state_boundary_risk = 0
 
     for row in predictions.values():
         stage1 = row.get("difficulty_rating_stage1")
@@ -110,6 +115,14 @@ def accuracy_scale_diagnostics(
         anchor = stage1.get("accuracy_anchor")
         if isinstance(anchor, str) and anchor:
             anchor_dist[anchor] += 1
+        for field, counter in (
+            ("local_model_familiarity", familiarity_dist),
+            ("whole_question_burden", burden_dist),
+            ("task_completion_structure", task_structure_dist),
+        ):
+            value = stage1.get(field)
+            if isinstance(value, str) and value:
+                counter[value] += 1
         try:
             score_dist[float(stage1["original_predicted_accuracy"])] += 1
         except (KeyError, TypeError, ValueError):
@@ -143,6 +156,15 @@ def accuracy_scale_diagnostics(
         standard_model_inflation += (
             audit.get("standard_model_score_inflation_risk") is True
         )
+        threshold_inconsistent += (
+            audit.get("threshold_review_consistent") is False
+        )
+        threshold_evidence_incomplete += (
+            audit.get("threshold_evidence_complete") is False
+        )
+        three_state_boundary_risk += (
+            audit.get("three_state_boundary_review_risk") is True
+        )
 
     return {
         "records_with_stage1": records_with_stage1,
@@ -160,12 +182,18 @@ def accuracy_scale_diagnostics(
         "standard_model_score_inflation_risk_count": (
             standard_model_inflation
         ),
+        "threshold_review_inconsistent_count": threshold_inconsistent,
+        "threshold_evidence_incomplete_count": threshold_evidence_incomplete,
+        "three_state_boundary_review_risk_count": three_state_boundary_risk,
         "unique_original_accuracy_count": len(score_dist),
         "top_original_accuracy_values": [
             {"score": score, "count": count}
             for score, count in score_dist.most_common(15)
         ],
         "anchor_distribution": dict(anchor_dist),
+        "local_model_familiarity_distribution": dict(familiarity_dist),
+        "whole_question_burden_distribution": dict(burden_dist),
+        "task_completion_structure_distribution": dict(task_structure_dist),
     }
 
 

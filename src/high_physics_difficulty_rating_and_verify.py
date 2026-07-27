@@ -312,7 +312,10 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"{field} 必须为非空字符串")
     if not isinstance(result["feature_corrections"], list):
         raise ValueError("feature_corrections 必须为数组")
+    normalized = copy.deepcopy(result)
     correction_fields = {"field", "from", "to", "evidence"}
+    valid_corrections: list[dict[str, Any]] = []
+    normalization_log: list[dict[str, Any]] = []
     for index, correction in enumerate(result["feature_corrections"]):
         if not isinstance(correction, dict):
             raise ValueError(f"feature_corrections[{index}] 必须为对象")
@@ -323,10 +326,15 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
                 f"{sorted(correction_missing)}"
             )
         if correction["field"] not in REQUIRED_FEATURE_FIELDS:
-            raise ValueError(
-                "非法 feature 修正字段："
-                f"{correction['field']!r}"
+            normalization_log.append(
+                {
+                    "action": "ignore_non_feature_correction",
+                    "field": correction["field"],
+                    "evidence": correction["evidence"],
+                }
             )
+            continue
+        valid_corrections.append(copy.deepcopy(correction))
     if not isinstance(result["missed_features"], list):
         raise ValueError("missed_features 必须为数组")
     if any(not isinstance(name, str) for name in result["missed_features"]):
@@ -357,7 +365,8 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(
             "reviewed_original_predicted_accuracy 必须在 0 到 100 之间"
         )
-    normalized = copy.deepcopy(result)
+    normalized["feature_corrections"] = valid_corrections
+    normalized["verification_normalization_log"] = normalization_log
     normalized["reviewed_original_predicted_accuracy"] = reviewed_accuracy
     return normalized
 
@@ -373,7 +382,7 @@ def build_pipeline_error(
     """构造可续跑的错误记录；第二阶段失败时保留已付费的第一阶段结果。"""
     record = {
         **copy.deepcopy(output_base),
-        "pipeline_version": "high_physics_two_stage_v6",
+        "pipeline_version": "high_physics_two_stage_v7",
         "model_name": MODEL_NAME,
         "failed_stage": "stage2" if stage1 is not None else "stage1",
         "rating_error": str(error),
@@ -405,12 +414,26 @@ async def call_stage1(
     started = time.time()
     total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     last_error = ""
+    repair_feedback: str | None = None
+    format_repair_used = False
     for attempt in range(retries):
-        prompt_text = (
-            dynamic_text
-            if cache_id
-            else FEATURE_EXTRACTION_PROMPT_PREFIX + "\n\n" + dynamic_text
-        )
+        use_cache = bool(cache_id and repair_feedback is None)
+        if repair_feedback is not None:
+            prompt_text = (
+                FEATURE_EXTRACTION_PROMPT_PREFIX
+                + "\n\n"
+                + dynamic_text
+                + "\n\n【格式修复要求】\n"
+                + repair_feedback
+                + "\n请重新输出完整合法 JSON。不得省略任何 features、"
+                "V7 正确率标尺字段或 predicted_accuracy。"
+            )
+        else:
+            prompt_text = (
+                dynamic_text
+                if use_cache
+                else FEATURE_EXTRACTION_PROMPT_PREFIX + "\n\n" + dynamic_text
+            )
         payload: dict[str, Any] = {
             "model": MODEL_NAME,
             "input": [
@@ -422,7 +445,7 @@ async def call_stage1(
             "thinking": {"type": "disabled"},
             "max_output_tokens": 4000,
         }
-        if cache_id:
+        if use_cache:
             payload["previous_response_id"] = cache_id
         if TEMPERATURE is not None:
             payload["temperature"] = TEMPERATURE
@@ -433,18 +456,30 @@ async def call_stage1(
                 for key in total_usage:
                     total_usage[key] += current_usage[key]
                 parsed = _parse_json_object(_extract_output_text(body))
-                raw_features = copy.deepcopy(parsed.get("features"))
-                normalized, normalization_log = normalize_stage1_rating(
-                    parsed
-                )
-                enriched = enrich_stage1_rating(
-                    normalized,
-                    features_model_raw=raw_features,
-                    normalization_log=normalization_log,
-                )
+                try:
+                    raw_features = copy.deepcopy(parsed.get("features"))
+                    normalized, normalization_log = normalize_stage1_rating(
+                        parsed
+                    )
+                    enriched = enrich_stage1_rating(
+                        normalized,
+                        features_model_raw=raw_features,
+                        normalization_log=normalization_log,
+                    )
+                except ValueError as exc:
+                    if not format_repair_used and attempt < retries - 1:
+                        repair_feedback = (
+                            f"上一次 JSON 校验失败：{exc}\n"
+                            "上一次输出如下：\n"
+                            + _json_block(parsed)
+                        )
+                        format_repair_used = True
+                        last_error = str(exc)
+                        continue
+                    raise
                 return enriched, total_usage, time.time() - started
             last_error = f"HTTP {status}: {error_text[:400]}"
-            if cache_id and "PreviousResponseNotFound" in error_text:
+            if use_cache and "PreviousResponseNotFound" in error_text:
                 if cache_state is None:
                     raise RuntimeError("第一阶段缓存状态缺失")
                 async with cache_state.refresh_lock:
@@ -618,7 +653,7 @@ async def process_question(
             }
             result = {
                 **output_base,
-                "pipeline_version": "high_physics_two_stage_v6",
+                "pipeline_version": "high_physics_two_stage_v7",
                 "model_name": MODEL_NAME,
                 "temperature": TEMPERATURE,
                 "difficulty_rating_stage1": stage1,
