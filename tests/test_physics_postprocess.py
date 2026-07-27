@@ -1302,12 +1302,22 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
     def setUp(self) -> None:
         self.original_profile = rating.RATING_PROFILE
         self.original_progressive = rating.ENABLE_PROGRESSIVE_FINAL_CHAIN
+        self.original_teacher_feedback = getattr(
+            rating,
+            "ENABLE_TEACHER_FEEDBACK_GUARDS",
+            None,
+        )
         rating.RATING_PROFILE = "gpt56_hybrid"
         rating.ENABLE_PROGRESSIVE_FINAL_CHAIN = True
+        rating.ENABLE_TEACHER_FEEDBACK_GUARDS = True
 
     def tearDown(self) -> None:
         rating.RATING_PROFILE = self.original_profile
         rating.ENABLE_PROGRESSIVE_FINAL_CHAIN = self.original_progressive
+        if self.original_teacher_feedback is None:
+            delattr(rating, "ENABLE_TEACHER_FEEDBACK_GUARDS")
+        else:
+            rating.ENABLE_TEACHER_FEEDBACK_GUARDS = self.original_teacher_feedback
 
     def postprocess(self, level: str, stem: str, **feature_values: str) -> dict:
         return rating.postprocess_physics_difficulty(
@@ -1629,6 +1639,151 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
             output["postprocess_actions"][0]["rule"],
             "gpt56_basic_to_easy_direct_quantity_estimate_guard",
         )
+
+    def test_estimate_requiring_derived_formula_stays_basic(self) -> None:
+        raw = result(
+            "基础题",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="简单因果推理",
+            problem_structure="概念判断",
+            additional_structure="无",
+            information_carrier="纯文字",
+            subquestion_dependency="无多问",
+            knowledge_count="2-3个",
+            knowledge_diff="低",
+            cross_module="同一模块内部",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {
+                "question_id": "derived-estimate",
+                "stem": "下列数据中符合实际的是",
+                "options": [
+                    "A. 教室门高约2m",
+                    "B. 人步行速度约1m/s",
+                    "C. 中学生质量约50kg",
+                    "D. 中学生从一楼到三楼克服重力做功约3000J",
+                ],
+                "analysis": "D项需要用W=mgh估算，约为3000J。",
+            },
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_direct_mass_and_speed_estimates_still_reach_easy(self) -> None:
+        output = self.postprocess(
+            "基础题",
+            "下列数据中符合实际的是：中学生质量约50kg，人步行速度约1m/s。",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="简单因果推理",
+            problem_structure="概念判断",
+            additional_structure="无",
+            information_carrier="纯文字",
+            subquestion_dependency="无多问",
+            knowledge_count="2-3个",
+            knowledge_diff="低",
+            cross_module="同一模块内部",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="无",
+            graph_table_requirement="无",
+        )
+        self.assertEqual(output["difficulty_level"], "送分题")
+
+    def test_standard_ruler_estimation_is_calibrated_to_basic(self) -> None:
+        raw = result(
+            "送分题",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="直接套用",
+            problem_structure="实验探究",
+            additional_structure="实验探究",
+            information_carrier="实验装置图",
+            knowledge_count="1个",
+            knowledge_diff="低",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="无变量关系",
+            experiment_requirement="基础操作或读数",
+            graph_table_requirement="直接读数",
+        )
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {
+                "question_id": "ruler-estimation",
+                "stem": "用刻度尺测量物体长度，物体左端没有与零刻度线对齐。",
+                "analysis": "先确定分度值，分别读出两端示数并相减，结果还要估读到分度值下一位。",
+            },
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_easy_to_basic_standard_measurement_guard",
+        )
+
+    def test_dynamic_circuit_delta_ratio_is_calibrated_to_hard(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            additional_structure="电路约束",
+            information_carrier="电路图",
+            knowledge_count="2-3个",
+            knowledge_diff="中",
+            state_count="双状态",
+            constraint_count="单一约束",
+            variable_relation="简单正反比",
+        )
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {
+                "question_id": "circuit-delta-ratio",
+                "stem": (
+                    "电源电压不变，移动滑动变阻器滑片，求电压表示数变化量"
+                    "ΔU与电流表示数变化量ΔI的比值。"
+                ),
+                "analysis": "需要比较滑片移动前后两个状态，建立ΔU与ΔI的关系。",
+            },
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_medium_to_hard_circuit_delta_ratio_guard",
+        )
+
+    def test_plain_single_trend_dynamic_circuit_stays_medium(self) -> None:
+        output = self.postprocess(
+            "中等题",
+            "电源电压不变，移动滑动变阻器滑片，只判断总电流如何变化。",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="多层因果推理",
+            problem_structure="电路综合",
+            additional_structure="电路约束",
+            information_carrier="电路图",
+            knowledge_count="2-3个",
+            knowledge_diff="中",
+            state_count="双状态",
+            constraint_count="单一约束",
+            variable_relation="简单正反比",
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
 
     def test_multi_derived_quantity_estimate_stays_basic(self) -> None:
         output = self.postprocess(

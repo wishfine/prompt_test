@@ -281,6 +281,11 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("多个派生物理量", prefix)
         self.assertIn("科学计数法换算", prefix)
 
+    def test_dynamic_circuit_change_ratio_has_a_hard_boundary_anchor(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("电压变化量与电流变化量之比", prefix)
+        self.assertIn("两个状态分别建立关系", prefix)
+
     def test_parallel_module_coverage_is_not_cross_module_fusion(self) -> None:
         prefix = self.load_prefix()
         self.assertIn("cross_module 只记录不同模块是否在同一推理链中发生融合", prefix)

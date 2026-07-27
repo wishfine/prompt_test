@@ -83,6 +83,13 @@ ENABLE_GPT56_SEVERE_DEVIATION_GUARDS = (
     not in {"0", "false", "no", "off"}
 )
 
+# 教师 500 题复核中出现的三类高置信边界，只做窄范围相邻档校准。
+# 独立开关用于离线回放和生产 A/B，不与既有 GPT-5.6 规则捆绑。
+ENABLE_TEACHER_FEEDBACK_GUARDS = (
+    os.getenv("ENABLE_TEACHER_FEEDBACK_GUARDS", "1").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
+
 
 def resolve_temperature(model_name: str, raw_value: str) -> Optional[float]:
     """Lite 服务端固定使用 temperature=1，其他模型保留环境变量配置。"""
@@ -1698,6 +1705,43 @@ def postprocess_gpt56_hybrid(
         ],
     )
 
+    # 教师复核显示，刻度尺/停表题若要求分度值判断、规范估读、
+    # 非零起点相减或多表盘合读，已超过“一次透明读数”。
+    standard_measurement_instrument = contains_any(
+        question_text,
+        ["刻度尺", "直尺", "米尺", "停表", "秒表"],
+    )
+    measurement_decision_groups = sum(
+        contains_any(question_text, terms)
+        for terms in [
+            ["分度值"],
+            ["估读", "下一位", "读作"],
+            ["非零起点", "零刻度线", "两端示数", "相减"],
+            ["小表盘", "大表盘", "分针", "秒针"],
+        ]
+    )
+    standard_measurement = bool(
+        ENABLE_TEACHER_FEEDBACK_GUARDS
+        and raw_level == "送分题"
+        and standard_measurement_instrument
+        and measurement_decision_groups >= 2
+        and features.get("step_count") == "1-2步"
+        and features.get("formula_count") == "0-1个"
+        and features.get("calculation_complexity") == "口算或直接判断"
+        and features.get("state_count") == "单状态"
+        and features.get("constraint_count") == "无约束"
+        and features.get("variable_relation") == "无变量关系"
+    )
+    if standard_measurement:
+        set_level_with_audit(
+            calibrated,
+            "基础题",
+            "gpt56_easy_to_basic_standard_measurement_guard",
+            ["刻度尺或停表规范测量", "至少两项读数决策", "需估读、相减或多表盘合读"],
+        )
+        sync_coarse_difficulty(calibrated)
+        return calibrated
+
     # 送分/基础：只使用一个低阶教材模板、没有第二次物理决策。
     # 知识点数必须为 1，防止多个独立史实/能源概念被批量降档。
     single_template_basic = bool(
@@ -1752,11 +1796,27 @@ def postprocess_gpt56_hybrid(
             ["热量"],
         ]
     )
+    derived_formula_estimate = bool(
+        derived_quantity_families
+        and (
+            "=" in question_text
+            or bool(
+                re.search(
+                    r"(?:W|P|p|F浮|Q|η)\s*[=＝]"
+                    r"|(?:做功|功率|压强|浮力|机械效率|热量).{0,20}"
+                    r"(?:公式|计算|估算)",
+                    question_text,
+                    re.IGNORECASE,
+                )
+            )
+        )
+    )
     direct_quantity_estimate = bool(
         ENABLE_GPT56_STRUCTURAL_CALIBRATION
         and raw_level == "基础题"
         and estimate_signal
         and not scientific_unit_conversion
+        and not derived_formula_estimate
         and derived_quantity_families < 3
         and features.get("step_count") == "1-2步"
         and features.get("formula_count") == "0-1个"
@@ -1940,6 +2000,40 @@ def postprocess_gpt56_hybrid(
         core_basis,
     )
     explicit_step_lower_bound = int(step_match.group(1)) if step_match else 0
+
+    # ΔU/ΔI 变化量比值要求对移动前后两个状态分别建式并消去共同量，
+    # 不等同于只判断一个电表示数的单趋势动态电路。
+    circuit_delta_ratio = bool(
+        ENABLE_TEACHER_FEEDBACK_GUARDS
+        and features.get("problem_structure") == "电路综合"
+        and features.get("state_count") in ["双状态", "多状态", "连续变化或临界状态"]
+        and contains_any(evidence_text, ["滑片", "滑动变阻器", "移动前后", "变化前后"])
+        and (
+            bool(
+                re.search(
+                    r"(?:电压|电压表).{0,20}变化量.{0,30}"
+                    r"(?:电流|电流表).{0,20}变化量.{0,12}(?:比值|之比|比)",
+                    evidence_text,
+                )
+            )
+            or bool(
+                re.search(
+                    r"[△Δ]U\s*(?:与|和|/|÷).{0,6}[△Δ]I.{0,8}(?:比值|之比|比)?",
+                    evidence_text,
+                    re.IGNORECASE,
+                )
+            )
+        )
+    )
+    if circuit_delta_ratio:
+        set_level_with_audit(
+            calibrated,
+            "拔高题",
+            "gpt56_medium_to_hard_circuit_delta_ratio_guard",
+            ["动态电路双状态", "电压与电流变化量关系", "需分别建式并消去共同量"],
+        )
+        sync_coarse_difficulty(calibrated)
+        return calibrated
 
     # GPT-5.6 裁定中，多公式力学题的完整负担经常被 Lite 用
     # “每步都常规”压成中等。层层递进题仍要求 core_basis 明确至少 5 步，
@@ -2340,6 +2434,9 @@ async def process_single_question(data: Dict[str, Any], session: aiohttp.ClientS
                 ),
                 "gpt56_severe_deviation_guards_enabled": (
                     RATING_PROFILE == "gpt56_hybrid" and ENABLE_GPT56_SEVERE_DEVIATION_GUARDS
+                ),
+                "teacher_feedback_guards_enabled": (
+                    RATING_PROFILE == "gpt56_hybrid" and ENABLE_TEACHER_FEEDBACK_GUARDS
                 ),
                 "difficulty_rating_raw": raw_result,
                 "difficulty_level_raw": raw_level,
