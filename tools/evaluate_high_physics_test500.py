@@ -14,6 +14,47 @@ LEVELS = ["难度1档", "难度2档", "难度3档", "难度4档", "难度5档"]
 LEVEL_INDEX = {level: index + 1 for index, level in enumerate(LEVELS)}
 
 
+def quadratic_weighted_kappa(
+    truth_values: list[str],
+    prediction_values: list[str],
+) -> float | None:
+    """计算五档有序标签的 quadratic weighted kappa。"""
+    if not truth_values or len(truth_values) != len(prediction_values):
+        return None
+    size = len(LEVELS)
+    observed = [[0 for _ in range(size)] for _ in range(size)]
+    truth_counts = [0 for _ in range(size)]
+    prediction_counts = [0 for _ in range(size)]
+    for truth, prediction in zip(truth_values, prediction_values):
+        truth_index = LEVEL_INDEX[truth] - 1
+        prediction_index = LEVEL_INDEX[prediction] - 1
+        observed[truth_index][prediction_index] += 1
+        truth_counts[truth_index] += 1
+        prediction_counts[prediction_index] += 1
+
+    observed_disagreement = 0.0
+    expected_disagreement = 0.0
+    denominator = float((size - 1) ** 2)
+    sample_count = len(truth_values)
+    for truth_index in range(size):
+        for prediction_index in range(size):
+            weight = (
+                (truth_index - prediction_index) ** 2 / denominator
+            )
+            observed_disagreement += (
+                weight * observed[truth_index][prediction_index]
+            )
+            expected_disagreement += (
+                weight
+                * truth_counts[truth_index]
+                * prediction_counts[prediction_index]
+                / sample_count
+            )
+    if expected_disagreement == 0:
+        return 1.0 if observed_disagreement == 0 else None
+    return round(1.0 - observed_disagreement / expected_disagreement, 4)
+
+
 def read_by_id(path: Path) -> dict[str, dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
     with path.open("r", encoding="utf-8") as handle:
@@ -44,6 +85,8 @@ def evaluate(
     absolute_error = 0
     truth_dist: Counter[str] = Counter()
     pred_dist: Counter[str] = Counter()
+    truth_values: list[str] = []
+    prediction_values: list[str] = []
     valid = 0
 
     for qid in matched:
@@ -52,6 +95,8 @@ def evaluate(
         if truth not in LEVEL_INDEX or prediction not in LEVEL_INDEX:
             continue
         valid += 1
+        truth_values.append(truth)
+        prediction_values.append(prediction)
         truth_dist[truth] += 1
         pred_dist[prediction] += 1
         confusion[truth][prediction] += 1
@@ -78,6 +123,10 @@ def evaluate(
         "exact_match_rate": round(exact / valid, 4) if valid else None,
         "within_one_level_rate": round(within_one / valid, 4) if valid else None,
         "mae": round(absolute_error / valid, 4) if valid else None,
+        "quadratic_weighted_kappa": quadratic_weighted_kappa(
+            truth_values,
+            prediction_values,
+        ),
         "severe_deviation_count": severe,
         "over_predicted": over,
         "under_predicted": under,
@@ -87,6 +136,70 @@ def evaluate(
         "confusion_matrix": confusion,
         "missing_prediction_ids": len(labels.keys() - predictions.keys()),
         "unexpected_prediction_ids": len(predictions.keys() - labels.keys()),
+    }
+
+
+def review_diagnostics(
+    predictions: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """区分二阶段改档建议、乘数桶争议和顶层人工复核标记。"""
+    records_with_verification = 0
+    structural_revision_count = 0
+    explicit_adjacent_adjustment_manual_count = 0
+    multiplier_bucket_change_count = 0
+    top_level_manual_review_count = 0
+    supported_feature_correction_count = 0
+    high_feature_set_changed_count = 0
+    final_differs_from_step1_count = 0
+    reviewed_direction_distribution: Counter[str] = Counter()
+
+    for row in predictions.values():
+        verification = row.get("verification")
+        if not isinstance(verification, dict):
+            continue
+        records_with_verification += 1
+        structural_revision_count += (
+            verification.get("has_structural_revision") is True
+        )
+        explicit_adjacent_adjustment_manual_count += (
+            verification.get("review_requires_manual") is True
+        )
+        multiplier_bucket_change_count += (
+            verification.get("multiplier_reasonableness") == "不合理"
+        )
+        top_level_manual_review_count += (
+            row.get("needs_manual_review") is True
+        )
+        corrections = verification.get("supported_feature_corrections")
+        if isinstance(corrections, list):
+            supported_feature_correction_count += len(corrections)
+        high_feature_set_changed_count += (
+            verification.get("high_difficulty_features_changed") is True
+        )
+        direction = verification.get("reviewed_direction")
+        if isinstance(direction, str) and direction:
+            reviewed_direction_distribution[direction] += 1
+        final_differs_from_step1_count += (
+            row.get("final_difficulty_level")
+            != row.get("difficulty_level_step1")
+        )
+
+    return {
+        "records_with_verification": records_with_verification,
+        "structural_revision_count": structural_revision_count,
+        "explicit_adjacent_adjustment_manual_count": (
+            explicit_adjacent_adjustment_manual_count
+        ),
+        "multiplier_bucket_change_count": multiplier_bucket_change_count,
+        "top_level_manual_review_count": top_level_manual_review_count,
+        "supported_feature_correction_count": (
+            supported_feature_correction_count
+        ),
+        "high_feature_set_changed_count": high_feature_set_changed_count,
+        "final_differs_from_step1_count": final_differs_from_step1_count,
+        "reviewed_direction_distribution": dict(
+            reviewed_direction_distribution
+        ),
     }
 
 
@@ -221,6 +334,7 @@ def main() -> None:
         "accuracy_scale_diagnostics": accuracy_scale_diagnostics(
             predictions
         ),
+        "review_diagnostics": review_diagnostics(predictions),
     }
     print(json.dumps(reports, ensure_ascii=False, indent=2))
 

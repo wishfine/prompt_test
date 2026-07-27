@@ -20,7 +20,19 @@ class RunnerAssetTests(unittest.TestCase):
     def test_runner_exists_and_compiles(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn('"high_physics_two_stage_v7_1"', source)
+        self.assertIn('"high_physics_two_stage_v7_2"', source)
+
+    def test_prompt_distinguishes_answer_and_shared_model_dependency(self) -> None:
+        prompt = (
+            ROOT / "prompts" / "高中物理难度打标提示词.txt"
+        ).read_text(encoding="utf-8")
+        self.assertIn("不得用“答案不复用”推出“不共享模型”", prompt)
+        self.assertIn(
+            "task_completion_structure 描述答案和失分传播方式，"
+            "不能替代 shared_model_across_subquestions",
+            prompt,
+        )
+        self.assertIn("系统误差消除和方案评价", prompt)
 
     def test_runner_exposes_required_operational_controls(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")

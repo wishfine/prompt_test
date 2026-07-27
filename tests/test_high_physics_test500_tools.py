@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import build_high_physics_test500 as builder  # noqa: E402
+import compare_high_physics_runs as comparer  # noqa: E402
 import evaluate_high_physics_test500 as evaluator  # noqa: E402
 import upgrade_high_physics_v3_results as upgrader  # noqa: E402
 
@@ -52,6 +53,47 @@ class HighPhysicsTest500ToolTests(unittest.TestCase):
         self.assertEqual(report["within_one_level_rate"], 0.6667)
         self.assertEqual(report["severe_deviation_count"], 1)
         self.assertEqual(report["under_predicted"], 1)
+        self.assertIsNotNone(report["quadratic_weighted_kappa"])
+
+    def test_evaluator_distinguishes_review_manual_reasons(self) -> None:
+        predictions = {
+            "1": {
+                "difficulty_level_step1": "难度4档",
+                "final_difficulty_level": "难度4档",
+                "needs_manual_review": True,
+                "verification": {
+                    "has_structural_revision": True,
+                    "review_requires_manual": True,
+                    "multiplier_reasonableness": "不合理",
+                    "supported_feature_corrections": [],
+                    "high_difficulty_features_changed": True,
+                    "reviewed_direction": "应更难一档",
+                },
+            },
+            "2": {
+                "difficulty_level_step1": "难度3档",
+                "final_difficulty_level": "难度3档",
+                "needs_manual_review": False,
+                "verification": {
+                    "has_structural_revision": False,
+                    "review_requires_manual": False,
+                    "multiplier_reasonableness": "合理",
+                    "supported_feature_corrections": [],
+                    "high_difficulty_features_changed": False,
+                    "reviewed_direction": "维持",
+                },
+            },
+        }
+        report = evaluator.review_diagnostics(predictions)
+        self.assertEqual(report["records_with_verification"], 2)
+        self.assertEqual(report["structural_revision_count"], 1)
+        self.assertEqual(
+            report["explicit_adjacent_adjustment_manual_count"],
+            1,
+        )
+        self.assertEqual(report["multiplier_bucket_change_count"], 1)
+        self.assertEqual(report["top_level_manual_review_count"], 1)
+        self.assertEqual(report["final_differs_from_step1_count"], 0)
 
     def test_evaluator_reports_accuracy_scale_audit_diagnostics(self) -> None:
         predictions = {
@@ -98,6 +140,39 @@ class HighPhysicsTest500ToolTests(unittest.TestCase):
         self.assertEqual(
             report["anchor_distribution"],
             {"教材直接原型": 1, "熟悉标准模型": 1},
+        )
+
+    def test_multi_run_comparison_reports_boundary_flips_without_voting(self) -> None:
+        labels = {
+            "1": {"reviewed_difficulty_level": "难度2档"},
+            "2": {"reviewed_difficulty_level": "难度5档"},
+        }
+        runs = [
+            {
+                "1": {"final_difficulty_level": "难度2档"},
+                "2": {"final_difficulty_level": "难度4档"},
+            },
+            {
+                "1": {"final_difficulty_level": "难度3档"},
+                "2": {"final_difficulty_level": "难度5档"},
+            },
+            {
+                "1": {"final_difficulty_level": "难度2档"},
+                "2": {"final_difficulty_level": "难度5档"},
+            },
+        ]
+        report = comparer.stability_diagnostics(labels, runs)
+        self.assertEqual(report["common_evaluated"], 2)
+        self.assertEqual(report["all_runs_same_prediction_count"], 0)
+        self.assertEqual(
+            report["boundary_flip_counts"][
+                "85_boundary_1to2_vs_3plus"
+            ],
+            1,
+        )
+        self.assertEqual(
+            report["boundary_flip_counts"]["38_boundary_1to4_vs_5"],
+            1,
         )
 
     def test_v3_upgrade_recalculates_final_level_with_bucket_guard(self) -> None:
