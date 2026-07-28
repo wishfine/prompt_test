@@ -39,7 +39,7 @@ import physics_difficulty_rating_with_cache as rating  # noqa: E402
 
 load_dotenv()
 
-PIPELINE_VERSION = "anonymous-disagreement-judge-v1"
+PIPELINE_VERSION = "anonymous-disagreement-judge-v2"
 DEFAULT_PROMPT = ROOT / "prompts" / "初中物理匿名边界裁判提示词.txt"
 LEVELS = ["送分题", "基础题", "中等题", "拔高题", "压轴题"]
 LEVEL_INDEX = {level: index for index, level in enumerate(LEVELS)}
@@ -449,6 +449,81 @@ def _response_text(body: Dict[str, Any]) -> str:
     return text
 
 
+def api_mode_order(model_name: str, configured_mode: str) -> List[str]:
+    """返回接口尝试顺序；GLM 优先使用 Chat Completions。"""
+    if configured_mode != "auto":
+        return [configured_mode]
+    if "glm" in str(model_name).lower():
+        return ["chat_completions", "responses"]
+    return ["responses", "chat_completions"]
+
+
+def build_api_request(
+    api_mode: str,
+    model_name: str,
+    user_content: str,
+    temperature: Optional[float],
+) -> Tuple[str, Dict[str, Any]]:
+    if api_mode == "responses":
+        payload: Dict[str, Any] = {
+            "model": model_name,
+            "input": [{"role": "user", "content": user_content}],
+        }
+        # thinking 是豆包 Responses 接口的扩展字段，不发送给 GLM 等模型。
+        if "doubao" in str(model_name).lower():
+            payload["thinking"] = {"type": "disabled"}
+        endpoint = "responses"
+    elif api_mode == "chat_completions":
+        payload = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": user_content}],
+            "stream": False,
+        }
+        endpoint = "chat/completions"
+    else:
+        raise ValueError(f"不支持的 API 模式：{api_mode}")
+    if temperature is not None:
+        payload["temperature"] = temperature
+    return endpoint, payload
+
+
+def extract_api_text(api_mode: str, body: Dict[str, Any]) -> str:
+    if api_mode == "responses":
+        return _response_text(body)
+    choices = body.get("choices") or []
+    if not choices or not isinstance(choices[0], dict):
+        return ""
+    message = choices[0].get("message") or {}
+    content = message.get("content") if isinstance(message, dict) else ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(part.get("text") or "")
+            for part in content
+            if isinstance(part, dict)
+        )
+    return str(content or "")
+
+
+def extract_api_usage(api_mode: str, body: Dict[str, Any]) -> Dict[str, int]:
+    raw_usage = body.get("usage") or {}
+    if api_mode == "responses":
+        prompt_tokens = int(raw_usage.get("input_tokens", 0) or 0)
+        completion_tokens = int(raw_usage.get("output_tokens", 0) or 0)
+    else:
+        prompt_tokens = int(raw_usage.get("prompt_tokens", 0) or 0)
+        completion_tokens = int(raw_usage.get("completion_tokens", 0) or 0)
+    total_tokens = int(
+        raw_usage.get("total_tokens", prompt_tokens + completion_tokens) or 0
+    )
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
 async def call_judge_model(
     prompt: str,
     content: str,
@@ -457,9 +532,10 @@ async def call_judge_model(
     session: aiohttp.ClientSession,
     model_name: str,
     temperature: Optional[float],
+    api_mode: str,
     retries: int,
     timeout_sec: int,
-) -> Tuple[Dict[str, Any], Dict[str, int], float, str]:
+) -> Tuple[Dict[str, Any], Dict[str, int], float, str, str]:
     started = time.time()
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     last_error = ""
@@ -472,55 +548,76 @@ async def call_judge_model(
                 + validation_feedback
                 + f"\n指定边界只能是 {pair[0]}|{pair[1]}，只能选择其中一个等级。"
             )
-        payload: Dict[str, Any] = {
-            "model": model_name,
-            "input": [{"role": "user", "content": prompt + "\n\n" + retry_content}],
-            "thinking": {"type": "disabled"},
-        }
-        if temperature is not None:
-            payload["temperature"] = temperature
-        try:
-            async with session.post(
-                f"{rating.BASE_URL}responses",
-                json=payload,
-                headers={"Authorization": f"Bearer {rating.API_KEY}"},
-                timeout=aiohttp.ClientTimeout(total=timeout_sec),
-            ) as response:
-                if response.status == 200:
-                    body = await response.json()
-                    raw_usage = body.get("usage") or {}
-                    usage["prompt_tokens"] += int(raw_usage.get("input_tokens", 0) or 0)
-                    usage["completion_tokens"] += int(raw_usage.get("output_tokens", 0) or 0)
-                    usage["total_tokens"] += int(raw_usage.get("total_tokens", 0) or 0)
-                    judgment = normalize_judgment(
-                        rating.parse_model_response(_response_text(body))
-                    )
-                    error = validate_judgment(judgment, pair, role)
-                    if not error:
-                        return judgment, usage, time.time() - started, ""
-                    last_error = error
-                    validation_feedback = error
-                else:
-                    response_text = await response.text()
-                    last_error = f"HTTP {response.status}: {response_text[:300]}"
-                    validation_feedback = last_error
-                    if response.status < 500 and response.status != 429:
+        user_content = prompt + "\n\n" + retry_content
+        endpoint_errors: List[str] = []
+        stop_retrying = False
+        for current_api_mode in api_mode_order(model_name, api_mode):
+            endpoint, payload = build_api_request(
+                current_api_mode,
+                model_name,
+                user_content,
+                temperature,
+            )
+            try:
+                async with session.post(
+                    f"{rating.BASE_URL}{endpoint}",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {rating.API_KEY}"},
+                    timeout=aiohttp.ClientTimeout(total=timeout_sec),
+                ) as response:
+                    if response.status == 200:
+                        body = await response.json()
+                        for key, value in extract_api_usage(
+                            current_api_mode,
+                            body,
+                        ).items():
+                            usage[key] += value
+                        judgment = normalize_judgment(
+                            rating.parse_model_response(
+                                extract_api_text(current_api_mode, body)
+                            )
+                        )
+                        error = validate_judgment(judgment, pair, role)
+                        if not error:
+                            return (
+                                judgment,
+                                usage,
+                                time.time() - started,
+                                "",
+                                current_api_mode,
+                            )
+                        last_error = f"{current_api_mode} 输出校验失败: {error}"
+                        validation_feedback = last_error
+                        # 接口已连通，仅输出格式无效；下一次重试带校验反馈，
+                        # 不在同一次尝试中切换另一接口并重复生成。
                         break
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            last_error = str(exc)
+                    response_text = await response.text()
+                    endpoint_error = (
+                        f"{current_api_mode} HTTP {response.status}: "
+                        f"{response_text[:500]}"
+                    )
+                    endpoint_errors.append(endpoint_error)
+                    if response.status in {401, 403, 429}:
+                        stop_retrying = response.status in {401, 403}
+                        break
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                endpoint_errors.append(f"{current_api_mode}: {exc}")
+            except Exception as exc:
+                endpoint_errors.append(f"{current_api_mode}: {exc}")
+        if endpoint_errors:
+            last_error = " | ".join(endpoint_errors)
             validation_feedback = last_error
-        except Exception as exc:
-            last_error = str(exc)
-            validation_feedback = last_error
+        if stop_retrying:
+            break
         if attempt < retries - 1:
             await asyncio.sleep(2**attempt + random.random())
-    return {}, usage, time.time() - started, last_error or "裁判响应无效"
+    return {}, usage, time.time() - started, last_error or "裁判响应无效", ""
 
 
 async def call_with_semaphore(
     semaphore: Semaphore,
     **kwargs: Any,
-) -> Tuple[Dict[str, Any], Dict[str, int], float, str]:
+) -> Tuple[Dict[str, Any], Dict[str, int], float, str, str]:
     async with semaphore:
         return await call_judge_model(**kwargs)
 
@@ -549,6 +646,7 @@ async def judge_case(
     second_judge_model: str,
     arbiter_model: str,
     temperature_raw: str,
+    api_mode: str,
     retries: int,
     timeout_sec: int,
 ) -> Dict[str, Any]:
@@ -559,7 +657,7 @@ async def judge_case(
         # 仅当调用方显式传入 --temperature 时才设置，避免模型网关不兼容。
         temperature = rating.resolve_temperature(model, temperature_raw)
         content = build_judge_content(item, pair, fewshots, role, arguments)
-        result, usage, elapsed, error = await call_with_semaphore(
+        result, usage, elapsed, error, used_api_mode = await call_with_semaphore(
             semaphore,
             prompt=prompt,
             content=content,
@@ -568,6 +666,7 @@ async def judge_case(
             session=session,
             model_name=model,
             temperature=temperature,
+            api_mode=api_mode,
             retries=retries,
             timeout_sec=timeout_sec,
         )
@@ -576,6 +675,7 @@ async def judge_case(
                 "role": role,
                 "model": model,
                 "temperature": temperature,
+                "api_mode": used_api_mode,
                 "result": result,
                 "usage": usage,
                 "elapsed_seconds": round(elapsed, 3),
@@ -605,6 +705,17 @@ async def judge_case(
             "decision_source": "dual_judges_agree",
             "calls": calls,
             "error": "",
+        }
+    if not first and not second:
+        return {
+            "chosen_level": None,
+            "decision_source": "fallback_majority",
+            "calls": calls,
+            "error": (
+                "双裁判均未形成有效结果，已跳过仲裁。"
+                f" 裁判甲: {first_error or '未知错误'}；"
+                f"裁判乙: {second_error or '未知错误'}"
+            ),
         }
     if not arbiter_model:
         return {
@@ -646,6 +757,7 @@ def build_run_signature(args: argparse.Namespace, prompt: str) -> str:
         "second_judge_model": args.second_judge_model,
         "arbiter_model": args.arbiter_model,
         "temperature": args.temperature,
+        "api_mode": args.api_mode,
         "fewshot_per_level": args.fewshot_per_level,
         "seed": args.seed,
     }
@@ -724,6 +836,7 @@ async def process_case(
             args.second_judge_model,
             args.arbiter_model,
             args.temperature,
+            args.api_mode,
             args.retries,
             args.timeout,
         )
@@ -986,13 +1099,96 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="非 Lite 模型采样温度；留空则不发送。Lite 始终固定为1。",
     )
+    parser.add_argument(
+        "--api-mode",
+        choices=("auto", "responses", "chat_completions"),
+        default="auto",
+        help="模型 API 协议；auto 对 GLM 优先 Chat Completions，对豆包优先 Responses。",
+    )
     parser.add_argument("--fewshot-per-level", type=int, default=3)
     parser.add_argument("--seed", type=int, default=20260728)
     parser.add_argument("-c", "--concurrency", type=int, default=15)
     parser.add_argument("-t", "--timeout", type=int, default=180)
     parser.add_argument("-r", "--retries", type=int, default=3)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="只用第一道分歧题验证模型、接口和输出格式，不执行全量。",
+    )
+    parser.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        help="跳过全量运行前的单题连通性预检。",
+    )
     return parser
+
+
+async def run_preflight(
+    disagreement: Sequence[Dict[str, Any]],
+    labels: Dict[str, str],
+    reference_questions: Dict[str, Dict[str, Any]],
+    label_notes: Dict[str, str],
+    prompt: str,
+    args: argparse.Namespace,
+) -> Dict[str, Any]:
+    if not disagreement:
+        return {"skipped": True, "reason": "没有分歧题"}
+    case = disagreement[0]
+    pair_values = case["candidate_pair"]
+    if len(pair_values) != 2:
+        raise RuntimeError("第一道分歧题不是合法相邻边界，无法预检")
+    pair = (pair_values[0], pair_values[1])
+    fewshots = select_balanced_fewshots(
+        case["question_id"],
+        case["base_item"],
+        pair,
+        reference_questions,
+        labels,
+        label_notes,
+        args.fewshot_per_level,
+        args.seed,
+    )
+    content = build_judge_content(
+        case["base_item"],
+        pair,
+        fewshots,
+        "balanced",
+    )
+    connector = aiohttp.TCPConnector(limit=2)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        judgment, usage, elapsed, error, used_api_mode = await call_judge_model(
+            prompt=prompt,
+            content=content,
+            pair=pair,
+            role="balanced",
+            session=session,
+            model_name=args.judge_model,
+            temperature=rating.resolve_temperature(
+                args.judge_model,
+                args.temperature,
+            ),
+            api_mode=args.api_mode,
+            retries=args.retries,
+            timeout_sec=args.timeout,
+        )
+    report = {
+        "question_id": case["question_id"],
+        "candidate_pair": list(pair),
+        "model": args.judge_model,
+        "api_mode": used_api_mode,
+        "chosen_level": judgment.get("chosen_level") if judgment else None,
+        "usage": usage,
+        "elapsed_seconds": round(elapsed, 3),
+        "error": error,
+    }
+    print("单题连通性预检:", json.dumps(report, ensure_ascii=False, sort_keys=True))
+    if error or not judgment:
+        raise RuntimeError(
+            "单题预检失败，已阻止全量空跑："
+            + (error or "模型未返回合法裁判结果")
+        )
+    return report
 
 
 async def main() -> None:
@@ -1016,6 +1212,17 @@ async def main() -> None:
     print("分歧边界:", json.dumps(dict(pair_distribution), ensure_ascii=False, sort_keys=True))
     print("调用裁判前指标:", json.dumps(preflight, ensure_ascii=False, sort_keys=True))
     if args.dry_run:
+        return
+    if not args.skip_preflight or args.preflight_only:
+        await run_preflight(
+            disagreement,
+            labels,
+            reference_questions,
+            label_notes,
+            prompt,
+            args,
+        )
+    if args.preflight_only:
         return
 
     for path in (args.output, args.error):
@@ -1060,6 +1267,7 @@ async def main() -> None:
             "second_judge_model": args.second_judge_model,
             "arbiter_model": args.arbiter_model,
             "temperature": args.temperature,
+            "api_mode": args.api_mode,
             "fewshot_per_level": args.fewshot_per_level,
             "label_source": args.labels,
         }

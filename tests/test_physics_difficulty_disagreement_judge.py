@@ -178,6 +178,34 @@ class JudgmentTests(unittest.TestCase):
             judge.validate_judgment(value, pair, "balanced") or "",
         )
 
+    def test_glm_auto_mode_prefers_chat_completions(self) -> None:
+        self.assertEqual(
+            judge.api_mode_order("glm-5.2", "auto"),
+            ["chat_completions", "responses"],
+        )
+        self.assertEqual(
+            judge.api_mode_order("doubao-seed-2.0-lite", "auto"),
+            ["responses", "chat_completions"],
+        )
+
+    def test_glm_request_omits_doubao_thinking_extension(self) -> None:
+        endpoint, payload = judge.build_api_request(
+            "responses",
+            "glm-5.2",
+            "test",
+            None,
+        )
+        self.assertEqual(endpoint, "responses")
+        self.assertNotIn("thinking", payload)
+        endpoint, payload = judge.build_api_request(
+            "chat_completions",
+            "glm-5.2",
+            "test",
+            None,
+        )
+        self.assertEqual(endpoint, "chat/completions")
+        self.assertIn("messages", payload)
+
 
 class SummaryTests(unittest.TestCase):
     def test_summary_reports_target_and_per_level_metrics(self) -> None:
@@ -229,7 +257,7 @@ class DualJudgeTests(unittest.IsolatedAsyncioTestCase):
 
         async def fake_call(*_args, **kwargs):
             role = kwargs["role"]
-            return valid_judgment(pair, role, "中等题"), {}, 0.01, ""
+            return valid_judgment(pair, role, "中等题"), {}, 0.01, "", "responses"
 
         with patch.object(judge, "call_with_semaphore", side_effect=fake_call):
             result = await judge.judge_case(
@@ -244,6 +272,7 @@ class DualJudgeTests(unittest.IsolatedAsyncioTestCase):
                 "glm-5.2",
                 "glm-5.2",
                 "",
+                "auto",
                 1,
                 30,
             )
@@ -261,7 +290,7 @@ class DualJudgeTests(unittest.IsolatedAsyncioTestCase):
                 "lower_ceiling": "中等题",
                 "arbiter": "中等题",
             }[role]
-            return valid_judgment(pair, role, chosen), {}, 0.01, ""
+            return valid_judgment(pair, role, chosen), {}, 0.01, "", "responses"
 
         with patch.object(judge, "call_with_semaphore", side_effect=fake_call):
             result = await judge.judge_case(
@@ -276,12 +305,40 @@ class DualJudgeTests(unittest.IsolatedAsyncioTestCase):
                 "glm-5.2",
                 "glm-5.2",
                 "",
+                "auto",
                 1,
                 30,
             )
         self.assertEqual(result["chosen_level"], "中等题")
         self.assertEqual(result["decision_source"], "arbiter")
         self.assertEqual(len(result["calls"]), 3)
+
+    async def test_dual_total_failure_skips_arbiter(self) -> None:
+        pair = ("送分题", "基础题")
+
+        async def fake_call(*_args, **kwargs):
+            return {}, {}, 0.01, "HTTP 500", ""
+
+        with patch.object(judge, "call_with_semaphore", side_effect=fake_call):
+            result = await judge.judge_case(
+                item("q", "基础题"),
+                pair,
+                [],
+                "dual",
+                "prompt",
+                object(),
+                object(),
+                "doubao-seed-2.0-lite",
+                "doubao-seed-2.0-lite",
+                "doubao-seed-2.0-lite",
+                "",
+                "auto",
+                1,
+                30,
+            )
+        self.assertEqual(result["decision_source"], "fallback_majority")
+        self.assertEqual(len(result["calls"]), 2)
+        self.assertIn("跳过仲裁", result["error"])
 
 
 if __name__ == "__main__":
