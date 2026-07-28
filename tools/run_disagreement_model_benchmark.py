@@ -114,6 +114,14 @@ def tail_text(path: Path, limit: int = 2500) -> str:
     return text[-limit:]
 
 
+def display_path(path: Path, root: Path = ROOT) -> str:
+    """项目内使用相对路径，软链接解析到项目外时保留绝对路径。"""
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
 def load_success(model: str, run_dir: Path, elapsed: float) -> Dict[str, Any]:
     summary_path = run_dir / "results.jsonl.summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -133,7 +141,7 @@ def load_success(model: str, run_dir: Path, elapsed: float) -> Dict[str, Any]:
         "completion_tokens": usage.get("completion_tokens", 0),
         "total_tokens": usage.get("total_tokens", 0),
         "meets_90_percent": bool((summary.get("final_accuracy") or 0) >= 0.9),
-        "summary_path": str(summary_path.relative_to(ROOT)),
+        "summary_path": display_path(summary_path),
         "elapsed_seconds": round(elapsed, 3),
     }
 

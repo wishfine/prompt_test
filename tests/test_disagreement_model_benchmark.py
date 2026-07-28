@@ -56,6 +56,15 @@ class BenchmarkConfigTests(unittest.TestCase):
     def test_model_slug_removes_unsafe_characters(self) -> None:
         self.assertEqual(benchmark.model_slug(" glm-5.2\u00a0"), "glm-5.2")
 
+    def test_display_path_allows_output_outside_repo(self) -> None:
+        outside = Path("/data/example/results.json")
+        self.assertEqual(benchmark.display_path(outside), str(outside))
+        inside = benchmark.ROOT / "outputs" / "results.json"
+        self.assertEqual(
+            benchmark.display_path(inside),
+            "outputs/results.json",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
