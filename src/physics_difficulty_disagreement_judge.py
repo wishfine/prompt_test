@@ -1121,6 +1121,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="跳过全量运行前的单题连通性预检。",
     )
+    parser.add_argument(
+        "--disagreements-only",
+        action="store_true",
+        help="结果文件只保存分歧题；汇总仍按全部共同题目计算。",
+    )
     return parser
 
 
@@ -1228,7 +1233,12 @@ async def main() -> None:
     for path in (args.output, args.error):
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     done = processed_ids(args.output, signature)
-    pending = [case for question_id, case in cases.items() if question_id not in done]
+    pending = [
+        case
+        for question_id, case in cases.items()
+        if question_id not in done
+        and (not args.disagreements_only or not case["unanimous"])
+    ]
     print(f"已完成: {len(done)}，待写入: {len(pending)}，策略: {args.strategy}")
     if pending:
         semaphore = Semaphore(args.concurrency)
@@ -1268,6 +1278,7 @@ async def main() -> None:
             "arbiter_model": args.arbiter_model,
             "temperature": args.temperature,
             "api_mode": args.api_mode,
+            "disagreements_only": args.disagreements_only,
             "fewshot_per_level": args.fewshot_per_level,
             "label_source": args.labels,
         }

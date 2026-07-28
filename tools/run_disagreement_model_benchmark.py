@@ -90,6 +90,7 @@ def build_command(
             model,
             "--api-mode",
             "auto",
+            "--disagreements-only",
             "--fewshot-per-level",
             str(args.fewshot_per_level),
             "-c",

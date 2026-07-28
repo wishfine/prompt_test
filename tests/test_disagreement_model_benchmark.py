@@ -48,6 +48,7 @@ class BenchmarkConfigTests(unittest.TestCase):
             )
         self.assertIn("balanced", command)
         self.assertIn("auto", command)
+        self.assertIn("--disagreements-only", command)
         temperature_index = command.index("--temperature")
         self.assertEqual(command[temperature_index + 1], "0")
         self.assertNotIn("--arbiter-model", command)
