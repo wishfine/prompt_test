@@ -96,6 +96,9 @@ def extract_prediction(item: dict[str, Any]) -> str | None:
 
 
 def extract_raw_prediction(item: dict[str, Any]) -> str | None:
+    multi_call_raw = item.get("multi_call_raw_level")
+    if multi_call_raw in LEVEL_ORDER:
+        return multi_call_raw
     raw = item.get("difficulty_level_raw")
     if raw in LEVEL_ORDER:
         return raw

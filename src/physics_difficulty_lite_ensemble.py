@@ -51,6 +51,16 @@ def extract_level(item: Dict[str, Any]) -> str:
     return str(result.get("difficulty_level") or "") if isinstance(result, dict) else ""
 
 
+def extract_raw_level(item: Dict[str, Any]) -> str:
+    level = str(item.get("difficulty_level_raw") or "")
+    if level in LEVEL_INDEX:
+        return level
+    result = item.get("difficulty_rating_raw")
+    if isinstance(result, dict):
+        level = str(result.get("difficulty_level") or "")
+    return level if level in LEVEL_INDEX else ""
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -101,9 +111,33 @@ def merge_question(
     rows: Sequence[Dict[str, Any]],
     run_paths: Sequence[Path],
     run_hashes: Sequence[str],
+    easy_requires_unanimity: bool = False,
 ) -> Dict[str, Any]:
     predictions = [extract_level(item) for item in rows]
-    chosen_level, method = choose_level(predictions)
+    raw_predictions = [extract_raw_level(item) for item in rows]
+    valid_raw_predictions = [level for level in raw_predictions if level in LEVEL_INDEX]
+    raw_level = ""
+    raw_method = ""
+    if len(valid_raw_predictions) == len(rows):
+        raw_level, raw_method = choose_level(valid_raw_predictions)
+    majority_level, method = choose_level(predictions)
+    chosen_level = majority_level
+    calibration_actions: List[Dict[str, Any]] = []
+    if (
+        easy_requires_unanimity
+        and majority_level == "送分题"
+        and "基础题" in predictions
+    ):
+        chosen_level = "基础题"
+        method = "easy_unanimity_guard"
+        calibration_actions.append(
+            {
+                "rule": "easy_requires_unanimity",
+                "from": "送分题",
+                "to": "基础题",
+                "evidence": ["三次Lite未一致判为送分题", "至少一次独立结果判为基础题"],
+            }
+        )
     selected_index = representative_run(rows, chosen_level)
     output = copy.deepcopy(rows[selected_index])
     result = output.get("difficulty_rating")
@@ -115,13 +149,19 @@ def merge_question(
 
     counts = Counter(predictions)
     output["multi_call_final_level"] = chosen_level
+    output["multi_call_raw_level"] = raw_level
     output["lite_self_consistency"] = {
         "pipeline_version": PIPELINE_VERSION,
         "run_count": len(rows),
         "run_predictions": predictions,
+        "raw_run_predictions": raw_predictions,
+        "raw_consensus_level": raw_level,
+        "raw_decision_method": raw_method,
         "vote_counts": {level: counts[level] for level in LEVELS if counts[level]},
         "unanimous": len(counts) == 1,
         "decision_method": method,
+        "majority_level_before_calibration": majority_level,
+        "calibration_actions": calibration_actions,
         "representative_run": selected_index + 1,
         "run_files": [str(path) for path in run_paths],
         "run_sha256": list(run_hashes),
@@ -149,6 +189,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="独立评级 JSONL，可重复指定；建议使用3或5次",
     )
     parser.add_argument("-o", "--output", required=True)
+    parser.add_argument(
+        "--easy-requires-unanimity",
+        action="store_true",
+        help="三次未一致判送分且至少一次判基础时，保守输出基础题",
+    )
     return parser
 
 
@@ -187,6 +232,7 @@ def main() -> None:
                 question_rows,
                 run_paths,
                 run_hashes,
+                easy_requires_unanimity=args.easy_requires_unanimity,
             )
             level = str(output["multi_call_final_level"])
             method = str(output["lite_self_consistency"]["decision_method"])
@@ -199,6 +245,7 @@ def main() -> None:
         "pipeline_version": PIPELINE_VERSION,
         "questions": len(first_order),
         "run_count": len(run_paths),
+        "easy_requires_unanimity": args.easy_requires_unanimity,
         "unanimous_count": unanimous_count,
         "disagreement_count": len(first_order) - unanimous_count,
         "decision_methods": dict(method_distribution),

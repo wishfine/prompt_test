@@ -43,6 +43,28 @@ class TeacherLabelRegressionTests(unittest.TestCase):
         self.assertEqual(result["raw_evaluation"]["prediction_distribution"]["基础题"], 1)
         self.assertEqual(result["postprocess_rules"]["medium_fix"]["improved"], 1)
 
+    def test_evaluate_prefers_multi_call_raw_consensus(self) -> None:
+        row = {
+            "question_id": "q1",
+            "difficulty_level_raw": "基础题",
+            "multi_call_raw_level": "中等题",
+            "difficulty_rating": {"difficulty_level": "中等题"},
+            "postprocess_actions": [],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.jsonl"
+            path.write_text(
+                json.dumps(row, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            result = evaluate(path, {"q1": "中等"})
+
+        self.assertEqual(result["raw_evaluation"]["exact_match_rate"], 1.0)
+        self.assertEqual(
+            result["raw_evaluation"]["prediction_distribution"]["中等题"],
+            1,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

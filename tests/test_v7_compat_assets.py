@@ -67,9 +67,8 @@ class ProductionPromptAssetTests(unittest.TestCase):
     def test_production_prompt_uses_direct_retrieval_bundle_easy_boundary(self) -> None:
         prefix = self.load_prefix()
         self.assertIn("直接检索束", prefix)
-        self.assertIn("不按章节或小节定义", prefix)
-        self.assertIn("不同教材事实", prefix)
-        self.assertIn("一步直接识别", prefix)
+        self.assertIn("不按章节或小节定义，而按回答规则定义", prefix)
+        self.assertIn("同一个教材结论或同一种识别规则", prefix)
         self.assertIn("分子动理论知识结构图", prefix)
         self.assertIn("多个空也不等于多个应用步骤", prefix)
 
@@ -279,8 +278,8 @@ class ProductionPromptAssetTests(unittest.TestCase):
         prefix = self.load_prefix()
         self.assertIn("多个不同物理量的教材常见量级", prefix)
         self.assertIn("仍可判送分题", prefix)
-        self.assertIn("多派生量建模", prefix)
-        self.assertIn("公式选择、单位换算", prefix)
+        self.assertIn("多个派生物理量", prefix)
+        self.assertIn("科学计数法换算", prefix)
 
     def test_nontrivial_workload_distinguishes_answer_independence_from_model_independence(
         self,
