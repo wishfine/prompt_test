@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -205,6 +207,43 @@ class JudgmentTests(unittest.TestCase):
         )
         self.assertEqual(endpoint, "chat/completions")
         self.assertIn("messages", payload)
+
+
+class JsonlRecoveryTests(unittest.TestCase):
+    def test_repair_drops_truncated_tail_and_preserves_valid_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.jsonl"
+            path.write_bytes(
+                b'{"question_id":"q1"}\n'
+                b'{"question_id":"q2"}\n'
+                b'{"question_id":"q3","reason":"truncated'
+            )
+            report = judge.repair_jsonl_file(str(path))
+            rows = [
+                json.loads(line)
+                for line in path.read_text(encoding="utf-8").splitlines()
+            ]
+        self.assertEqual(report, {"valid": 2, "dropped": 1, "rewritten": 1})
+        self.assertEqual([row["question_id"] for row in rows], ["q1", "q2"])
+
+    def test_repair_adds_missing_final_newline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.jsonl"
+            path.write_text('{"question_id":"q1"}', encoding="utf-8")
+            report = judge.repair_jsonl_file(str(path))
+            repaired = path.read_bytes()
+        self.assertEqual(report, {"valid": 1, "dropped": 0, "rewritten": 1})
+        self.assertTrue(repaired.endswith(b"\n"))
+
+    def test_repair_keeps_clean_file_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "results.jsonl"
+            original = b'{"question_id":"q1"}\n'
+            path.write_bytes(original)
+            report = judge.repair_jsonl_file(str(path))
+            repaired = path.read_bytes()
+        self.assertEqual(report, {"valid": 1, "dropped": 0, "rewritten": 0})
+        self.assertEqual(repaired, original)
 
 
 class SummaryTests(unittest.TestCase):

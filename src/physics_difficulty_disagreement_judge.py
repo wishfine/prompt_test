@@ -766,6 +766,54 @@ def build_run_signature(args: argparse.Namespace, prompt: str) -> str:
     ).hexdigest()
 
 
+def repair_jsonl_file(path: str) -> Dict[str, int]:
+    """清除异常中断留下的残缺 JSONL 行，并保留全部完整记录。
+
+    磁盘写满或进程被终止时，最后一次追加可能只写入半行。直接续跑会在
+    ``json.loads`` 处失败，而且继续追加还会把新记录拼接到残缺行之后。
+    因此启动时先以同目录临时文件原子修复；完整记录不会被重新请求。
+    """
+    source = Path(path)
+    report = {"valid": 0, "dropped": 0, "rewritten": 0}
+    if not source.exists() or source.stat().st_size == 0:
+        return report
+
+    valid_lines: List[bytes] = []
+    needs_rewrite = False
+    for raw_line in source.read_bytes().splitlines(keepends=True):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        try:
+            json.loads(stripped.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            report["dropped"] += 1
+            needs_rewrite = True
+            continue
+        report["valid"] += 1
+        normalized = stripped + b"\n"
+        valid_lines.append(normalized)
+        if raw_line != normalized:
+            # 即使最后一行 JSON 完整，只要缺少换行也必须修复，防止续写粘连。
+            needs_rewrite = True
+
+    if not needs_rewrite:
+        return report
+
+    temporary = source.with_name(f".{source.name}.repair.tmp")
+    try:
+        with temporary.open("wb") as handle:
+            handle.writelines(valid_lines)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, source)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    report["rewritten"] = 1
+    return report
+
+
 def processed_ids(path: str, signature: str) -> set[str]:
     done: set[str] = set()
     if not os.path.exists(path):
@@ -1232,6 +1280,14 @@ async def main() -> None:
 
     for path in (args.output, args.error):
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        repair_report = repair_jsonl_file(path)
+        if repair_report["rewritten"]:
+            print(
+                "已修复中断残留 JSONL："
+                f"{os.path.abspath(path)}，"
+                f"保留 {repair_report['valid']} 行，"
+                f"删除 {repair_report['dropped']} 行残缺记录。"
+            )
     done = processed_ids(args.output, signature)
     pending = [
         case
