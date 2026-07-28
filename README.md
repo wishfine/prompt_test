@@ -62,13 +62,20 @@ Mini 等支持调温度的模型仍会读取 `TEMPERATURE`；未配置时不发�
 
 ## 评级配置
 
-- `v7_stable`：默认值。使用正式 Prompt、冻结兼容后处理，再执行少量可泛化的结构稳定规则。
+- 正式生产入口固定使用 `gpt56_hybrid`、`doubao-seed-2.0-lite`、三次独立评级和结构化送分边界校准；不要再手工拼接生产环境变量。
+- `v7_stable`：直接调用底层评级脚本时的兼容默认值，保留用于历史回放，不是当前生产编排入口。
 - `v7_compat`：旧 V7 原样对照，不执行稳定补丁。
 - `fused`、`generalized`：保留用于历史实验对照，不再作为生产默认路径。
 
-正式 Prompt 当前冻结为 `accuracyfix` 生产版，运行配置名仍为 `v7_stable`。文件内容精确对应提交 `4819dca` 中的 `prompts/初中物理难度打标提示词.txt`；实验昵称不是新的 `RATING_PROFILE`，运行时不要填写 `accuracyfix`。
+正式生产固定读取 `prompts/初中物理难度打标提示词.txt`，并由生产入口设置
+`RATING_PROFILE=gpt56_hybrid`。`accuracyfix` 等名称只是历史实验昵称，不是可用的
+`RATING_PROFILE`；`v7_stable` 仅用于历史单次回放。
 
-该版本使用 Lite 在同一批 1066 题上独立运行三次，以 GPT-5.6 裁定标签严格评估，最终完全一致率分别为 72.98%、71.95%、72.23%，平均 72.39%；相差不超过一档比例平均 99.65%，MAE 平均 0.2795。后续 final-candidate 扩充规则后三次平均准确率降至 70.51%，因此正式 Prompt 已恢复并冻结到 `accuracyfix`。第二阶段边界复核工具继续保留，但不参与首轮 Prompt，也不进行三次投票。
+历史 `accuracyfix` 实验使用 Lite 在同一批 1066 题上独立运行三次，以 GPT-5.6
+裁定标签严格评估，最终完全一致率分别为 72.98%、71.95%、72.23%，平均
+72.39%；相差不超过一档比例平均 99.65%，MAE 平均 0.2795。该结果仅作历史
+基线，不代表当前三次集成生产指标。第二阶段边界复核工具继续保留，但不进入
+正式生产流程。
 
 ## 评测命令
 
@@ -106,6 +113,52 @@ python src/physics_difficulty_rating_with_cache.py \
 - 输出顶层 `rating_profile` 记录本次规则配置；`difficulty_level_raw` 是模型原始评级，`difficulty_rating.difficulty_level` 是后处理后的评级，`postprocess_actions` 记录后处理动作。
 
 完整的数据口径、few-shot 表、后处理规则和 200 题分层回归命令见 [PHYSICS_RATING_REVISION.md](PHYSICS_RATING_REVISION.md)。
+
+## 正式生产运行
+
+正式生产只使用以下冻结流程：
+
+```text
+同一输入独立调用 Lite 三次
+→ 每次执行正式 Prompt 与 gpt56_hybrid 后处理
+→ 确定性多数票
+→ 仅在送分/基础分歧有显性应用证据时执行结构化校准
+→ 输出完整性、版本签名和分布监控
+```
+
+运行：
+
+```bash
+cd ~/prompt_test
+git pull --ff-only origin main
+mkdir -p outputs/production
+
+nohup scripts/run_physics_production.sh \
+  -i data/samples/physics_batch.jsonl \
+  -o outputs/production/physics_batch_20260728 \
+  -c 30 \
+  > outputs/production/physics_batch_20260728.log 2>&1 &
+```
+
+输出包括：
+
+- `*_run1.jsonl`、`*_run2.jsonl`、`*_run3.jsonl`：三次独立结果；
+- `*_final.jsonl`：三次集成后的正式结果；
+- `*_production_manifest.json`：输入、Prompt、代码、Git 提交和参数签名；
+- `*_monitoring.json`：分布、一致率、分歧率、校准触发率、Token、耗时和错误日志摘要。
+
+生产入口默认禁用缓存，并固定模型、温度、Prompt、评级配置、后处理开关和
+三次调用数。若任务中断，使用完全相同的命令可断点续跑；如果输入、Prompt、
+代码版本或参数发生变化，签名校验会拒绝混写，必须使用新的输出前缀。
+
+仅检查配置、不调用模型：
+
+```bash
+scripts/run_physics_production.sh \
+  -i data/samples/physics_batch.jsonl \
+  -o outputs/production/physics_batch_20260728 \
+  --dry-run
+```
 
 ## 第二阶段边界复核
 

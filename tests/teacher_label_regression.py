@@ -108,6 +108,23 @@ def extract_raw_prediction(item: dict[str, Any]) -> str | None:
     return None
 
 
+def extract_ensemble_baseline(item: dict[str, Any]) -> str | None:
+    audit = item.get("lite_self_consistency")
+    if isinstance(audit, dict):
+        level = audit.get("majority_level_before_calibration")
+        if level in LEVEL_ORDER:
+            return level
+    return None
+
+
+def extract_ensemble_calibration_actions(item: dict[str, Any]) -> list[dict[str, Any]]:
+    audit = item.get("lite_self_consistency")
+    if not isinstance(audit, dict):
+        return []
+    actions = audit.get("calibration_actions")
+    return actions if isinstance(actions, list) else []
+
+
 def summarize_predictions(rows: list[tuple[str, str]]) -> dict[str, Any]:
     """汇总一组（教师等级，预测等级），供原始输出和最终输出共用。"""
     if not rows:
@@ -149,7 +166,17 @@ def summarize_predictions(rows: list[tuple[str, str]]) -> dict[str, Any]:
 
 
 def evaluate(results_path: Path, labels: dict[str, str]) -> dict[str, Any]:
-    rows: list[tuple[str, str, str, str | None, list[dict[str, Any]]]] = []
+    rows: list[
+        tuple[
+            str,
+            str,
+            str,
+            str | None,
+            list[dict[str, Any]],
+            str | None,
+            list[dict[str, Any]],
+        ]
+    ] = []
     with results_path.open("r", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
@@ -158,15 +185,47 @@ def evaluate(results_path: Path, labels: dict[str, str]) -> dict[str, Any]:
             question_id = str(item.get("question_id") or "").strip()
             prediction = extract_prediction(item)
             if question_id in labels and prediction:
-                rows.append((question_id, TEACHER_TO_LEVEL[labels[question_id]], prediction, extract_raw_prediction(item), item.get("postprocess_actions") or []))
+                rows.append(
+                    (
+                        question_id,
+                        TEACHER_TO_LEVEL[labels[question_id]],
+                        prediction,
+                        extract_raw_prediction(item),
+                        item.get("postprocess_actions") or [],
+                        extract_ensemble_baseline(item),
+                        extract_ensemble_calibration_actions(item),
+                    )
+                )
     if not rows:
         raise ValueError("结果中没有可与教师 CSV 匹配的有效预测")
-    final_summary = summarize_predictions([(target, prediction) for _, target, prediction, _, _ in rows])
+    final_summary = summarize_predictions(
+        [(target, prediction) for _, target, prediction, _, _, _, _ in rows]
+    )
     raw_summary = summarize_predictions(
-        [(target, raw) for _, target, _, raw, _ in rows if raw in LEVEL_ORDER]
+        [
+            (target, raw)
+            for _, target, _, raw, _, _, _ in rows
+            if raw in LEVEL_ORDER
+        ]
+    )
+    ensemble_baseline_summary = summarize_predictions(
+        [
+            (target, baseline)
+            for _, target, _, _, _, baseline, _ in rows
+            if baseline in LEVEL_ORDER
+        ]
     )
     rule_stats: dict[str, Counter[str]] = defaultdict(Counter)
-    for _, target, prediction, raw, actions in rows:
+    ensemble_rule_stats: dict[str, Counter[str]] = defaultdict(Counter)
+    for (
+        _,
+        target,
+        prediction,
+        raw,
+        actions,
+        ensemble_baseline,
+        ensemble_actions,
+    ) in rows:
         raw_error = abs(LEVEL_ORDER[raw] - LEVEL_ORDER[target]) if raw in LEVEL_ORDER else None
         final_error = abs(LEVEL_ORDER[prediction] - LEVEL_ORDER[target])
         for action in actions:
@@ -178,10 +237,29 @@ def evaluate(results_path: Path, labels: dict[str, str]) -> dict[str, Any]:
                 rule_stats[rule]["improved"] += 1
             else:
                 rule_stats[rule]["worsened"] += 1
+        ensemble_error = (
+            abs(LEVEL_ORDER[ensemble_baseline] - LEVEL_ORDER[target])
+            if ensemble_baseline in LEVEL_ORDER
+            else None
+        )
+        for action in ensemble_actions:
+            rule = str(action.get("rule") or "unknown")
+            ensemble_rule_stats[rule]["triggered"] += 1
+            if ensemble_error is None or final_error == ensemble_error:
+                ensemble_rule_stats[rule]["unchanged"] += 1
+            elif final_error < ensemble_error:
+                ensemble_rule_stats[rule]["improved"] += 1
+            else:
+                ensemble_rule_stats[rule]["worsened"] += 1
     return {
         **final_summary,
         "raw_evaluation": raw_summary,
+        "ensemble_baseline_evaluation": ensemble_baseline_summary,
         "postprocess_rules": {rule: dict(counter) for rule, counter in sorted(rule_stats.items())},
+        "ensemble_calibration_rules": {
+            rule: dict(counter)
+            for rule, counter in sorted(ensemble_rule_stats.items())
+        },
     }
 
 
