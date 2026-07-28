@@ -99,6 +99,48 @@ class PhysicsPostprocessTests(unittest.TestCase):
     def test_gpt56_hybrid_profile_is_available(self) -> None:
         self.assertIn("gpt56_hybrid", rating.VALID_RATING_PROFILES)
 
+    def test_final_reasoning_is_forced_to_adjacent_levels_when_level_is_unchanged(self) -> None:
+        raw = result("基础题")
+        raw["reasoning"]["why_not_lower"] = "比别的题复杂。"
+        raw["reasoning"]["why_not_higher"] = "未达到拔高题标准。"
+
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {"question_id": "adjacent-basic", "stem": "一个简单公式应用题。"},
+        )
+
+        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(output["adjacent_lower_level"], "送分题")
+        self.assertEqual(output["adjacent_higher_level"], "中等题")
+        self.assertIn("与送分题相比", output["reasoning"]["why_not_lower"])
+        self.assertIn("与中等题相比", output["reasoning"]["why_not_higher"])
+        self.assertNotIn("拔高题", output["reasoning"]["why_not_higher"])
+        self.assertTrue(output["reasoning_consistency_repaired"])
+        self.assertTrue(output["adjacent_reasoning_normalized"])
+
+    def test_all_final_levels_receive_exact_adjacent_reasoning(self) -> None:
+        original_profile = rating.RATING_PROFILE
+        rating.RATING_PROFILE = "v7_compat"
+        try:
+            for level in rating.LEVEL_MAP:
+                raw = result(level)
+                output = rating.postprocess_physics_difficulty(
+                    raw,
+                    {"question_id": f"adjacent-{level}", "stem": "测试题"},
+                )
+                final_level = output["difficulty_level"]
+                expected = rating.ADJACENT_REASONING_BY_LEVEL[final_level]
+                self.assertEqual(
+                    output["reasoning"]["why_not_lower"],
+                    expected["why_not_lower"],
+                )
+                self.assertEqual(
+                    output["reasoning"]["why_not_higher"],
+                    expected["why_not_higher"],
+                )
+        finally:
+            rating.RATING_PROFILE = original_profile
+
     def test_raw_level_can_be_recovered_from_misnested_reasoning(self) -> None:
         raw = result("中等题")
         raw["reasoning"]["difficulty_level"] = "拔高题"

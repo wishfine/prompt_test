@@ -669,25 +669,72 @@ def sync_coarse_difficulty(result: Dict[str, Any]) -> None:
 ADJACENT_REASONING_BY_LEVEL = {
     "送分题": {
         "why_not_lower": "送分题已是最低档。",
-        "why_not_higher": "只需完成唯一熟悉模板的一次直接识别、读数、代入或标准动作，没有第二次物理决策。",
+        "why_not_higher": "与基础题相比，只需完成唯一熟悉模板的一次直接识别、读数、代入或标准动作，没有第二次物理决策。",
     },
     "基础题": {
-        "why_not_lower": "仍需完成显性的条件映射、规律应用或规范操作，不只是唯一教材事实的直接识别。",
-        "why_not_higher": "没有连续过程、共享中间结论、完整实验流程或单项3—4步常规分析。",
+        "why_not_lower": "与送分题相比，仍需完成显性的条件映射、规律应用或规范操作，不只是唯一教材事实的直接识别。",
+        "why_not_higher": "与中等题相比，没有连续过程、共享中间结论、完整实验流程或单项3—4步常规分析。",
     },
     "中等题": {
-        "why_not_lower": "存在连续过程、共享结论、完整实验流程或3—4步真实分析，超过简单显性应用。",
-        "why_not_higher": "没有决定性模型转换，也未形成满足拔高标准的约5—6步高密度完整链。",
+        "why_not_lower": "与基础题相比，存在连续过程、共享结论、完整实验流程或3—4步真实分析，超过简单显性应用。",
+        "why_not_higher": "与拔高题相比，没有决定性模型转换，也未形成满足拔高标准的约5—6步高密度完整链。",
     },
     "拔高题": {
-        "why_not_lower": "存在决定性模型转换，或形成达到拔高标准的高密度完整链。",
-        "why_not_higher": "尚未形成复杂状态—参数—约束网络中的分类、临界、边界验证、图像反推或有效解筛选。",
+        "why_not_lower": "与中等题相比，存在决定性模型转换，或形成达到拔高标准的高密度完整链。",
+        "why_not_higher": "与压轴题相比，尚未形成复杂状态—参数—约束网络中的分类、临界、边界验证、图像反推或有效解筛选。",
     },
     "压轴题": {
-        "why_not_lower": "多对象、多状态和多约束形成复杂网络，并执行了临界、分类、边界验证、图像反推或有效解筛选。",
+        "why_not_lower": "与拔高题相比，多对象、多状态和多约束形成复杂网络，并执行了临界、分类、边界验证、图像反推或有效解筛选。",
         "why_not_higher": "压轴题已是最高档。",
     },
 }
+
+
+def sync_final_adjacent_reasoning(result: Dict[str, Any]) -> None:
+    """强制最终解释只比较相邻档位，不改变难度等级或特征。
+
+    模型原始解释已经保存在 ``difficulty_rating_raw``。这里使用统一模板，
+    避免模型原判未被后处理调整时遗留“基础题却与拔高题比较”等跨档解释。
+    """
+    level = result.get("difficulty_level")
+    if level not in ADJACENT_REASONING_BY_LEVEL:
+        return
+    reasoning = result.setdefault("reasoning", {})
+    expected = ADJACENT_REASONING_BY_LEVEL[level]
+    level_index = LEVEL_MAP[level]
+    lower_level = (
+        next(name for name, index in LEVEL_MAP.items() if index == level_index - 1)
+        if level_index > 1
+        else None
+    )
+    higher_level = (
+        next(name for name, index in LEVEL_MAP.items() if index == level_index + 1)
+        if level_index < 5
+        else None
+    )
+    lower_mentions = {
+        name for name in LEVEL_MAP if name in str(reasoning.get("why_not_lower") or "")
+    }
+    higher_mentions = {
+        name for name in LEVEL_MAP if name in str(reasoning.get("why_not_higher") or "")
+    }
+    repaired = bool(
+        lower_mentions - {value for value in (level, lower_level) if value}
+        or higher_mentions - {value for value in (level, higher_level) if value}
+    )
+    reasoning["why_not_lower"] = expected["why_not_lower"]
+    reasoning["why_not_higher"] = expected["why_not_higher"]
+    result["adjacent_lower_level"] = lower_level
+    result["adjacent_higher_level"] = higher_level
+    result["reasoning_consistency_repaired"] = repaired
+    result["adjacent_reasoning_normalized"] = True
+
+
+def finalize_postprocessed_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """统一执行所有评级配置共享的最终输出一致性处理。"""
+    sync_coarse_difficulty(result)
+    sync_final_adjacent_reasoning(result)
+    return result
 
 
 def set_level_with_audit(result: Dict[str, Any], level: str, rule: str, evidence: List[str]) -> None:
@@ -2232,15 +2279,15 @@ def postprocess_physics_difficulty(rating_result: Dict[str, Any], data: Dict[str
     rating_result["postprocess_actions"] = []
 
     if RATING_PROFILE == "fused":
-        return postprocess_fused(rating_result, data, raw_level)
+        return finalize_postprocessed_result(postprocess_fused(rating_result, data, raw_level))
     if RATING_PROFILE == "gpt56_hybrid":
-        return postprocess_gpt56_hybrid(rating_result, data, raw_level)
+        return finalize_postprocessed_result(postprocess_gpt56_hybrid(rating_result, data, raw_level))
     if RATING_PROFILE == "hybrid5d_refined":
-        return postprocess_hybrid5d_refined(rating_result, data, raw_level)
+        return finalize_postprocessed_result(postprocess_hybrid5d_refined(rating_result, data, raw_level))
     if RATING_PROFILE == "v7_stable":
-        return postprocess_v7_stable(rating_result, data, raw_level)
+        return finalize_postprocessed_result(postprocess_v7_stable(rating_result, data, raw_level))
     if RATING_PROFILE == "v7_compat":
-        return postprocess_v7_compat(rating_result, data, raw_level)
+        return finalize_postprocessed_result(postprocess_v7_compat(rating_result, data, raw_level))
 
     f = rating_result["features"]
     current = raw_level
@@ -2272,8 +2319,7 @@ def postprocess_physics_difficulty(rating_result: Dict[str, Any], data: Dict[str
     elif current == "压轴题" and should_downgrade_final_to_hard(f, data):
         set_level_with_audit(rating_result, "拔高题", "final_to_hard_guard", core_high_signals(f, data))
 
-    sync_coarse_difficulty(rating_result)
-    return rating_result
+    return finalize_postprocessed_result(rating_result)
 
 
 # -------------------------- Input / API / output --------------------------
