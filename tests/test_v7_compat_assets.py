@@ -45,7 +45,7 @@ class ProductionPromptAssetTests(unittest.TestCase):
         # Prompt 长度不是评级约束；这里只防止无意中的失控膨胀。
         # Guard against accidental prompt duplication; small evidence-driven
         # additions are allowed even when the production prompt exceeds 27k.
-        self.assertLess(len(prefix), 28000)
+        self.assertLess(len(prefix), 32000)
         self.assertGreaterEqual(prefix.count("### 代表性例题"), 5)
         self.assertIn("## 相邻档位边界校准 few-shot", prefix)
 
@@ -67,8 +67,9 @@ class ProductionPromptAssetTests(unittest.TestCase):
     def test_production_prompt_uses_direct_retrieval_bundle_easy_boundary(self) -> None:
         prefix = self.load_prefix()
         self.assertIn("直接检索束", prefix)
-        self.assertIn("不按章节或小节定义，而按回答规则定义", prefix)
-        self.assertIn("同一个教材结论或同一种识别规则", prefix)
+        self.assertIn("不按章节或小节定义", prefix)
+        self.assertIn("不同教材事实", prefix)
+        self.assertIn("一步直接识别", prefix)
         self.assertIn("分子动理论知识结构图", prefix)
         self.assertIn("多个空也不等于多个应用步骤", prefix)
 
@@ -278,8 +279,17 @@ class ProductionPromptAssetTests(unittest.TestCase):
         prefix = self.load_prefix()
         self.assertIn("多个不同物理量的教材常见量级", prefix)
         self.assertIn("仍可判送分题", prefix)
-        self.assertIn("多个派生物理量", prefix)
-        self.assertIn("科学计数法换算", prefix)
+        self.assertIn("多派生量建模", prefix)
+        self.assertIn("公式选择、单位换算", prefix)
+
+    def test_nontrivial_workload_distinguishes_answer_independence_from_model_independence(
+        self,
+    ) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("非平凡任务覆盖 W", prefix)
+        self.assertIn("答案独立但模型共享", prefix)
+        self.assertIn("模型真正独立", prefix)
+        self.assertIn("各问答案不直接引用不等于模型独立", prefix)
 
     def test_dynamic_circuit_change_ratio_has_a_hard_boundary_anchor(self) -> None:
         prefix = self.load_prefix()
