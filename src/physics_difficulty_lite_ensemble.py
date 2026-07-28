@@ -11,6 +11,7 @@ import argparse
 import copy
 import hashlib
 import json
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
@@ -21,6 +22,10 @@ import physics_difficulty_rating_with_cache as rating
 LEVELS = ["送分题", "基础题", "中等题", "拔高题", "压轴题"]
 LEVEL_INDEX = {level: index for index, level in enumerate(LEVELS)}
 PIPELINE_VERSION = "doubao-lite-self-consistency-v1"
+EASY_BOUNDARY_LEVELS = {"送分题", "基础题"}
+MEASUREMENT_INSTRUMENT_PATTERN = re.compile(
+    r"刻度尺|量筒|秒表|停表|温度计|电流表|电压表|弹簧测力计|天平|游码"
+)
 
 
 def load_jsonl(path: Path) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
@@ -106,13 +111,59 @@ def representative_run(
     )
 
 
+def structured_easy_to_basic_evidence(
+    rows: Sequence[Dict[str, Any]],
+) -> List[str]:
+    """提取送分/基础分歧中的显性应用证据。
+
+    这里只检查判为基础题的独立运行。规则刻意排除“知识点多、空多、题干长”
+    等弱信号，避免再次把纯教材事实和直接检索束整体吸入基础题。
+    """
+
+    evidence: List[str] = []
+    for item in rows:
+        if extract_level(item) != "基础题":
+            continue
+        result = item.get("difficulty_rating")
+        features = result.get("features") if isinstance(result, dict) else {}
+        if not isinstance(features, dict):
+            features = {}
+
+        if features.get("reasoning_chain") == "简单因果推理":
+            evidence.append("基础题分歧结果识别到简单因果应用")
+
+        information_carrier = features.get("information_carrier")
+        if information_carrier == "单图识别":
+            evidence.append("需要从单图恢复题目关系")
+        elif information_carrier == "电路图":
+            evidence.append("需要读取电路图关系")
+
+        graph_requirement = features.get("graph_table_requirement")
+        if graph_requirement in {"直接读数", "多组比较归纳", "图像反推或外推"}:
+            evidence.append(f"存在{graph_requirement}任务")
+
+        stem = str(item.get("stem") or "")
+        if (
+            features.get("experiment_requirement") == "基础操作或读数"
+            and MEASUREMENT_INSTRUMENT_PATTERN.search(stem)
+        ):
+            evidence.append("涉及规范测量仪器操作或读数")
+
+    # 保持稳定顺序并去重，便于审计与回归测试。
+    return list(dict.fromkeys(evidence))
+
+
 def merge_question(
     question_id: str,
     rows: Sequence[Dict[str, Any]],
     run_paths: Sequence[Path],
     run_hashes: Sequence[str],
     easy_requires_unanimity: bool = False,
+    structured_easy_guard: bool = False,
 ) -> Dict[str, Any]:
+    if easy_requires_unanimity and structured_easy_guard:
+        raise ValueError("送分题全票保护与结构化送分保护不能同时启用")
+
     predictions = [extract_level(item) for item in rows]
     raw_predictions = [extract_raw_level(item) for item in rows]
     valid_raw_predictions = [level for level in raw_predictions if level in LEVEL_INDEX]
@@ -123,10 +174,14 @@ def merge_question(
     majority_level, method = choose_level(predictions)
     chosen_level = majority_level
     calibration_actions: List[Dict[str, Any]] = []
+    easy_boundary_disagreement = (
+        majority_level == "送分题"
+        and "基础题" in predictions
+        and set(predictions).issubset(EASY_BOUNDARY_LEVELS)
+    )
     if (
         easy_requires_unanimity
-        and majority_level == "送分题"
-        and "基础题" in predictions
+        and easy_boundary_disagreement
     ):
         chosen_level = "基础题"
         method = "easy_unanimity_guard"
@@ -138,6 +193,19 @@ def merge_question(
                 "evidence": ["三次Lite未一致判为送分题", "至少一次独立结果判为基础题"],
             }
         )
+    elif structured_easy_guard and easy_boundary_disagreement:
+        structured_evidence = structured_easy_to_basic_evidence(rows)
+        if structured_evidence:
+            chosen_level = "基础题"
+            method = "structured_easy_guard"
+            calibration_actions.append(
+                {
+                    "rule": "structured_easy_disagreement_guard",
+                    "from": "送分题",
+                    "to": "基础题",
+                    "evidence": structured_evidence,
+                }
+            )
     selected_index = representative_run(rows, chosen_level)
     output = copy.deepcopy(rows[selected_index])
     result = output.get("difficulty_rating")
@@ -148,6 +216,8 @@ def merge_question(
     rating.sync_final_adjacent_reasoning(result)
 
     counts = Counter(predictions)
+    ordered_counts = sorted(counts.values(), reverse=True)
+    vote_margin = ordered_counts[0] - (ordered_counts[1] if len(ordered_counts) > 1 else 0)
     output["multi_call_final_level"] = chosen_level
     output["multi_call_raw_level"] = raw_level
     output["lite_self_consistency"] = {
@@ -158,6 +228,8 @@ def merge_question(
         "raw_consensus_level": raw_level,
         "raw_decision_method": raw_method,
         "vote_counts": {level: counts[level] for level in LEVELS if counts[level]},
+        "vote_margin": vote_margin,
+        "candidate_levels": [level for level in LEVELS if counts[level]],
         "unanimous": len(counts) == 1,
         "decision_method": method,
         "majority_level_before_calibration": majority_level,
@@ -192,13 +264,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--easy-requires-unanimity",
         action="store_true",
-        help="三次未一致判送分且至少一次判基础时，保守输出基础题",
+        help="送分/基础分歧中，只有全部独立结果均为送分题才输出送分题",
+    )
+    parser.add_argument(
+        "--structured-easy-guard",
+        action="store_true",
+        help=(
+            "送分/基础分歧中，仅当基础题结果识别到因果应用、读图、图表、"
+            "电路图关系或规范测量证据时输出基础题"
+        ),
     )
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.easy_requires_unanimity and args.structured_easy_guard:
+        raise ValueError(
+            "--easy-requires-unanimity 与 --structured-easy-guard 不能同时启用"
+        )
     run_paths = [Path(path).resolve() for path in args.run]
     if len(run_paths) < 3:
         raise ValueError("自一致性聚合至少需要3次独立结果")
@@ -233,6 +317,7 @@ def main() -> None:
                 run_paths,
                 run_hashes,
                 easy_requires_unanimity=args.easy_requires_unanimity,
+                structured_easy_guard=args.structured_easy_guard,
             )
             level = str(output["multi_call_final_level"])
             method = str(output["lite_self_consistency"]["decision_method"])
@@ -246,6 +331,7 @@ def main() -> None:
         "questions": len(first_order),
         "run_count": len(run_paths),
         "easy_requires_unanimity": args.easy_requires_unanimity,
+        "structured_easy_guard": args.structured_easy_guard,
         "unanimous_count": unanimous_count,
         "disagreement_count": len(first_order) - unanimous_count,
         "decision_methods": dict(method_distribution),

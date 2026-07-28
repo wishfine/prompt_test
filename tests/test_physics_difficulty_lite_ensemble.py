@@ -11,13 +11,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import physics_difficulty_lite_ensemble as ensemble  # noqa: E402
 
 
-def item(question_id: str, level: str, actions: list[dict] | None = None) -> dict:
+def item(
+    question_id: str,
+    level: str,
+    actions: list[dict] | None = None,
+    *,
+    features: dict | None = None,
+    stem: str = "",
+) -> dict:
     return {
         "question_id": question_id,
+        "stem": stem,
         "difficulty_level_raw": level,
         "difficulty_rating": {
             "difficulty_level": level,
-            "features": {},
+            "features": features or {},
             "reasoning": {},
         },
         "postprocess_actions": actions or [],
@@ -100,6 +108,147 @@ class LiteEnsembleTests(unittest.TestCase):
             merged["lite_self_consistency"]["decision_method"],
             "unanimous",
         )
+
+    def test_structured_easy_guard_keeps_direct_recall_easy(self) -> None:
+        rows = [
+            item("q", "送分题"),
+            item("q", "送分题"),
+            item(
+                "q",
+                "基础题",
+                features={
+                    "reasoning_chain": "直接套用",
+                    "information_carrier": "纯文字",
+                    "graph_table_requirement": "无",
+                    "problem_structure": "概念判断",
+                    "experiment_requirement": "无",
+                },
+            ),
+        ]
+        merged = ensemble.merge_question(
+            "q",
+            rows,
+            [Path("run1"), Path("run2"), Path("run3")],
+            ["a", "b", "c"],
+            structured_easy_guard=True,
+        )
+        self.assertEqual(merged["difficulty_rating"]["difficulty_level"], "送分题")
+        self.assertEqual(
+            merged["lite_self_consistency"]["decision_method"],
+            "majority",
+        )
+
+    def test_structured_easy_guard_uses_application_evidence(self) -> None:
+        rows = [
+            item("q", "送分题"),
+            item("q", "送分题"),
+            item(
+                "q",
+                "基础题",
+                features={
+                    "reasoning_chain": "简单因果推理",
+                    "information_carrier": "单图识别",
+                    "graph_table_requirement": "直接读数",
+                    "problem_structure": "概念判断",
+                    "experiment_requirement": "无",
+                },
+            ),
+        ]
+        merged = ensemble.merge_question(
+            "q",
+            rows,
+            [Path("run1"), Path("run2"), Path("run3")],
+            ["a", "b", "c"],
+            structured_easy_guard=True,
+        )
+        self.assertEqual(merged["difficulty_rating"]["difficulty_level"], "基础题")
+        audit = merged["lite_self_consistency"]
+        self.assertEqual(audit["decision_method"], "structured_easy_guard")
+        self.assertEqual(
+            audit["calibration_actions"][0]["rule"],
+            "structured_easy_disagreement_guard",
+        )
+        self.assertIn("存在直接读数任务", audit["calibration_actions"][0]["evidence"])
+
+    def test_structured_easy_guard_uses_standard_measurement(self) -> None:
+        rows = [
+            item("q", "送分题"),
+            item("q", "送分题"),
+            item(
+                "q",
+                "基础题",
+                stem="使用刻度尺测量物体长度并读数。",
+                features={
+                    "reasoning_chain": "直接套用",
+                    "information_carrier": "实验装置图",
+                    "graph_table_requirement": "无",
+                    "problem_structure": "概念判断",
+                    "experiment_requirement": "基础操作或读数",
+                },
+            ),
+        ]
+        merged = ensemble.merge_question(
+            "q",
+            rows,
+            [Path("run1"), Path("run2"), Path("run3")],
+            ["a", "b", "c"],
+            structured_easy_guard=True,
+        )
+        self.assertEqual(merged["difficulty_rating"]["difficulty_level"], "基础题")
+        self.assertIn(
+            "涉及规范测量仪器操作或读数",
+            merged["lite_self_consistency"]["calibration_actions"][0]["evidence"],
+        )
+
+    def test_structured_easy_guard_ignores_non_adjacent_disagreement(self) -> None:
+        rows = [
+            item("q", "送分题"),
+            item("q", "送分题"),
+            item(
+                "q",
+                "中等题",
+                features={
+                    "reasoning_chain": "简单因果推理",
+                    "information_carrier": "单图识别",
+                },
+            ),
+        ]
+        merged = ensemble.merge_question(
+            "q",
+            rows,
+            [Path("run1"), Path("run2"), Path("run3")],
+            ["a", "b", "c"],
+            structured_easy_guard=True,
+        )
+        self.assertEqual(merged["difficulty_rating"]["difficulty_level"], "送分题")
+
+    def test_easy_guard_modes_are_mutually_exclusive(self) -> None:
+        rows = [item("q", "送分题") for _ in range(3)]
+        with self.assertRaisesRegex(ValueError, "不能同时启用"):
+            ensemble.merge_question(
+                "q",
+                rows,
+                [Path("run1"), Path("run2"), Path("run3")],
+                ["a", "b", "c"],
+                easy_requires_unanimity=True,
+                structured_easy_guard=True,
+            )
+
+    def test_vote_audit_contains_margin_and_candidates(self) -> None:
+        rows = [
+            item("q", "基础题"),
+            item("q", "中等题"),
+            item("q", "中等题"),
+        ]
+        merged = ensemble.merge_question(
+            "q",
+            rows,
+            [Path("run1"), Path("run2"), Path("run3")],
+            ["a", "b", "c"],
+        )
+        audit = merged["lite_self_consistency"]
+        self.assertEqual(audit["vote_margin"], 1)
+        self.assertEqual(audit["candidate_levels"], ["基础题", "中等题"])
 
 
 if __name__ == "__main__":
