@@ -1418,6 +1418,66 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
             "gpt56_basic_to_medium_multilayer_consistency_guard",
         )
 
+    def test_shared_device_input_transfer_output_chain_is_calibrated_to_medium(self) -> None:
+        raw = result(
+            "基础题",
+            step_count="1-2步",
+            formula_count="2-3个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="简单因果推理",
+            problem_structure="概念判断",
+            additional_structure="电路约束",
+            information_carrier="电路图",
+            knowledge_count="2-3个",
+            knowledge_diff="低",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="简单正反比",
+        )
+        raw["reasoning"]["core_basis"] = (
+            "四个选项共享同一装置电路，需要分析拉力改变滑片位置和接入电阻，"
+            "再判断总电流与定值电阻两端电压。"
+        )
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {
+                "question_id": "shared-device-chain",
+                "stem": "电子测力计中，拉环带动滑片移动，判断电阻、电流和电压变化。",
+                "options": ["A", "B", "C", "D"],
+            },
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_basic_to_medium_shared_device_chain_guard",
+        )
+
+    def test_plain_single_trend_sensor_circuit_is_not_promoted_by_shared_device_guard(self) -> None:
+        raw = result(
+            "基础题",
+            step_count="1-2步",
+            formula_count="0-1个",
+            calculation_complexity="口算或直接判断",
+            reasoning_chain="简单因果推理",
+            problem_structure="电路综合",
+            additional_structure="电路约束",
+            information_carrier="电路图",
+            knowledge_count="1个",
+            state_count="单状态",
+            variable_relation="简单正反比",
+        )
+        raw["reasoning"]["core_basis"] = "热敏电阻变小，总电流变大，只需判断一个最终趋势。"
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {
+                "question_id": "single-trend-sensor",
+                "stem": "温度升高时热敏电阻变小，判断电流表示数如何变化。",
+                "options": ["A", "B", "C", "D"],
+            },
+        )
+        self.assertEqual(output["difficulty_level"], "基础题")
+        self.assertEqual(output["postprocess_actions"], [])
+
     def test_gpt56_profile_does_not_apply_broad_low_structure_downgrade(self) -> None:
         output = self.postprocess(
             "中等题",
@@ -1807,6 +1867,171 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
             "gpt56_medium_to_hard_circuit_delta_ratio_guard",
         )
 
+    def test_cross_object_model_transfer_and_expression_construction_reaches_hard(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="多层因果推理",
+            problem_structure="跨模块综合",
+            additional_structure="跨模块",
+            information_carrier="单图识别",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="2-3个",
+            knowledge_diff="中",
+            cross_module="跨模块综合",
+            state_count="单状态",
+            constraint_count="单一约束",
+            variable_relation="图像函数关系",
+        )
+        raw["reasoning"]["core_basis"] = (
+            "第(2)问依赖第(1)问建立的方法模型，需要把水流量模型迁移到电流微观模型，"
+            "由电荷数和电流定义推导并建构新的电流表达式。"
+        )
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {
+                "question_id": "cross-object-transfer",
+                "stem": "仿照水流量的推导过程，推导电流强度的表达式。",
+                "analysis": "先建立水流模型，再迁移到自由电荷定向移动模型。",
+            },
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_medium_to_hard_cross_object_model_transfer_guard",
+        )
+
+    def test_direct_formula_analogy_stays_medium(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="多层因果推理",
+            problem_structure="跨模块综合",
+            additional_structure="跨模块",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="2-3个",
+            cross_module="跨模块综合",
+        )
+        raw["reasoning"]["core_basis"] = (
+            "题面已经给出类比关系和最终公式，只需替换符号并直接代入数据，"
+            "没有建立新的表达式。"
+        )
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {
+                "question_id": "direct-analogy",
+                "stem": "已给出水流与电流的类比公式，直接代入数据计算电流。",
+            },
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_multivariable_induction_coefficient_and_transfer_reaches_hard(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="实验探究",
+            additional_structure="图像表格",
+            information_carrier="图像或表格",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="2-3个",
+            knowledge_diff="中",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="图像函数关系",
+            experiment_requirement="控制变量或故障分析",
+            graph_table_requirement="多组比较归纳",
+        )
+        raw["reasoning"]["core_basis"] = (
+            "三个小问层层递进并存在答案依赖：先由多组数据归纳三个自变量的"
+            "复合关系，整合得到最终表达式，再计算比例系数及单位并用于新条件预测。"
+        )
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {
+                "question_id": "multivariable-induction",
+                "stem": "研究升力与空气密度、速度和面积的关系，求关系式和比例系数并预测。",
+                "analysis": "由多组数据归纳F=kρSv²，确定k及其单位，再用于新条件。",
+            },
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_medium_to_hard_multivariable_induction_guard",
+        )
+
+    def test_single_variable_control_experiment_stays_medium(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            formula_count="0-1个",
+            calculation_complexity="简单笔算",
+            reasoning_chain="多层因果推理",
+            problem_structure="实验探究",
+            additional_structure="图像表格",
+            information_carrier="图像或表格",
+            subquestion_dependency="多问且层层递进",
+            knowledge_count="1个",
+            state_count="单状态",
+            variable_relation="简单正反比",
+            experiment_requirement="控制变量或故障分析",
+            graph_table_requirement="多组比较归纳",
+        )
+        raw["reasoning"]["core_basis"] = (
+            "根据多组数据得到一个单变量定性结论，再把该结论用于一次直接判断；"
+            "不需要建立复合表达式或确定比例系数。"
+        )
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {
+                "question_id": "single-variable-experiment",
+                "stem": "探究滑动摩擦力与压力的关系，归纳一个单变量定性结论。",
+            },
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_independent_routine_tasks_sharing_only_metadata_stay_medium(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            formula_count="4-6个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="跨模块综合",
+            additional_structure="跨模块",
+            information_carrier="图像或表格",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="4个及以上",
+            knowledge_diff="中",
+            cross_module="跨模块综合",
+            state_count="单状态",
+            constraint_count="单一约束",
+            variable_relation="简单正反比",
+            experiment_requirement="无",
+            graph_table_requirement="直接读数",
+        )
+        raw["reasoning"]["core_basis"] = (
+            "三个小问相互独立，仅共享铭牌信息，无共享模型依赖；"
+            "最高难小问是显性的常规多公式串联计算。"
+        )
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {
+                "question_id": "metadata-only-routine-tasks",
+                "stem": "根据家用设备铭牌和功率—时间图，分别完成原理判断、电流计算和温升计算。",
+            },
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
     def test_plain_single_trend_dynamic_circuit_stays_medium(self) -> None:
         output = self.postprocess(
             "中等题",
@@ -1992,6 +2217,34 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
         output = rating.postprocess_physics_difficulty(
             raw,
             {"question_id": "routine-force", "stem": "常规浮力、水深与压强的三问计算。"},
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_four_step_explicit_before_after_pressure_problem_stays_medium(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            additional_structure="力学约束",
+            subquestion_dependency="无多问",
+            knowledge_count="2-3个",
+            state_count="双状态",
+            constraint_count="单一约束",
+        )
+        raw["reasoning"]["core_basis"] = (
+            "实际有效物理决策为4步：分别按已知压强计算提桶前后的支持力，"
+            "再由受力平衡直接作差得到拉力；两个状态和公式均完全显性。"
+        )
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {
+                "question_id": "routine-before-after-pressure",
+                "stem": "已知提桶前后水桶对地面的压强，分别求支持力后计算拉力。",
+            },
         )
         self.assertEqual(output["difficulty_level"], "中等题")
         self.assertEqual(output["postprocess_actions"], [])

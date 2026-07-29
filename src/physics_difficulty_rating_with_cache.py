@@ -1727,6 +1727,45 @@ def postprocess_gpt56_hybrid(
         rule_name = str(action.get("rule", ""))
         if rule_name.startswith("teacher_"):
             action["rule"] = rule_name.replace("teacher_", "gpt56_hybrid_", 1)
+
+    # 通用联合 features 会把“知识点多 + 跨模块 + 多公式”视为拔高候选；
+    # 但若模型已明确判断各问相互独立、只共享铭牌/背景元数据且没有共享
+    # 模型依赖，这些 features 只是整题并集，不能覆盖最高难小问仍属常规
+    # 分析的语义结论。该保护只撤销这一种联合升档，不影响电子秤示数到
+    # 浮力等存在题目特有中间量转换的跨模块题。
+    inherited_actions = calibrated.get("postprocess_actions", [])
+    inherited_rule = (
+        str(inherited_actions[0].get("rule", ""))
+        if len(inherited_actions) == 1
+        else ""
+    )
+    metadata_only_independent_tasks = bool(
+        ENABLE_TEACHER_FEEDBACK_GUARDS
+        and raw_level == "中等题"
+        and inherited_rule == "gpt56_hybrid_medium_to_hard_joint_structure"
+        and calibrated.get("features", {}).get("subquestion_dependency")
+        == "多问但相互独立"
+        and calibrated.get("features", {}).get("state_count") == "单状态"
+        and contains_any(
+            str(rating_result.get("reasoning", {}).get("core_basis", "") or ""),
+            ["相互独立", "各问独立", "多个独立小问"],
+        )
+        and contains_any(
+            str(rating_result.get("reasoning", {}).get("core_basis", "") or ""),
+            ["仅共享铭牌信息", "只共享铭牌信息", "仅共享背景信息", "只共享背景信息"],
+        )
+        and contains_any(
+            str(rating_result.get("reasoning", {}).get("core_basis", "") or ""),
+            ["无共享模型依赖", "不存在共享模型依赖"],
+        )
+    )
+    if metadata_only_independent_tasks:
+        calibrated = copy.deepcopy(rating_result)
+        calibrated["difficulty_level"] = raw_level
+        calibrated["difficulty_level_raw"] = raw_level
+        calibrated["postprocess_actions"] = []
+        sync_coarse_difficulty(calibrated)
+
     if calibrated.get("postprocess_actions"):
         return calibrated
 
@@ -1907,6 +1946,34 @@ def postprocess_gpt56_hybrid(
         sync_coarse_difficulty(calibrated)
         return calibrated
 
+    # 装置型选择题不能只因答案分别判断就视为模型独立。只有模型自己已识别
+    # “同一装置”，且机械输入、变阻传递、总电流和局部电压四段都真实出现时，
+    # 才把基础档校准到中等；普通传感器单趋势判断不满足该窄门槛。
+    shared_device_chain = bool(
+        ENABLE_TEACHER_FEEDBACK_GUARDS
+        and raw_level == "基础题"
+        and features.get("additional_structure") == "电路约束"
+        and features.get("information_carrier") == "电路图"
+        and features.get("formula_count") in ["2-3个", "4-6个"]
+        and contains_any(
+            core_basis,
+            ["共享同一装置", "同一装置电路", "共同依赖同一装置"],
+        )
+        and contains_any(evidence_text, ["拉力", "压力", "位移", "拉环", "形变"])
+        and contains_any(evidence_text, ["滑片", "变阻器", "接入电阻", "阻值"])
+        and contains_any(evidence_text, ["总电流", "电路中电流", "电流变化"])
+        and contains_any(evidence_text, ["局部电压", "两端电压", "分压", "电压变化"])
+    )
+    if shared_device_chain:
+        set_level_with_audit(
+            calibrated,
+            "中等题",
+            "gpt56_basic_to_medium_shared_device_chain_guard",
+            ["同一装置共享模型", "机械输入到变阻传递", "电流与局部电压连续分析"],
+        )
+        sync_coarse_difficulty(calibrated)
+        return calibrated
+
     # 等级与模型自己抽取出的推理层次明显冲突时，做一次相邻档兜底。
     # 该联合结构在 1066 题回放中覆盖 8 题，8 题均应为中等题；
     # 它不依赖题型关键词，也不把“步骤多”作为单独升级依据。
@@ -2082,6 +2149,76 @@ def postprocess_gpt56_hybrid(
         sync_coarse_difficulty(calibrated)
         return calibrated
 
+    # 模型若已明确识别“跨对象方法迁移 + 新表达式建构”，却仍因代数链只有
+    # 3-4 步停在中等档，属于语义结论与最终等级不一致。题面已直接给出
+    # 类比公式、只需替换符号或代入数据时不触发。
+    direct_analogy_application = contains_any(
+        core_basis,
+        [
+            "已经给出类比关系",
+            "已给出类比关系",
+            "题面已经给出",
+            "题目已经给出",
+            "直接代入",
+            "替换符号",
+        ],
+    )
+    cross_object_model_transfer = bool(
+        ENABLE_TEACHER_FEEDBACK_GUARDS
+        and raw_level == "中等题"
+        and features.get("cross_module") == "跨模块综合"
+        and features.get("subquestion_dependency") == "多问且层层递进"
+        and contains_any(
+            core_basis,
+            ["模型迁移", "方法模型依赖", "迁移推导", "仿照第(1)问", "仿照前一问"],
+        )
+        and contains_any(
+            core_basis,
+            ["推导", "表达式", "关系建构", "建构新的", "建立新的"],
+        )
+        and not direct_analogy_application
+    )
+    if cross_object_model_transfer:
+        set_level_with_audit(
+            calibrated,
+            "拔高题",
+            "gpt56_medium_to_hard_cross_object_model_transfer_guard",
+            ["跨对象方法模型迁移", "后问依赖前问模型", "自主推导新表达式"],
+        )
+        sync_coarse_difficulty(calibrated)
+        return calibrated
+
+    # 常规单变量控制实验保持中等。只有模型已识别多变量复合关系、表达式
+    # 建立、比例系数（含单位）以及后续迁移/预测共同构成递进链时，才进入
+    # 拔高校准，避免仅凭“多组数据”宽泛升档。
+    multivariable_induction = bool(
+        ENABLE_TEACHER_FEEDBACK_GUARDS
+        and raw_level == "中等题"
+        and features.get("problem_structure") == "实验探究"
+        and features.get("subquestion_dependency") == "多问且层层递进"
+        and features.get("graph_table_requirement") == "多组比较归纳"
+        and contains_any(
+            core_basis,
+            ["多变量关系", "多个自变量", "三个自变量", "复合关系"],
+        )
+        and contains_any(
+            core_basis,
+            ["最终表达式", "整合得到", "建立表达式", "归纳表达式"],
+        )
+        and contains_any(evidence_text, ["比例系数", "系数k", "系数 k"])
+        and contains_any(evidence_text, ["单位", "预测", "新条件", "图像"])
+        and contains_any(core_basis, ["答案依赖", "后问依赖", "层层递进"])
+    )
+    if multivariable_induction:
+        set_level_with_audit(
+            calibrated,
+            "拔高题",
+            "gpt56_medium_to_hard_multivariable_induction_guard",
+            ["多变量复合关系归纳", "表达式与比例系数建构", "递进迁移或预测"],
+        )
+        sync_coarse_difficulty(calibrated)
+        return calibrated
+
     # GPT-5.6 裁定中，真正的高密度力学链可能被 Lite 用“每步都常规”
     # 压成中等；但“力学综合 + 多公式联立”本身不足以升档。必须再有
     # 明确的 5 步完整链、决定性转换，或跨状态消去共同量/反求隐藏参数。
@@ -2146,6 +2283,19 @@ def postprocess_gpt56_hybrid(
         and features.get("state_count")
         in ["双状态", "多状态", "连续变化或临界状态"]
         and features.get("additional_structure") == "力学约束"
+        and contains_any(
+            core_basis,
+            [
+                "连续过程",
+                "连续相对运动",
+                "相对速度",
+                "共同总时间",
+                "追及",
+                "相遇",
+                "前一状态求出的共同参数",
+                "两个状态相互约束",
+            ],
+        )
     )
     dense_force_chain = bool(
         ENABLE_GPT56_STRUCTURAL_CALIBRATION
