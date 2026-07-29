@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
-"""
-@File    : chemistry_difficulty_rating_with_cache.py
-@Description:
-    基于前缀缓存（Prompt Cache）和高并发的初中化学题目难度批量评级脚本。
-    v4：基于100题人工复核结果，收紧“标准实验题虚高”和“压轴题虚高”，增强金属滤渣滤液、流程/图表/守恒题的拔高识别。
-    v5：基于第二轮100题复核结果，小修5类边界：化学史送分、标准实验多问基础、空气含量压强曲线中等、NaHCO3纯度拔高、常见物质转化推断中等。
-    v6：基于300题复核结果，小修8类边界：化学发展简史送分、溶液分类基础、CO还原氧化铁+燃烧条件组合中等、陌生复杂方程式配平中等、陌生材料迁移中等、红磷气压曲线中等、标准碳酸钠沉淀纯度表格中等、KClO3单反应质量图中等。
-    v6.1：冻结分类逻辑，仅增加后处理解释同步、postprocess_trace、feature_audit_flags，不改变最终 difficulty_level 的判定规则。
-    设计理念对齐现有物理脚本：Prompt 前缀缓存 + JSON 容错解析 + 18维特征归一化 + 后处理双向纠偏。
-    难度级别：送分题 / 基础题 / 中等题 / 拔高题 / 压轴题。
+"""初中化学难度批量评级。
+
+运行与审计方式对齐当前物理正式流程：OpenAI-compatible Responses API、
+可选前缀缓存、并发、重试、断点续跑、JSONL 输入输出、严格 Core-12
+schema、原始/最终结果分离，以及每次最多调整一个相邻档的可审计后处理。
+
+化学使用历史效果更稳定的12个核心特征，不复用物理特征，也不把
+Evidence-15的三个辅助观察量加入生产输出协议。
 """
 
 import os
@@ -19,9 +17,11 @@ import random
 import time
 import hashlib
 import asyncio
+import copy
 import aiofiles
 import aiohttp
 import argparse
+from pathlib import Path
 try:
     import json_repair
 except Exception:
@@ -30,7 +30,7 @@ except Exception:
         def loads(text):
             return json.loads(text)
     json_repair = _JsonRepairFallback()
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Sequence
 from tqdm.asyncio import tqdm
 from asyncio import Lock, Semaphore
 from dotenv import load_dotenv
@@ -43,8 +43,64 @@ BASE_URL = os.getenv("BASE_URL", "http://172.22.0.35:4466/v1")
 if not BASE_URL.endswith("/"):
     BASE_URL += "/"
 MODEL_NAME = os.getenv("MODEL_NAME", "doubao-seed-2.0-lite")
-_temperature_raw = os.getenv("TEMPERATURE", "").strip()
-TEMPERATURE = float(_temperature_raw) if _temperature_raw else None
+
+
+def resolve_temperature(model_name: str, raw_value: str) -> Optional[float]:
+    """与物理正式脚本一致：Lite 服务端固定 temperature=1。"""
+    if "lite" in str(model_name).lower():
+        return 1.0
+    value = str(raw_value or "").strip()
+    return float(value) if value else None
+
+
+TEMPERATURE = resolve_temperature(
+    MODEL_NAME,
+    os.getenv("TEMPERATURE", ""),
+)
+RATING_PROFILE = os.getenv(
+    "RATING_PROFILE",
+    "chemistry_stable",
+).strip().lower()
+VALID_RATING_PROFILES = {"chemistry_stable"}
+if RATING_PROFILE not in VALID_RATING_PROFILES:
+    raise ValueError(
+        f"不支持的 RATING_PROFILE={RATING_PROFILE!r}；"
+        f"可选值：{', '.join(sorted(VALID_RATING_PROFILES))}"
+    )
+
+USE_CACHE = os.getenv("USE_CACHE", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+CHEMISTRY_IMAGE_MODE = os.getenv(
+    "CHEMISTRY_IMAGE_MODE",
+    "auto",
+).strip().lower()
+if CHEMISTRY_IMAGE_MODE not in {"off", "auto", "all"}:
+    raise ValueError(
+        f"不支持的 CHEMISTRY_IMAGE_MODE={CHEMISTRY_IMAGE_MODE!r}；"
+        "可选值：off, auto, all"
+    )
+MAX_SCHEMA_RETRIES = int(os.getenv("CHEMISTRY_SCHEMA_RETRIES", "2"))
+
+UNTRUSTED_LABEL_FIELDS = {
+    "difficulty",
+    "teacher_label",
+    "teacher_difficulty",
+    "label",
+    "难度",
+}
+VISUAL_REFERENCE_RE = re.compile(
+    r"(如图|图中|下图|图示|示意图|装置图|实验装置|流程图|"
+    r"曲线|坐标图|关系图|图像|图象|表格|微观示意|粒子图|"
+    r"看图|观察图|由图|据图|结合图)"
+)
+VISUAL_PLACEHOLDER_RE = re.compile(
+    r"(<img\b|<image\b|\[image\]|\[图片\]|\【图片\】|图片缺失|见图|如下图)",
+    re.IGNORECASE,
+)
 
 FILE_LOCK = Lock()
 CACHE_LOCK = Lock()
@@ -53,6 +109,15 @@ CACHE_GET_LOCK = Lock()
 CACHE_EXPIRE_DAYS = 6
 CACHE_EXPIRE_SECONDS = CACHE_EXPIRE_DAYS * 24 * 3600
 CACHE_FILE_PATH = "chemistry_prompt_cache.json"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_PROMPT_PATH = (
+    PROJECT_ROOT / "prompts" / "初中化学难度打标提示词.txt"
+)
+DEFAULT_INPUT_PATH = (
+    PROJECT_ROOT
+    / "data"
+    / "chemistry_sampled_5000_per_difficulty_v2.jsonl"
+)
 
 DIFFICULTY_RATING_PROMPT_PREFIX = ""
 DIFFICULTY_RATING_PROMPT_SUFFIX = ""
@@ -210,102 +275,90 @@ async def get_or_create_cache(session: aiohttp.ClientSession, retries: int, time
 
 # -------------------------- 3. 化学特征 schema 与归一化 --------------------------
 FEATURE_DEFAULTS = {
-    "step_count": "1-2步",
-    "equation_count": "0-1个",
-    "calculation_complexity": "口算或直接判断",
-    "reasoning_chain": "直接套用",
-    "problem_structure": "概念判断",
-    "additional_structure": "无",
-    "information_carrier": "纯文字",
-    "reality_question": "否",
-    "subquestion_dependency": "无多问",
-    "knowledge_count": "1个",
-    "knowledge_diff": "低",
-    "cross_module": "同一模块内部",
-    "chemistry_process_count": "单一事实",
-    "constraint_count": "无约束",
-    "evidence_relation": "无证据链",
+    "reasoning_depth": "0层",
+    "reasoning_direction": "直接识记",
+    "knowledge_relation": "单一知识点",
+    "representation_conversion": "无",
+    "reaction_relation": "无反应关系",
+    "constraint_complexity": "无约束",
+    "evidence_relation": "无证据任务",
     "experiment_requirement": "无",
     "graph_table_requirement": "无",
-    "error_risk": "无明显易错点",
+    "calculation_model": "无",
+    "unfamiliar_information_transfer": "课内直接原型",
+    "subquestion_dependency": "无多问",
 }
 
 ALLOWED_FEATURE_VALUES = {
-    "step_count": {"1-2步", "3-5步", "6-8步", "9-12步", "12步以上"},
-    "equation_count": {"0-1个", "2-3个", "4-6个", "7个以上"},
-    "calculation_complexity": {"口算或直接判断", "简单笔算", "化学方程式计算或关系式计算", "复杂守恒或图像计算"},
-    "reasoning_chain": {"直接套用", "简单因果推理", "多层证据推理", "逆向推理或方案评价"},
-    "problem_structure": {"概念判断", "化学用语与分类", "方程式书写", "实验基础操作", "实验探究", "工艺流程", "图像表格分析", "物质推断", "计算综合", "跨模块综合"},
-    "additional_structure": {"无", "微观示意图", "实验装置", "流程图", "图像表格", "探究材料", "多模块综合"},
-    "information_carrier": {"纯文字", "单图识别", "微观示意图", "实验装置图", "流程图", "图像或表格", "多图表综合"},
-    "reality_question": {"是", "否"},
-    "subquestion_dependency": {"无多问", "多问但相互独立", "多问且层层递进"},
-    "knowledge_count": {"1个", "2-3个", "4个及以上"},
-    "knowledge_diff": {"低", "中", "高"},
-    "cross_module": {"同一模块内部", "跨模块综合"},
-    "chemistry_process_count": {"单一事实", "单一反应", "2-3个反应或过程", "多反应连续转化或流程"},
-    "constraint_count": {"无约束", "单一约束", "多约束"},
-    "evidence_relation": {"无证据链", "单一现象对应", "多现象证据链", "证据冲突与排除"},
-    "experiment_requirement": {"无", "基础操作或读数", "控制变量或现象分析", "方案设计或误差评价"},
-    "graph_table_requirement": {"无", "直接读数", "多组比较归纳", "图像反推或拐点分析"},
-    "error_risk": {"无明显易错点", "轻微易错点", "明显易错点", "高易错点"},
+    "reasoning_depth": {"0层", "1层", "2-3层", "4-5层", "6层及以上"},
+    "reasoning_direction": {"直接识记", "正向推导", "逆向推导", "分类讨论或综合推导"},
+    "knowledge_relation": {"单一知识点", "同模块简单关联", "同模块深度关联", "跨模块融合", "多模块深度融合"},
+    "representation_conversion": {"无", "一次表征转换", "两类表征连续转换", "宏观-微观-符号-定量多重转换"},
+    "reaction_relation": {
+        "无反应关系",
+        "单一直接反应",
+        "2-3个并列或简单连续反应",
+        "多反应连续转化",
+        "先后、竞争或过量不足",
+        "需要分情况判断的反应模型",
+    },
+    "constraint_complexity": {"无约束", "单一约束", "多个相互关联约束", "多层嵌套约束"},
+    "evidence_relation": {
+        "无证据任务",
+        "单一证据直接对应",
+        "多条清晰证据联合",
+        "需要排除竞争解释",
+        "证据冲突、筛选或多层排除",
+    },
+    "experiment_requirement": {
+        "无",
+        "基础操作或读数",
+        "控制变量、现象解释或数据归纳",
+        "方案设计、评价或补充实验",
+        "多阶段探究与定量误差",
+    },
+    "graph_table_requirement": {"无", "直接读数", "多组比较归纳", "拐点、平台或分段反推", "多图表耦合建模"},
+    "calculation_model": {"无", "口算或直接比例", "单一方程式或关系式", "单一守恒或多反应计算", "多重守恒、差量、联立或分类"},
+    "unfamiliar_information_transfer": {"课内直接原型", "给定新信息直接应用", "迁移后建立关系", "完全陌生模型现场建立"},
+    "subquestion_dependency": {"无多问", "多问相互独立", "多问共享模型但无答案依赖", "多问存在结果或任务链依赖"},
 }
 
 ENUM_NORMALIZE = {
-    "equation_count": {
-        "公式数量": "0-1个",
-        "0个": "0-1个",
-        "1个": "0-1个",
-        "1-2个": "2-3个",
-        "1-3个": "2-3个",
-        "2个": "2-3个",
-        "3个": "2-3个",
-        "4个以上": "4-6个",
-        "7个以上方程式": "7个以上",
+    "representation_conversion": {
+        "两类表征往返": "两类表征连续转换",
     },
-    "knowledge_count": {
-        "1-2个": "2-3个",
-        "2个": "2-3个",
-        "3个": "2-3个",
-        "2-4个": "2-3个",
-        "4个以上": "4个及以上",
-        "多个": "4个及以上",
+    "reaction_relation": {
+        "单一反应": "单一直接反应",
+        "先后或竞争反应": "先后、竞争或过量不足",
     },
-    "information_carrier": {
-        "图像": "图像或表格",
-        "图象": "图像或表格",
-        "表格": "图像或表格",
-        "实验图": "实验装置图",
-        "装置图": "实验装置图",
-        "流程": "流程图",
-        "流程图+表格": "多图表综合",
-        "实验装置图+表格": "多图表综合",
-        "实验装置图和图像": "多图表综合",
+    "constraint_complexity": {
+        "多约束": "多个相互关联约束",
     },
-    "additional_structure": {
-        "实验图": "实验装置",
-        "实验装置图": "实验装置",
-        "图像": "图像表格",
-        "表格": "图像表格",
-        "图表": "图像表格",
-        "流程": "流程图",
-        "流程图": "流程图",
-        "项目式": "探究材料",
+    "evidence_relation": {
+        "无证据链": "无证据任务",
+        "单一现象对应": "单一证据直接对应",
+        "多现象证据链": "多条清晰证据联合",
+        "证据冲突与排除": "证据冲突、筛选或多层排除",
     },
     "experiment_requirement": {
-        "方案设计": "方案设计或误差评价",
-        "误差分析": "方案设计或误差评价",
-        "误差评价": "方案设计或误差评价",
-        "控制变量": "控制变量或现象分析",
-        "现象分析": "控制变量或现象分析",
-        "故障分析": "控制变量或现象分析",
-        "数据归纳": "控制变量或现象分析",
+        "控制变量或现象分析": "控制变量、现象解释或数据归纳",
+        "方案设计或误差评价": "方案设计、评价或补充实验",
     },
     "graph_table_requirement": {
-        "图像反推": "图像反推或拐点分析",
-        "图象反推": "图像反推或拐点分析",
-        "拐点分析": "图像反推或拐点分析",
-        "直接读取": "直接读数",
+        "图像反推或拐点分析": "拐点、平台或分段反推",
+    },
+    "calculation_model": {
+        "多重守恒差量联立或分类": "多重守恒、差量、联立或分类",
+    },
+    "unfamiliar_information_transfer": {
+        "无": "课内直接原型",
+        "课内原型": "课内直接原型",
+        "给定信息直接套用": "给定新信息直接应用",
+        "迁移后推导": "迁移后建立关系",
+    },
+    "subquestion_dependency": {
+        "多问但相互独立": "多问相互独立",
+        "多问且层层递进": "多问存在结果或任务链依赖",
     },
 }
 
@@ -522,54 +575,144 @@ def canonicalize_feature_value(field: str, value: Any) -> str:
 
 
 def normalize_feature_keys(features: Dict[str, Any]) -> Dict[str, Any]:
+    """只接受 Core-12 正式字段名。
+
+    旧版曾通过“字段名包含标准字段名”进行模糊归一化，这会把拼错字段
+    静默伪装成合法字段，进而污染后处理。生产契约改为严格键名。
+    """
     fixed: Dict[str, Any] = {}
-    key_aliases = {
-        "formula_count": "equation_count",
-        "chemical_equation_count": "equation_count",
-        "equations_count": "equation_count",
-        "reaction_count": "chemistry_process_count",
-        "process_count": "chemistry_process_count",
-        "state_count": "chemistry_process_count",
-        "variable_relation": "evidence_relation",
-    }
     for k, v in (features or {}).items():
         clean_key = str(k).strip().strip('",， \n\t')
-        clean_key = key_aliases.get(clean_key, clean_key)
-        for standard_key in FEATURE_DEFAULTS.keys():
-            if standard_key in clean_key:
-                clean_key = standard_key
-                break
         fixed[clean_key] = v
     return fixed
 
 
 def normalize_features(features: Dict[str, Any]) -> Dict[str, Any]:
-    features = normalize_feature_keys(features or {})
-    normalized: Dict[str, str] = {}
-    for field, default in FEATURE_DEFAULTS.items():
-        value = features.get(field, default)
-        if field in ENUM_NORMALIZE and value in ENUM_NORMALIZE[field]:
-            value = ENUM_NORMALIZE[field][value]
-        clean_value = clean_enum_value(value)
-        if field in ENUM_NORMALIZE and clean_value in ENUM_NORMALIZE[field]:
-            value = ENUM_NORMALIZE[field][clean_value]
+    """兼容旧调用名，但执行与生产相同的严格 Core-12 校验。
+
+    不再为缺失字段填默认值，也不依据关键词猜测枚举。
+    """
+    return validate_feature_contract(features)
+
+
+class ChemistrySchemaError(ValueError):
+    """模型输出不满足 Core-12 生产契约。"""
+
+
+def validate_feature_contract(features: Any) -> Dict[str, str]:
+    """严格校验 Core-12 字段，禁止缺字段后静默填默认值。
+
+    只接受合法枚举和明确维护的历史别名；不使用模糊关键词把任意文本
+    猜成某个枚举，因为这会让错误 feature 静默进入后处理。
+    """
+    if not isinstance(features, dict):
+        raise ChemistrySchemaError("features必须是JSON对象")
+    keyed = normalize_feature_keys(features)
+    expected = set(FEATURE_DEFAULTS)
+    actual = set(keyed)
+    missing = sorted(expected - actual)
+    extra = sorted(actual - expected)
+    if missing or extra:
+        raise ChemistrySchemaError(
+            f"features字段不完整: missing={missing}, extra={extra}"
+        )
+
+    validated: Dict[str, str] = {}
+    for field in FEATURE_DEFAULTS:
+        raw_value = keyed[field]
+        value = str(raw_value).strip()
         if value in ALLOWED_FEATURE_VALUES[field]:
-            normalized[field] = value
+            validated[field] = value
             continue
-        value = canonicalize_feature_value(field, value)
-        if value not in ALLOWED_FEATURE_VALUES[field]:
-            value = default
-        normalized[field] = value
+        alias = ENUM_NORMALIZE.get(field, {}).get(value)
+        if alias in ALLOWED_FEATURE_VALUES[field]:
+            validated[field] = alias
+            continue
+        clean_value = clean_enum_value(raw_value)
+        alias = ENUM_NORMALIZE.get(field, {}).get(clean_value)
+        if alias in ALLOWED_FEATURE_VALUES[field]:
+            validated[field] = alias
+            continue
+        raise ChemistrySchemaError(
+            f"features.{field}非法值{raw_value!r}；"
+            f"允许值={sorted(ALLOWED_FEATURE_VALUES[field])}"
+        )
+    depth = validated["reasoning_depth"]
+    direction = validated["reasoning_direction"]
+    if depth == "0层" and direction != "直接识记":
+        raise ChemistrySchemaError(
+            "reasoning_depth=0层时reasoning_direction必须为直接识记"
+        )
+    if direction == "直接识记" and depth not in {"0层", "1层"}:
+        raise ChemistrySchemaError(
+            "直接识记不能对应2层以上连续推理"
+        )
+    if (
+        validated["subquestion_dependency"]
+        == "多问存在结果或任务链依赖"
+        and depth in {"0层", "1层"}
+    ):
+        raise ChemistrySchemaError(
+            "真实任务链依赖不能与0层/1层推理同时出现"
+        )
+    return validated
 
-    # 结构联动修正：实验/流程/图像载体应反映到 additional_structure。
-    if normalized["problem_structure"] == "工艺流程" and normalized["additional_structure"] == "无":
-        normalized["additional_structure"] = "流程图"
-    if normalized["problem_structure"] == "实验探究" and normalized["additional_structure"] == "无":
-        normalized["additional_structure"] = "探究材料"
-    if normalized["problem_structure"] == "图像表格分析" and normalized["additional_structure"] == "无":
-        normalized["additional_structure"] = "图像表格"
 
-    return normalized
+def validate_rating_contract(rating_result: Any) -> Dict[str, Any]:
+    """校验固定顶层、Core-12特征、理由和相邻粗区间。"""
+    if not isinstance(rating_result, dict):
+        raise ChemistrySchemaError("模型输出必须是JSON对象")
+    required = {
+        "features",
+        "coarse_difficulty",
+        "reasoning",
+        "difficulty_level",
+    }
+    missing = sorted(required - set(rating_result))
+    if missing:
+        raise ChemistrySchemaError(f"顶层字段缺失: {missing}")
+
+    level = str(rating_result.get("difficulty_level", "")).strip()
+    if level not in VALID_LEVELS:
+        raise ChemistrySchemaError(f"difficulty_level非法: {level!r}")
+    coarse = str(rating_result.get("coarse_difficulty", "")).strip()
+    valid_coarse = {
+        "送分/基础区间（1-2档）",
+        "基础/中等区间（2-3档）",
+        "中等/拔高区间（3-4档）",
+        "拔高/压轴区间（4-5档）",
+    }
+    if coarse not in valid_coarse:
+        raise ChemistrySchemaError(f"coarse_difficulty非法: {coarse!r}")
+    coarse_levels = {
+        "送分/基础区间（1-2档）": {"送分题", "基础题"},
+        "基础/中等区间（2-3档）": {"基础题", "中等题"},
+        "中等/拔高区间（3-4档）": {"中等题", "拔高题"},
+        "拔高/压轴区间（4-5档）": {"拔高题", "压轴题"},
+    }
+    if level not in coarse_levels[coarse]:
+        raise ChemistrySchemaError(
+            f"coarse_difficulty={coarse!r}不包含最终等级{level!r}"
+        )
+
+    reasoning = rating_result.get("reasoning")
+    reason_fields = {
+        "core_basis",
+        "hard_point",
+        "why_not_lower",
+        "why_not_higher",
+    }
+    if not isinstance(reasoning, dict) or set(reasoning) != reason_fields:
+        raise ChemistrySchemaError(
+            "reasoning必须且只能包含core_basis、hard_point、"
+            "why_not_lower、why_not_higher"
+        )
+    if any(not str(reasoning.get(field, "")).strip() for field in reason_fields):
+        raise ChemistrySchemaError("reasoning四个字段均不得为空")
+
+    prepared = copy.deepcopy(rating_result)
+    prepared["features"] = validate_feature_contract(prepared["features"])
+    return prepared
 
 # -------------------------- 4. 后处理纠偏规则 --------------------------
 def normalize_reasoning_schema(rating_result: Dict[str, Any]) -> None:
@@ -593,7 +736,14 @@ def normalize_reasoning_schema(rating_result: Dict[str, Any]) -> None:
     rating_result.pop("reason", None)
 
 
-def set_level_with_reason(rating_result: Dict[str, Any], level: str, core_basis_prefix: str) -> None:
+def set_level_with_reason(
+    rating_result: Dict[str, Any],
+    level: str,
+    core_basis_prefix: str,
+    *,
+    rule: str = "chemistry_adjacent_calibration",
+    evidence: Optional[Sequence[str]] = None,
+) -> None:
     """设置后处理难度，并记录可审计的改档轨迹。
 
     v6.1 说明：
@@ -602,12 +752,24 @@ def set_level_with_reason(rating_result: Dict[str, Any], level: str, core_basis_
       避免最终档位与原始模型解释互相矛盾。
     """
     previous_level = rating_result.get("difficulty_level", "")
+    if previous_level not in LEVEL_MAP or level not in LEVEL_MAP:
+        raise ValueError(
+            f"后处理档位非法: {previous_level!r} -> {level!r}"
+        )
+    if previous_level != level and abs(
+        LEVEL_MAP[previous_level] - LEVEL_MAP[level]
+    ) != 1:
+        raise ValueError(
+            f"后处理只能调整一个相邻档: {previous_level} -> {level}"
+        )
     rating_result.setdefault("postprocess_original_level", previous_level)
     rating_result.setdefault("postprocess_trace", [])
     if previous_level != level:
         rating_result["postprocess_trace"].append({
+            "rule": rule,
             "from": previous_level,
             "to": level,
+            "evidence": list(evidence or [core_basis_prefix]),
             "reason": core_basis_prefix,
         })
     rating_result["postprocess_note"] = core_basis_prefix
@@ -1390,7 +1552,44 @@ def should_upgrade_hard_to_final(features: Dict[str, Any], data: Dict[str, Any])
 
 
 def should_downgrade_final_to_hard(features: Dict[str, Any], data: Dict[str, Any]) -> bool:
-    return high_level_feature_count(features, data) < 4 or not has_final_core_combo(features, data)
+    """只在题目明确低于压轴结构时降档。
+
+    “没有满足主动升压轴条件”不等于“原判压轴必须降”。这是物理正式
+    后处理中的双向独立原则，避免把模型已识别出的单问复杂压轴题机械降档。
+    """
+    high_count = high_level_feature_count(features, data)
+    text = visible_text(data, include_analysis=True)
+    strong_final_signal = (
+        features.get("calculation_complexity")
+        == "复杂守恒或图像计算"
+        or features.get("evidence_relation") == "证据冲突与排除"
+        or features.get("experiment_requirement")
+        == "方案设计或误差评价"
+        or (
+            features.get("chemistry_process_count")
+            == "多反应连续转化或流程"
+            and features.get("constraint_count") == "多约束"
+        )
+        or contains_any(
+            text,
+            [
+                "分类讨论",
+                "多解",
+                "有效解",
+                "极值",
+                "边界",
+                "差量法",
+                "多方程",
+                "联立",
+                "证据冲突",
+            ],
+        )
+    )
+    if features.get("step_count") in ["9-12步", "12步以上"]:
+        return False
+    if features.get("step_count") == "6-8步":
+        return high_count < 2 and not strong_final_signal
+    return high_count < 3 and not strong_final_signal
 
 
 def sync_reasoning_after_postprocess(rating_result: Dict[str, Any]) -> None:
@@ -1432,124 +1631,555 @@ def sync_reasoning_after_postprocess(rating_result: Dict[str, Any]) -> None:
         reasoning["why_not_higher"] = "压轴题已经是最高难度档，无更高档。"
 
 
-def add_feature_audit_flags(rating_result: Dict[str, Any], data: Dict[str, Any]) -> None:
-    """增加 feature 审计标记，不参与最终难度决策。
+CORE12_DEPTH_ORDER = {
+    "0层": 0,
+    "1层": 1,
+    "2-3层": 2,
+    "4-5层": 3,
+    "6层及以上": 4,
+}
 
-    这些 flag 用于 HTML 人审或离线质量监控。它们只提示“features 可能需要人工关注”，
-    不改变 difficulty_level、coarse_difficulty 或后处理分类结果。
-    """
+
+def core12_medium_evidence(features: Dict[str, Any]) -> List[str]:
+    evidence: List[str] = []
+    if features["reasoning_depth"] in {"2-3层", "4-5层", "6层及以上"}:
+        evidence.append(f"推理深度={features['reasoning_depth']}")
+    if features["reaction_relation"] in {
+        "2-3个并列或简单连续反应",
+        "多反应连续转化",
+        "先后、竞争或过量不足",
+        "需要分情况判断的反应模型",
+    }:
+        evidence.append(f"反应关系={features['reaction_relation']}")
+    if features["evidence_relation"] in {
+        "多条清晰证据联合",
+        "需要排除竞争解释",
+        "证据冲突、筛选或多层排除",
+    }:
+        evidence.append(f"证据关系={features['evidence_relation']}")
+    if features["experiment_requirement"] in {
+        "控制变量、现象解释或数据归纳",
+        "方案设计、评价或补充实验",
+        "多阶段探究与定量误差",
+    }:
+        evidence.append(f"实验要求={features['experiment_requirement']}")
+    if features["graph_table_requirement"] in {
+        "多组比较归纳",
+        "拐点、平台或分段反推",
+        "多图表耦合建模",
+    }:
+        evidence.append(f"图表要求={features['graph_table_requirement']}")
+    if features["calculation_model"] in {
+        "单一方程式或关系式",
+        "单一守恒或多反应计算",
+        "多重守恒、差量、联立或分类",
+    }:
+        evidence.append(f"计算模型={features['calculation_model']}")
+    return evidence
+
+
+def core12_basic_application_evidence(
+    features: Dict[str, Any],
+) -> List[str]:
+    """送分题离开直接检索束的结构证据。"""
+    evidence: List[str] = []
+    if features["reasoning_depth"] == "1层":
+        evidence.append("推理深度=1层")
+    if features["reasoning_direction"] in {
+        "正向推导",
+        "逆向推导",
+        "分类讨论或综合推导",
+    }:
+        evidence.append(f"推理方向={features['reasoning_direction']}")
+    if features["knowledge_relation"] != "单一知识点":
+        evidence.append(f"知识关系={features['knowledge_relation']}")
+    if features["representation_conversion"] != "无":
+        evidence.append(
+            f"表征转换={features['representation_conversion']}"
+        )
+    if features["reaction_relation"] != "无反应关系":
+        evidence.append(f"反应关系={features['reaction_relation']}")
+    if features["constraint_complexity"] != "无约束":
+        evidence.append(
+            f"约束复杂度={features['constraint_complexity']}"
+        )
+    if features["evidence_relation"] != "无证据任务":
+        evidence.append(f"证据关系={features['evidence_relation']}")
+    if features["experiment_requirement"] != "无":
+        evidence.append(f"实验要求={features['experiment_requirement']}")
+    if features["calculation_model"] != "无":
+        evidence.append(f"计算模型={features['calculation_model']}")
+    if (
+        features["unfamiliar_information_transfer"]
+        != "课内直接原型"
+    ):
+        evidence.append(
+            "陌生信息迁移="
+            + features["unfamiliar_information_transfer"]
+        )
+    return evidence
+
+
+def core12_complete_model_evidence(
+    features: Dict[str, Any],
+) -> List[str]:
+    """基础题进入中等题比较所需的完整常规模型证据。"""
+    evidence: List[str] = []
+    if features["reaction_relation"] in {
+        "2-3个并列或简单连续反应",
+        "多反应连续转化",
+        "先后、竞争或过量不足",
+        "需要分情况判断的反应模型",
+    }:
+        evidence.append(f"反应关系={features['reaction_relation']}")
+    if features["evidence_relation"] in {
+        "多条清晰证据联合",
+        "需要排除竞争解释",
+        "证据冲突、筛选或多层排除",
+    }:
+        evidence.append(f"证据关系={features['evidence_relation']}")
+    if features["experiment_requirement"] in {
+        "控制变量、现象解释或数据归纳",
+        "方案设计、评价或补充实验",
+        "多阶段探究与定量误差",
+    }:
+        evidence.append(f"实验要求={features['experiment_requirement']}")
+    if features["graph_table_requirement"] in {
+        "多组比较归纳",
+        "拐点、平台或分段反推",
+        "多图表耦合建模",
+    }:
+        evidence.append(f"图表要求={features['graph_table_requirement']}")
+    if features["calculation_model"] in {
+        "单一方程式或关系式",
+        "单一守恒或多反应计算",
+        "多重守恒、差量、联立或分类",
+    }:
+        evidence.append(f"计算模型={features['calculation_model']}")
+    if features["subquestion_dependency"] in {
+        "多问共享模型但无答案依赖",
+        "多问存在结果或任务链依赖",
+    }:
+        evidence.append(
+            f"小问关系={features['subquestion_dependency']}"
+        )
+    return evidence
+
+
+def core12_high_evidence(features: Dict[str, Any]) -> List[str]:
+    evidence: List[str] = []
+    if features["reasoning_depth"] in {"4-5层", "6层及以上"}:
+        evidence.append(f"推理深度={features['reasoning_depth']}")
+    if features["reasoning_direction"] in {"逆向推导", "分类讨论或综合推导"}:
+        evidence.append(f"推理方向={features['reasoning_direction']}")
+    if features["knowledge_relation"] in {"跨模块融合", "多模块深度融合"}:
+        evidence.append(f"知识关系={features['knowledge_relation']}")
+    if features["reaction_relation"] in {
+        "多反应连续转化",
+        "先后、竞争或过量不足",
+        "需要分情况判断的反应模型",
+    }:
+        evidence.append(f"反应关系={features['reaction_relation']}")
+    if features["constraint_complexity"] in {"多个相互关联约束", "多层嵌套约束"}:
+        evidence.append(f"约束复杂度={features['constraint_complexity']}")
+    if features["evidence_relation"] in {
+        "需要排除竞争解释",
+        "证据冲突、筛选或多层排除",
+    }:
+        evidence.append(f"证据关系={features['evidence_relation']}")
+    if features["experiment_requirement"] in {
+        "方案设计、评价或补充实验",
+        "多阶段探究与定量误差",
+    }:
+        evidence.append(f"实验要求={features['experiment_requirement']}")
+    if features["graph_table_requirement"] in {
+        "拐点、平台或分段反推",
+        "多图表耦合建模",
+    }:
+        evidence.append(f"图表要求={features['graph_table_requirement']}")
+    if features["calculation_model"] in {
+        "单一守恒或多反应计算",
+        "多重守恒、差量、联立或分类",
+    }:
+        evidence.append(f"计算模型={features['calculation_model']}")
+    if features["unfamiliar_information_transfer"] in {
+        "迁移后建立关系",
+        "完全陌生模型现场建立",
+    }:
+        evidence.append(
+            "陌生信息迁移="
+            + features["unfamiliar_information_transfer"]
+        )
+    if features["subquestion_dependency"] == "多问存在结果或任务链依赖":
+        evidence.append("多问存在结果或任务链依赖")
+    return evidence
+
+
+def core12_decisive_evidence(features: Dict[str, Any]) -> List[str]:
+    """中等题进入拔高题比较所需的决定性转换。"""
+    evidence: List[str] = []
+    if features["reasoning_direction"] in {
+        "逆向推导",
+        "分类讨论或综合推导",
+    }:
+        evidence.append(f"推理方向={features['reasoning_direction']}")
+    if features["representation_conversion"] in {
+        "两类表征连续转换",
+        "宏观-微观-符号-定量多重转换",
+    }:
+        evidence.append(
+            f"表征转换={features['representation_conversion']}"
+        )
+    if features["reaction_relation"] in {
+        "先后、竞争或过量不足",
+        "需要分情况判断的反应模型",
+    }:
+        evidence.append(f"反应关系={features['reaction_relation']}")
+    if features["constraint_complexity"] in {
+        "多个相互关联约束",
+        "多层嵌套约束",
+    }:
+        evidence.append(
+            f"约束复杂度={features['constraint_complexity']}"
+        )
+    if features["evidence_relation"] in {
+        "需要排除竞争解释",
+        "证据冲突、筛选或多层排除",
+    }:
+        evidence.append(f"证据关系={features['evidence_relation']}")
+    if features["experiment_requirement"] in {
+        "方案设计、评价或补充实验",
+        "多阶段探究与定量误差",
+    }:
+        evidence.append(f"实验要求={features['experiment_requirement']}")
+    if features["graph_table_requirement"] in {
+        "拐点、平台或分段反推",
+        "多图表耦合建模",
+    }:
+        evidence.append(f"图表要求={features['graph_table_requirement']}")
+    if features["calculation_model"] in {
+        "单一守恒或多反应计算",
+        "多重守恒、差量、联立或分类",
+    }:
+        evidence.append(f"计算模型={features['calculation_model']}")
+    if features["unfamiliar_information_transfer"] in {
+        "迁移后建立关系",
+        "完全陌生模型现场建立",
+    }:
+        evidence.append(
+            "陌生信息迁移="
+            + features["unfamiliar_information_transfer"]
+        )
+    return evidence
+
+
+def core12_final_evidence(features: Dict[str, Any]) -> List[str]:
+    """拔高题进入压轴题比较所需的强耦合证据。"""
+    evidence: List[str] = []
+    if features["reasoning_direction"] in {
+        "逆向推导",
+        "分类讨论或综合推导",
+    }:
+        evidence.append(f"推理方向={features['reasoning_direction']}")
+    if features["knowledge_relation"] == "多模块深度融合":
+        evidence.append("知识关系=多模块深度融合")
+    if (
+        features["representation_conversion"]
+        == "宏观-微观-符号-定量多重转换"
+    ):
+        evidence.append(
+            "表征转换=宏观-微观-符号-定量多重转换"
+        )
+    if features["reaction_relation"] in {
+        "多反应连续转化",
+        "先后、竞争或过量不足",
+        "需要分情况判断的反应模型",
+    }:
+        evidence.append(f"反应关系={features['reaction_relation']}")
+    if features["constraint_complexity"] == "多层嵌套约束":
+        evidence.append("约束复杂度=多层嵌套约束")
+    if features["evidence_relation"] == "证据冲突、筛选或多层排除":
+        evidence.append("证据关系=证据冲突、筛选或多层排除")
+    if features["experiment_requirement"] == "多阶段探究与定量误差":
+        evidence.append("实验要求=多阶段探究与定量误差")
+    if features["graph_table_requirement"] == "多图表耦合建模":
+        evidence.append("图表要求=多图表耦合建模")
+    if (
+        features["calculation_model"]
+        == "多重守恒、差量、联立或分类"
+    ):
+        evidence.append("计算模型=多重守恒、差量、联立或分类")
+    if features["unfamiliar_information_transfer"] in {
+        "迁移后建立关系",
+        "完全陌生模型现场建立",
+    }:
+        evidence.append(
+            "陌生信息迁移="
+            + features["unfamiliar_information_transfer"]
+        )
+    if (
+        features["subquestion_dependency"]
+        == "多问存在结果或任务链依赖"
+    ):
+        evidence.append("多问存在结果或任务链依赖")
+    return evidence
+
+
+def core12_is_direct_retrieval(features: Dict[str, Any]) -> bool:
+    return (
+        features["reasoning_depth"] == "0层"
+        and features["reasoning_direction"] == "直接识记"
+        and features["knowledge_relation"] == "单一知识点"
+        and features["representation_conversion"] == "无"
+        and features["reaction_relation"] == "无反应关系"
+        and features["constraint_complexity"] == "无约束"
+        and features["evidence_relation"] == "无证据任务"
+        and features["experiment_requirement"] == "无"
+        and features["graph_table_requirement"] in {"无", "直接读数"}
+        and features["calculation_model"] == "无"
+        and features["unfamiliar_information_transfer"] == "课内直接原型"
+        and features["subquestion_dependency"] in {"无多问", "多问相互独立"}
+    )
+
+
+def add_feature_audit_flags(
+    rating_result: Dict[str, Any],
+    data: Dict[str, Any],
+) -> None:
+    """记录 Core-12 的结构异常，只审计、不直接改档。"""
     features = rating_result.get("features") or {}
     level = rating_result.get("difficulty_level", "")
     flags: List[str] = []
-    text_no_analysis = visible_text(data, include_analysis=False)
-    text_all = visible_text(data, include_analysis=True)
-
-    has_image_placeholder = "<image" in text_all.lower() or "[image" in text_all.lower() or "图片" in text_all
-    has_image_url = bool(str(data.get("stem_pic_url", "") or "").strip() or str(data.get("analysis_pic_url", "") or "").strip())
-    if (has_image_placeholder or has_image_url) and features.get("information_carrier") == "纯文字":
-        flags.append("纯文本模式图像信息未进入模型：information_carrier=纯文字，图像类 feature 仅供参考")
-
-    graph_markers = ["图", "图像", "图象", "曲线", "表", "数据", "压强", "气压", "质量变化", "坐标", "如下图", "如图"]
-    if contains_any(text_all, graph_markers) and features.get("graph_table_requirement") == "无":
-        flags.append("题干/解析存在图表或数据线索，但 graph_table_requirement=无，建议人审确认")
-
-    flow_markers = ["流程", "工艺", "滤渣", "滤液", "转化关系", "框图", "A-G", "A～G", "A~G", "A-E", "A～E", "A~E"]
-    if contains_any(text_all, flow_markers) and features.get("additional_structure") == "无":
-        flags.append("题干/解析存在流程/框图/推断线索，但 additional_structure=无，建议人审确认")
-
-    high_count = high_level_feature_count(features, data)
+    text = visible_text(data, include_analysis=True)
+    if (
+        VISUAL_REFERENCE_RE.search(text)
+        and features.get("graph_table_requirement") == "无"
+    ):
+        flags.append(
+            "题面明确引用图表/流程/装置，但graph_table_requirement=无，"
+            "需结合image_input_used检查视觉信息是否只是呈现"
+        )
+    high_count = len(core12_high_evidence(features))
+    final_count = len(core12_final_evidence(features))
+    if level == "送分题" and not core12_is_direct_retrieval(features):
+        flags.append("送分题与Core-12非直接检索结构存在张力")
+    if level == "基础题" and core12_is_direct_retrieval(features):
+        flags.append(
+            "基础题呈现全低Core-12：可能是送分边界，也可能漏识别复合任务；"
+            "仅审计，不自动降档"
+        )
     if level == "拔高题" and high_count < 2:
-        flags.append(f"拔高题但高阶特征计数偏低({high_count})，可能依赖题型规则或关键词升档")
-    if level == "压轴题" and high_count < 4:
-        flags.append(f"压轴题但高阶特征计数偏低({high_count})，建议人工复核压轴证据链")
-
-    hard_markers = ["方案评价", "质疑", "可靠性", "补充实验", "干扰", "滤渣", "滤液", "先后反应", "过量", "不足", "拐点", "平台", "极值", "分类讨论", "复杂守恒", "元素守恒"]
-    if level in ["送分题", "基础题"] and contains_any(text_all, hard_markers):
-        flags.append("低档题中出现拔高关键词，若题目确有证据链/多约束/复杂计算，需人工确认是否低估")
-
+        flags.append(f"拔高题仅有{high_count}项高阶结构证据")
+    if level == "压轴题" and (
+        features["reasoning_depth"] != "6层及以上"
+        and final_count < 2
+    ):
+        flags.append("压轴题缺少6层以上深链或特殊结构的复合证据")
     if rating_result.get("postprocess_trace"):
-        flags.append("后处理已改档：reasoning 已按最终档位同步，原始模型解释仅作参考")
-
-    # 去重并保持顺序。
-    deduped: List[str] = []
-    for flag in flags:
-        if flag and flag not in deduped:
-            deduped.append(flag)
-    rating_result["feature_audit_flags"] = deduped
+        flags.append("后处理已作一次相邻档校准，原始模型结果另行保留")
+    rating_result["feature_audit_flags"] = list(dict.fromkeys(flags))
 
 
 def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
-    """化学后处理自动纠偏主流程。"""
+    """化学后处理自动纠偏主流程。
+
+    与物理正式逻辑一致：以原始模型档位选择唯一边界分支，每题最多调整
+    一个相邻档；未达到主动升档条件不等于必须降档。
+    """
     if not rating_result:
         return rating_result
 
-    rating_result["features"] = normalize_features(rating_result.get("features", {}))
+    rating_result = validate_rating_contract(rating_result)
     normalize_reasoning_schema(rating_result)
+    raw_level = rating_result["difficulty_level"]
+    rating_result["postprocess_original_level"] = raw_level
+    rating_result["postprocess_trace"] = []
+    rating_result["postprocess_actions"] = []
+    rating_result["postprocess_profile"] = (
+        "chemistry_core12_conservative_adjacent_v1"
+    )
+    rating_result["feature_schema_version"] = "chemistry_core12_strict_v1"
+    rating_result["schema_validation_passed"] = True
+    features = rating_result["features"]
+    medium_evidence = core12_medium_evidence(features)
+    basic_evidence = core12_basic_application_evidence(features)
+    complete_model_evidence = core12_complete_model_evidence(features)
+    high_evidence = core12_high_evidence(features)
+    decisive_evidence = core12_decisive_evidence(features)
+    final_evidence = core12_final_evidence(features)
+    depth = CORE12_DEPTH_ORDER[features["reasoning_depth"]]
 
-    level = rating_result.get("difficulty_level", "")
-    if level not in VALID_LEVELS:
-        # 若模型输出非法等级，按特征粗略兜底。
-        rating_result["difficulty_level"] = infer_level_from_features(rating_result["features"], data)
-        set_level_with_reason(rating_result, rating_result["difficulty_level"], "自动修复：模型输出非法难度等级，已按特征兜底推断")
-
-    if rating_result.get("difficulty_level") == "基础题" and should_downgrade_basic_to_easy(rating_result["features"], data):
-        set_level_with_reason(rating_result, "送分题", "自动降档：无计算、无实验、无证据链的短纯概念直答题")
-
-    if rating_result.get("difficulty_level") == "送分题":
-        upgrade_reasons = should_upgrade_easy_to_basic(rating_result["features"], data)
-        if upgrade_reasons:
-            set_level_with_reason(rating_result, "基础题", "自动升档：" + "；".join(upgrade_reasons))
-
-    if rating_result.get("difficulty_level") == "基础题":
-        upgrade_reasons = should_upgrade_basic_to_medium(rating_result["features"], data)
-        if upgrade_reasons:
-            set_level_with_reason(rating_result, "中等题", "自动升档：" + "；".join(upgrade_reasons))
-
-    if rating_result.get("difficulty_level") == "中等题" and should_downgrade_medium_to_basic(rating_result["features"], data):
-        set_level_with_reason(rating_result, "基础题", "自动降档：短步骤、单反应/单概念题，未达到中等复杂度")
-
-    if rating_result.get("difficulty_level") == "中等题":
-        ok, reasons = should_upgrade_medium_to_hard(rating_result["features"], data)
-        if ok:
-            set_level_with_reason(rating_result, "拔高题", "自动升档：" + "；".join(reasons))
-
-    if rating_result.get("difficulty_level") == "拔高题":
-        downgraded = should_downgrade_standard_experiment(rating_result["features"], data)
-        if downgraded:
-            set_level_with_reason(rating_result, downgraded, f"自动降档：标准实验/基础图表题，未达到拔高复杂度，降为{downgraded}")
-
-    if rating_result.get("difficulty_level") == "拔高题":
-        ok, reasons = should_upgrade_hard_to_final(rating_result["features"], data)
-        if ok:
-            set_level_with_reason(rating_result, "压轴题", "自动升档：" + "；".join(reasons))
-
-    if rating_result.get("difficulty_level") == "压轴题" and should_downgrade_final_to_hard(rating_result["features"], data):
-        set_level_with_reason(rating_result, "拔高题", "自动降档：压轴核心组合不足或高阶特征不足")
+    if raw_level == "送分题" and not core12_is_direct_retrieval(features):
+        if len(basic_evidence) >= 2:
+            set_level_with_reason(
+                rating_result,
+                "基础题",
+                "自动升档：至少两项Core-12证据共同显示已离开直接检索束",
+                rule="core12_easy_to_basic_application",
+                evidence=basic_evidence[:4],
+            )
+    elif raw_level == "基础题":
+        # Core-12全低可能是真送分，也可能是模型漏识别复合任务。
+        # 历史591题回放中该自动降档无净收益，因此只审计、不写回。
+        if depth >= 2 and complete_model_evidence:
+            set_level_with_reason(
+                rating_result,
+                "中等题",
+                "自动升档：形成2—3层以上完整常规化学模型",
+                rule="core12_basic_to_medium_complete_model",
+                evidence=[
+                    f"推理深度={features['reasoning_depth']}",
+                    *complete_model_evidence[:3],
+                ],
+            )
+    elif raw_level == "中等题":
+        if depth <= 1 and not complete_model_evidence:
+            set_level_with_reason(
+                rating_result,
+                "基础题",
+                "自动降档：仅有0—1层显性应用且无完整常规模型",
+                rule="core12_medium_to_basic_low_structure",
+                evidence=[
+                    f"推理深度={features['reasoning_depth']}",
+                    "缺少联合证据、完整实验流程或完整计算模型",
+                ],
+            )
+        elif (
+            depth >= 3
+            and len(decisive_evidence) >= 2
+        ):
+            set_level_with_reason(
+                rating_result,
+                "拔高题",
+                "自动升档：4—5层链中存在至少两项决定性转换证据",
+                rule="core12_medium_to_hard_decisive_transform",
+                evidence=[
+                    f"推理深度={features['reasoning_depth']}",
+                    *decisive_evidence[:4],
+                ],
+            )
+    elif raw_level == "拔高题":
+        if depth <= 2 and not decisive_evidence:
+            set_level_with_reason(
+                rating_result,
+                "中等题",
+                "自动降档：常规2—3层正向模型且无决定性高阶卡点",
+                rule="core12_hard_to_medium_routine_model",
+                evidence=medium_evidence[:4],
+            )
+        elif (
+            depth >= 4
+            and len(final_evidence) >= 4
+            and (
+                features["subquestion_dependency"]
+                == "多问存在结果或任务链依赖"
+                or (
+                    features["reaction_relation"]
+                    in {
+                        "多反应连续转化",
+                        "先后、竞争或过量不足",
+                        "需要分情况判断的反应模型",
+                    }
+                    and features["calculation_model"]
+                    in {
+                        "单一守恒或多反应计算",
+                        "多重守恒、差量、联立或分类",
+                    }
+                )
+            )
+        ):
+            set_level_with_reason(
+                rating_result,
+                "压轴题",
+                "自动升档：6层以上深链中多个高阶任务相互改变模型",
+                rule="core12_hard_to_final_coupled_chain",
+                evidence=final_evidence[:6],
+            )
+    elif raw_level == "压轴题":
+        if depth <= 3 and len(final_evidence) < 2:
+            set_level_with_reason(
+                rating_result,
+                "拔高题",
+                "自动降档：题面明确只形成有限常规链，未达到压轴耦合",
+                rule="core12_final_to_hard_clear_low_density",
+                evidence=[
+                    f"推理深度={features['reasoning_depth']}",
+                    *high_evidence[:3],
+                ],
+            )
 
     sync_coarse_difficulty(rating_result)
     sync_reasoning_after_postprocess(rating_result)
+    rating_result["postprocess_actions"] = copy.deepcopy(
+        rating_result.get("postprocess_trace", [])
+    )
+    if len(rating_result["postprocess_actions"]) > 1:
+        raise RuntimeError("后处理违反单次相邻调整约束")
+    rating_result["automatic_level_change_applied"] = bool(
+        rating_result["postprocess_actions"]
+    )
+    rating_result["postprocess_evidence_counts"] = {
+        "basic_application": len(basic_evidence),
+        "complete_model": len(complete_model_evidence),
+        "decisive_transform": len(decisive_evidence),
+        "final_coupling": len(final_evidence),
+    }
     add_feature_audit_flags(rating_result, data)
     return rating_result
 
 
 def infer_level_from_features(features: Dict[str, Any], data: Dict[str, Any]) -> str:
-    high = high_level_feature_count(features, data)
-    if high >= 4:
+    depth = CORE12_DEPTH_ORDER[features["reasoning_depth"]]
+    final = len(core12_final_evidence(features))
+    decisive = len(core12_decisive_evidence(features))
+    complete = len(core12_complete_model_evidence(features))
+    if depth >= 4 and final >= 4:
         return "压轴题"
-    if high >= 2 or features.get("step_count") == "9-12步":
+    if depth >= 3 and decisive >= 2:
         return "拔高题"
-    if (
-        features.get("step_count") == "6-8步"
-        or features.get("experiment_requirement") in ["控制变量或现象分析", "方案设计或误差评价"]
-        or features.get("graph_table_requirement") in ["多组比较归纳", "图像反推或拐点分析"]
-        or features.get("evidence_relation") in ["多现象证据链", "证据冲突与排除"]
-    ):
+    if depth >= 2 and complete:
         return "中等题"
-    if should_downgrade_basic_to_easy(features, data):
+    if core12_is_direct_retrieval(features):
         return "送分题"
     return "基础题"
 
 # -------------------------- 5. 构建题目输入与模型调用 --------------------------
+def sanitize_question_data(data: Dict[str, Any]) -> Dict[str, Any]:
+    """递归隔离来源难度标签，模型输入和后处理均不得读取。"""
+    def clean(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: clean(item)
+                for key, item in value.items()
+                if key not in UNTRUSTED_LABEL_FIELDS
+            }
+        if isinstance(value, list):
+            return [clean(item) for item in value]
+        return copy.deepcopy(value)
+
+    return clean(data)
+
+
+def make_output_base(data: Dict[str, Any]) -> Dict[str, Any]:
+    """保留来源审计，但不继续用可信字段名保存原difficulty。"""
+    def rename(value: Any) -> Any:
+        if isinstance(value, dict):
+            output: Dict[str, Any] = {}
+            for key, item in value.items():
+                target = (
+                    f"source_{key}_untrusted"
+                    if key in UNTRUSTED_LABEL_FIELDS
+                    else key
+                )
+                output[target] = rename(item)
+            return output
+        if isinstance(value, list):
+            return [rename(item) for item in value]
+        return copy.deepcopy(value)
+
+    return rename(data)
+
+
 def construct_question_content(data: Dict[str, Any]) -> str:
     """将数据记录拼装成标准的打标输入文本；对齐物理脚本，兼容 sub_questions。"""
     parts: List[str] = []
@@ -1564,10 +2194,15 @@ def construct_question_content(data: Dict[str, Any]) -> str:
     if analysis:
         parts.append(f"【解析】\n{analysis}")
 
-    sub_questions = data.get("sub_questions", []) or []
+    sub_questions = list(data.get("sub_questions", []) or [])
     if sub_questions:
         try:
-            sub_questions.sort(key=lambda x: int(x.get("question_id", 0)) if isinstance(x, dict) else 0)
+            sub_questions = sorted(
+                sub_questions,
+                key=lambda x: int(x.get("question_id", 0))
+                if isinstance(x, dict)
+                else 0,
+            )
         except Exception:
             pass
         parts.append("【小题】")
@@ -1587,6 +2222,121 @@ def construct_question_content(data: Dict[str, Any]) -> str:
                 parts.append(f"    题干: {sq}")
 
     return "\n\n".join(parts)
+
+
+def _collect_analysis_text(data: Dict[str, Any]) -> str:
+    parts = [str(data.get("analysis", "") or "").strip()]
+    for item in data.get("sub_questions", []) or []:
+        if isinstance(item, dict):
+            parts.append(str(item.get("analysis", "") or "").strip())
+    return "\n".join(part for part in parts if part)
+
+
+def extract_image_urls(value: Any) -> List[str]:
+    """兼容单URL、逗号拼接URL和URL列表，保持原顺序并去重。"""
+    if isinstance(value, (list, tuple)):
+        candidates = [str(item or "").strip() for item in value]
+    else:
+        candidates = [
+            part.strip()
+            for part in re.split(r"[,，\s]+", str(value or "").strip())
+        ]
+    urls: List[str] = []
+    for candidate in candidates:
+        if (
+            candidate.startswith(("http://", "https://"))
+            and candidate not in urls
+        ):
+            urls.append(candidate)
+    return urls
+
+
+def select_image_fields(data: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+    """按物理项目经验，仅在题面真实依赖视觉关系时发送图片。"""
+    available = {
+        field: extract_image_urls(data.get(field))
+        for field in ("stem_pic_url", "analysis_pic_url")
+        if extract_image_urls(data.get(field))
+    }
+    if CHEMISTRY_IMAGE_MODE == "off" or not available:
+        return [], [
+            "图片模式关闭"
+            if CHEMISTRY_IMAGE_MODE == "off"
+            else "无可用图片URL"
+        ]
+    if CHEMISTRY_IMAGE_MODE == "all":
+        return list(available), ["all模式：发送全部可用图片"]
+
+    stem_text = visible_text(data, include_analysis=False)
+    analysis_text = _collect_analysis_text(data)
+    selected: List[str] = []
+    reasons: List[str] = []
+    if "stem_pic_url" in available and (
+        not str(data.get("stem", "") or "").strip()
+        or VISUAL_REFERENCE_RE.search(stem_text)
+        or VISUAL_PLACEHOLDER_RE.search(stem_text)
+    ):
+        selected.append("stem_pic_url")
+        reasons.append("题干明确依赖图表/装置/流程/微观或空间关系")
+
+    if "analysis_pic_url" in available and (
+        not analysis_text
+        or VISUAL_PLACEHOLDER_RE.search(analysis_text)
+        or (
+            VISUAL_REFERENCE_RE.search(analysis_text)
+            and "stem_pic_url" not in available
+        )
+    ):
+        selected.append("analysis_pic_url")
+        reasons.append("结构化解析缺失或解析中的关键视觉关系无法由题干图补足")
+
+    if not selected:
+        reasons.append("结构化文字足以支持定档，不发送图片")
+    return selected, reasons
+
+
+def build_user_content(
+    data: Dict[str, Any],
+    selected_image_fields: Optional[Sequence[str]] = None,
+) -> Any:
+    """完整文字始终先发，图片只作为必要视觉补充。"""
+    selected = list(
+        selected_image_fields
+        if selected_image_fields is not None
+        else select_image_fields(data)[0]
+    )
+    dynamic_text = (
+        f"{construct_question_content(data)}"
+        f"{DIFFICULTY_RATING_PROMPT_SUFFIX}\n\n"
+        "完整结构化文字是主要题面来源；不要从URL、题号或来源标签推断难度。"
+    )
+    if not selected:
+        return dynamic_text
+
+    content: List[Dict[str, str]] = [
+        {"type": "input_text", "text": dynamic_text}
+    ]
+    labels = {
+        "stem_pic_url": (
+            "下面是按需发送的题干图片。只补充文字无法表达的装置连接、"
+            "流程箭头、曲线阶段、表格对应、粒子分布或空间关系。"
+        ),
+        "analysis_pic_url": (
+            "下面是按需发送的解析图片。只核对必要解题链和视觉关系，"
+            "不得因为看到答案而降低难度。"
+        ),
+    }
+    seen = set()
+    for field in selected:
+        urls = extract_image_urls(data.get(field))
+        if urls:
+            content.append({"type": "input_text", "text": labels[field]})
+        for url in urls:
+            if url in seen:
+                continue
+            content.append({"type": "input_image", "image_url": url})
+            seen.add(url)
+    return content
 
 
 def parse_model_response(response_text: str) -> Dict[str, Any]:
@@ -1620,25 +2370,87 @@ def parse_model_response(response_text: str) -> Dict[str, Any]:
 
 
 async def call_model_with_cache(
-    question_content: str,
+    data: Dict[str, Any],
     session: aiohttp.ClientSession,
     retries: int,
     timeout_sec: int,
-) -> Tuple[Dict[str, Any], float, int, int, int]:
-    response_id = await get_or_create_cache(session, retries, timeout_sec)
-    if not response_id:
-        print("警告: 无法获取有效缓存 ID，终止单题请求")
-        return {}, 0.0, 0, 0, 0
+    repair_feedback: str = "",
+) -> Tuple[
+    Dict[str, Any],
+    str,
+    float,
+    int,
+    int,
+    int,
+    Dict[str, Any],
+]:
+    selected_fields, selection_reasons = select_image_fields(data)
+    selected_urls = [
+        url
+        for field in selected_fields
+        for url in extract_image_urls(data.get(field))
+    ]
+    image_status = {
+        "question_input_mode": f"text_first_image_{CHEMISTRY_IMAGE_MODE}",
+        "question_text_input_used": True,
+        "structured_text_char_count": len(construct_question_content(data)),
+        "image_mode": CHEMISTRY_IMAGE_MODE,
+        "image_input_requested": bool(selected_fields),
+        "image_input_used": False,
+        "image_input_fields": selected_fields,
+        "image_input_url_count": len(dict.fromkeys(selected_urls)),
+        "image_selection_reasons": selection_reasons,
+        "http_retry_count": 0,
+    }
 
-    dynamic_content = f"{question_content}{DIFFICULTY_RATING_PROMPT_SUFFIX}"
+    response_id: Optional[str] = None
+    if USE_CACHE:
+        response_id = await get_or_create_cache(session, retries, timeout_sec)
+        if not response_id:
+            print("警告: 无法获取有效缓存 ID，终止单题请求")
+            return {}, "", 0.0, 0, 0, 0, image_status
 
     for retry in range(retries):
+        image_status["http_retry_count"] = retry
+        user_content = build_user_content(data, selected_fields)
+        if repair_feedback:
+            repair_part = {
+                "type": "input_text",
+                "text": (
+                    "【上次输出修复要求】\n"
+                    + repair_feedback
+                    + "\n保持实质难度判断不变，只修复缺失字段、非法枚举或JSON格式。"
+                ),
+            }
+            if isinstance(user_content, list):
+                user_content = [*user_content, repair_part]
+            else:
+                user_content = [
+                    {"type": "input_text", "text": user_content},
+                    repair_part,
+                ]
+
+        if USE_CACHE:
+            request_content = user_content
+        else:
+            prefix_part = {
+                "type": "input_text",
+                "text": DIFFICULTY_RATING_PROMPT_PREFIX,
+            }
+            if isinstance(user_content, list):
+                request_content = [prefix_part, *user_content]
+            else:
+                request_content = [
+                    prefix_part,
+                    {"type": "input_text", "text": user_content},
+                ]
         payload = {
             "model": MODEL_NAME,
-            "previous_response_id": response_id,
-            "input": [{"role": "user", "content": dynamic_content}],
+            "input": [{"role": "user", "content": request_content}],
             "thinking": {"type": "disabled"},
         }
+        if USE_CACHE:
+            payload["previous_response_id"] = response_id
         if TEMPERATURE is not None:
             payload["temperature"] = TEMPERATURE
         t1 = time.time()
@@ -1663,7 +2475,16 @@ async def call_model_with_cache(
                     completion_tokens = usage.get("output_tokens", 0)
                     total_tokens = usage.get("total_tokens", 0)
                     parsed_result = parse_model_response(output_text)
-                    return parsed_result, time.time() - t1, prompt_tokens, completion_tokens, total_tokens
+                    image_status["image_input_used"] = bool(selected_fields)
+                    return (
+                        parsed_result,
+                        output_text,
+                        time.time() - t1,
+                        prompt_tokens,
+                        completion_tokens,
+                        total_tokens,
+                        image_status,
+                    )
 
                 if response.status == 429:
                     retry_after = int(response.headers.get("Retry-After", 5))
@@ -1673,11 +2494,11 @@ async def call_model_with_cache(
 
                 error_text = await response.text()
                 print(f"API请求失败 (状态码: {response.status}): {error_text[:200]}")
-                if "InvalidParameter.PreviousResponseNotFound" in error_text:
+                if USE_CACHE and "InvalidParameter.PreviousResponseNotFound" in error_text:
                     print("检测到服务器缓存丢失，正在重建缓存...")
                     new_response_id = await create_prefix_cache(session, retries, timeout_sec)
                     if not new_response_id:
-                        return {}, 0.0, 0, 0, 0
+                        return {}, "", 0.0, 0, 0, 0, image_status
                     response_id = new_response_id
                     continue
                 if response.status >= 500:
@@ -1686,24 +2507,25 @@ async def call_model_with_cache(
                     await asyncio.sleep(backoff)
                     continue
                 if 400 <= response.status < 500:
-                    return {}, 0.0, 0, 0, 0
+                    return {}, "", 0.0, 0, 0, 0, image_status
         except aiohttp.ClientError as e:
             backoff = (2 ** retry) + random.uniform(0, 1)
             if retry == retries - 1:
                 print(f"网络异常最终失败: {e}")
-                return {}, 0.0, 0, 0, 0
+                return {}, "", 0.0, 0, 0, 0, image_status
             print(f"网络出现异常: {e}，将进行退避 {backoff:.2f} 秒后重试...")
             await asyncio.sleep(backoff)
         except Exception as e:
             print(f"运行过程中请求异常: {e}")
             if retry == retries - 1:
-                return {}, 0.0, 0, 0, 0
-            new_response_id = await create_prefix_cache(session, retries, timeout_sec)
-            if new_response_id:
-                response_id = new_response_id
+                return {}, "", 0.0, 0, 0, 0, image_status
+            if USE_CACHE:
+                new_response_id = await create_prefix_cache(session, retries, timeout_sec)
+                if new_response_id:
+                    response_id = new_response_id
             await asyncio.sleep(1)
 
-    return {}, 0.0, 0, 0, 0
+    return {}, "", 0.0, 0, 0, 0, image_status
 
 # -------------------------- 6. 并发处理 --------------------------
 async def process_single_question(
@@ -1717,36 +2539,121 @@ async def process_single_question(
 ) -> None:
     async with semaphore:
         question_id = data.get("question_id", "unknown")
-        try:
-            question_content = construct_question_content(data)
-            rating_result, time_use, prompt_tokens, completion_tokens, total_tokens = await call_model_with_cache(
-                question_content, session, retries, timeout_sec
-            )
+        safe_data = sanitize_question_data(data)
+        total_time = 0.0
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        total_tokens = 0
+        schema_retry_count = 0
+        schema_errors: List[str] = []
+        repair_feedback = ""
+        raw_result: Dict[str, Any] = {}
+        raw_text = ""
+        image_status: Dict[str, Any] = {}
 
-            rating_result = postprocess_chemistry_difficulty(rating_result, data)
+        while True:
+            try:
+                (
+                    candidate,
+                    raw_text,
+                    time_use,
+                    prompt_tokens,
+                    completion_tokens,
+                    call_tokens,
+                    image_status,
+                ) = await call_model_with_cache(
+                    safe_data,
+                    session,
+                    retries,
+                    timeout_sec,
+                    repair_feedback=repair_feedback,
+                )
+                raw_result = copy.deepcopy(candidate)
+                total_time += time_use
+                total_prompt_tokens += prompt_tokens
+                total_completion_tokens += completion_tokens
+                total_tokens += call_tokens
 
-            output_data = data.copy()
-            output_data["difficulty_rating"] = rating_result
-            output_data["api_time_use"] = round(time_use, 2)
-            output_data["api_prompt_tokens"] = prompt_tokens
-            output_data["api_completion_tokens"] = completion_tokens
-            output_data["api_total_tokens"] = total_tokens
+                try:
+                    if not candidate:
+                        raise ChemistrySchemaError("模型返回空对象或JSON解析失败")
+                    rating_result = postprocess_chemistry_difficulty(
+                        candidate,
+                        safe_data,
+                    )
+                except ChemistrySchemaError as exc:
+                    schema_errors.append(str(exc))
+                    if schema_retry_count >= MAX_SCHEMA_RETRIES:
+                        raise RuntimeError(
+                            f"schema校验重试耗尽({MAX_SCHEMA_RETRIES}): {exc}"
+                        ) from exc
+                    schema_retry_count += 1
+                    repair_feedback = f"上次输出未通过Core-12 schema：{exc}"
+                    continue
 
-            if rating_result and rating_result.get("difficulty_level"):
+                output_data = make_output_base(data)
+                output_data["rating_profile"] = RATING_PROFILE
+                output_data["model_name"] = MODEL_NAME
+                output_data["temperature"] = TEMPERATURE
+                output_data["cache_enabled"] = USE_CACHE
+                output_data["difficulty_rating_raw"] = copy.deepcopy(raw_result)
+                output_data["difficulty_level_raw"] = str(
+                    raw_result.get("difficulty_level", "") or ""
+                )
+                output_data["postprocess_actions"] = copy.deepcopy(
+                    rating_result.get("postprocess_actions", [])
+                )
+                output_data["difficulty_rating"] = rating_result
+                output_data["api_time_use"] = round(total_time, 2)
+                output_data["api_prompt_tokens"] = total_prompt_tokens
+                output_data["api_completion_tokens"] = total_completion_tokens
+                output_data["api_total_tokens"] = total_tokens
+                output_data.update(image_status)
+                output_data["schema_retry_count"] = schema_retry_count
+                output_data["schema_validation_errors"] = schema_errors
+                output_data["model_input_audit"] = {
+                    "source_difficulty_sent": False,
+                    "structured_text_primary": True,
+                    "image_mode": CHEMISTRY_IMAGE_MODE,
+                    "selected_image_fields": image_status.get(
+                        "image_input_fields",
+                        [],
+                    ),
+                }
                 async with FILE_LOCK:
-                    async with aiofiles.open(output_path, "a", encoding="utf-8") as f:
-                        await f.write(json.dumps(output_data, ensure_ascii=False) + "\n")
-            else:
-                output_data["rating_error"] = "模型返回数据为空或格式错误"
+                    async with aiofiles.open(
+                        output_path,
+                        "a",
+                        encoding="utf-8",
+                    ) as f:
+                        await f.write(
+                            json.dumps(output_data, ensure_ascii=False) + "\n"
+                        )
+                return
+            except Exception as e:
+                error_data = make_output_base(data)
+                error_data["rating_error"] = (
+                    f"question_id={question_id}; error={str(e)}"
+                )
+                error_data["last_model_text"] = raw_text
+                error_data["difficulty_rating_raw"] = raw_result
+                error_data["api_time_use"] = round(total_time, 2)
+                error_data["api_prompt_tokens"] = total_prompt_tokens
+                error_data["api_completion_tokens"] = total_completion_tokens
+                error_data["api_total_tokens"] = total_tokens
+                error_data.update(image_status)
+                error_data["schema_retry_count"] = schema_retry_count
+                error_data["schema_validation_errors"] = schema_errors
                 async with FILE_LOCK:
-                    async with aiofiles.open(error_path, "a", encoding="utf-8") as f:
-                        await f.write(json.dumps(output_data, ensure_ascii=False) + "\n")
-        except Exception as e:
-            error_data = data.copy()
-            error_data["rating_error"] = f"question_id={question_id}; error={str(e)}"
-            async with FILE_LOCK:
-                async with aiofiles.open(error_path, "a", encoding="utf-8") as f:
-                    await f.write(json.dumps(error_data, ensure_ascii=False) + "\n")
+                    async with aiofiles.open(
+                        error_path,
+                        "a",
+                        encoding="utf-8",
+                    ) as f:
+                        await f.write(
+                            json.dumps(error_data, ensure_ascii=False) + "\n"
+                        )
+                return
 
 
 async def process_with_progress(
@@ -1776,8 +2683,8 @@ def get_processed_question_ids(output_path: str) -> set:
                 try:
                     item = json.loads(line)
                     qid = item.get("question_id")
-                    if qid:
-                        processed.add(qid)
+                    if qid is not None and str(qid).strip():
+                        processed.add(str(qid))
                 except Exception:
                     continue
     except Exception as e:
@@ -1786,9 +2693,22 @@ def get_processed_question_ids(output_path: str) -> set:
 
 # -------------------------- 7. 主执行流 --------------------------
 async def main_batch_run() -> None:
+    global USE_CACHE
     parser = argparse.ArgumentParser(description="初中化学难度评级多线程并发批量打标脚本 (带 Cache 优化)")
-    parser.add_argument("-p", "--prompt", type=str, default="../prompts/初中化学难度打标提示词.txt", help="化学打标提示词文件路径")
-    parser.add_argument("-i", "--input", type=str, default="../data/chemistry_sampled_5000_per_difficulty_v2.jsonl", help="输入待打标 JSONL 数据集路径")
+    parser.add_argument(
+        "-p",
+        "--prompt",
+        type=str,
+        default=str(DEFAULT_PROMPT_PATH),
+        help="化学打标提示词文件路径",
+    )
+    parser.add_argument(
+        "-i",
+        "--input",
+        type=str,
+        default=str(DEFAULT_INPUT_PATH),
+        help="输入待打标 JSONL 数据集路径",
+    )
     parser.add_argument("-o", "--output", type=str, default="chemistry_difficulty_rated_results.jsonl", help="输出保存打标结果的 JSONL 路径")
     parser.add_argument("-e", "--error", type=str, default="chemistry_difficulty_errors.jsonl", help="输出保存失败结果的 JSONL 路径")
     parser.add_argument("-c", "--concurrency", type=int, default=15, help="最大并发限制，默认 15")
@@ -1796,10 +2716,21 @@ async def main_batch_run() -> None:
     parser.add_argument("-r", "--retries", type=int, default=3, help="失败最大重试次数，默认 3")
     parser.add_argument("-n", "--num", type=int, default=None, help="测试打标的限制数量（留空表示全部打标）")
     parser.add_argument("--seed", type=int, default=42, help="随机抽样/打乱的种子，默认 42")
+    parser.add_argument("--no-cache", action="store_true", help="禁用前缀缓存，每题发送完整提示词")
     args = parser.parse_args()
 
     random.seed(args.seed)
+    if args.no_cache:
+        USE_CACHE = False
     load_prompt_config(args.prompt)
+    print(f"评级配置: {RATING_PROFILE}")
+    print(f"模型: {MODEL_NAME}")
+    print(
+        "temperature: "
+        + ("服务端默认" if TEMPERATURE is None else str(TEMPERATURE))
+    )
+    print(f"图片模式: {CHEMISTRY_IMAGE_MODE}")
+    print("前缀缓存: " + ("启用" if USE_CACHE else "禁用"))
 
     if not os.path.exists(args.input):
         print(f"错误: 输入文件 {args.input} 不存在，终止运行！")
@@ -1826,7 +2757,11 @@ async def main_batch_run() -> None:
         print("全部打标启动：题目次序已随机打乱。")
 
     processed_ids = get_processed_question_ids(args.output)
-    to_process = [q for q in questions if q.get("question_id") not in processed_ids]
+    to_process = [
+        q
+        for q in questions
+        if str(q.get("question_id", "")) not in processed_ids
+    ]
     print(f"数据比对完成: 已完成数 {len(processed_ids)}，待处理数 {len(to_process)}")
 
     if not to_process:
@@ -1838,7 +2773,8 @@ async def main_batch_run() -> None:
 
     connector = aiohttp.TCPConnector(limit=args.concurrency * 2)
     async with aiohttp.ClientSession(connector=connector) as session:
-        await get_or_create_cache(session, args.retries, args.timeout)
+        if USE_CACHE:
+            await get_or_create_cache(session, args.retries, args.timeout)
         tasks = [
             asyncio.create_task(
                 process_with_progress(q, session, semaphore, pbar, args.output, args.error, args.retries, args.timeout)
