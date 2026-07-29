@@ -1878,7 +1878,7 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
     def test_dense_force_chain_is_calibrated_to_hard(self) -> None:
         raw = result(
             "中等题",
-            step_count="3-5步",
+            step_count="6-8步",
             formula_count="4-6个",
             calculation_complexity="多公式联立",
             reasoning_chain="多层因果推理",
@@ -1890,10 +1890,83 @@ class GPT56HybridPostprocessTests(unittest.TestCase):
             constraint_count="单一约束",
             error_risk="明显易错点",
         )
-        raw["reasoning"]["core_basis"] = "最高难任务实际有4个有效物理决策，需要对双状态建立多个方程。"
+        raw["reasoning"]["core_basis"] = (
+            "最高难任务实际有5个有效物理决策，需要对双状态分别建式，"
+            "并把前一状态求出的共同参数用于后一状态。"
+        )
         output = rating.postprocess_physics_difficulty(
             raw,
             {"question_id": "dense-force", "stem": "比例、压强和浮力的多公式联立辨析。"},
+        )
+        self.assertEqual(output["difficulty_level"], "拔高题")
+        self.assertEqual(
+            output["postprocess_actions"][0]["rule"],
+            "gpt56_medium_to_hard_dense_force_chain",
+        )
+
+    def test_three_step_average_speed_with_independent_concept_item_stays_medium(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            additional_structure="无",
+            information_carrier="纯文字",
+            subquestion_dependency="多问但相互独立",
+            knowledge_count="2-3个",
+            knowledge_diff="中",
+            state_count="单状态",
+            constraint_count="无约束",
+            variable_relation="简单正反比",
+            error_risk="明显易错点",
+        )
+        raw["reasoning"]["core_basis"] = (
+            "本题分为两个独立小问，最高难任务有3个有效物理决策："
+            "设河宽、根据全程平均速度定义列式、联立求回程速度；"
+            "第二问只是参照物的直接判断，两问无答案或模型依赖。"
+        )
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {
+                "question_id": "average-speed-independent",
+                "stem": "已知去程平均速度和往返全程平均速度，求回程平均速度；再判断参照物。",
+                "analysis": "设河宽后按总路程除以总时间联立求解，第二问独立判断。",
+            },
+        )
+        self.assertEqual(output["difficulty_level"], "中等题")
+        self.assertEqual(output["postprocess_actions"], [])
+
+    def test_four_step_single_task_dual_state_force_chain_still_reaches_hard(self) -> None:
+        raw = result(
+            "中等题",
+            step_count="3-5步",
+            formula_count="2-3个",
+            calculation_complexity="多公式联立",
+            reasoning_chain="多层因果推理",
+            problem_structure="力学综合",
+            additional_structure="力学约束",
+            information_carrier="纯文字",
+            subquestion_dependency="无多问",
+            knowledge_count="2-3个",
+            knowledge_diff="中",
+            state_count="双状态",
+            constraint_count="单一约束",
+            variable_relation="简单正反比",
+            error_risk="明显易错点",
+        )
+        raw["reasoning"]["core_basis"] = (
+            "实际有效物理决策共4步：统一单位，分别建立追及与相遇两个状态的"
+            "相对速度关系，求两个过程时间，再用共同总时间求不同对象路程。"
+        )
+        output = rating.postprocess_physics_difficulty(
+            raw,
+            {
+                "question_id": "integrated-relative-motion",
+                "stem": "通信员从队尾追到队首再返回队尾，求通信员和队伍各自路程。",
+                "analysis": "两个连续相对运动状态共同构成一个完整任务。",
+            },
         )
         self.assertEqual(output["difficulty_level"], "拔高题")
         self.assertEqual(

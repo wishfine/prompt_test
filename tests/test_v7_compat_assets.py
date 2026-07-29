@@ -290,6 +290,24 @@ class ProductionPromptAssetTests(unittest.TestCase):
         self.assertIn("模型真正独立", prefix)
         self.assertIn("各问答案不直接引用不等于模型独立", prefix)
 
+    def test_device_options_share_a_model_only_when_they_use_device_specific_chain(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("输入量—中间传递—输出量", prefix)
+        self.assertIn("装置特有关系", prefix)
+        self.assertIn("分别调用通用教材结论", prefix)
+
+    def test_cross_object_model_transfer_and_new_expression_can_be_decisive(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("迁移到另一类物理对象", prefix)
+        self.assertIn("题面未直接给出的新表达式", prefix)
+        self.assertIn("题面已经给出可直接套用的类比关系", prefix)
+
+    def test_multivariable_experiment_induction_has_a_hard_boundary(self) -> None:
+        prefix = self.load_prefix()
+        self.assertIn("多变量复合关系", prefix)
+        self.assertIn("系数或单位", prefix)
+        self.assertIn("迁移预测或函数图像", prefix)
+
     def test_dynamic_circuit_change_ratio_has_a_hard_boundary_anchor(self) -> None:
         prefix = self.load_prefix()
         self.assertIn("电压变化量与电流变化量之比", prefix)

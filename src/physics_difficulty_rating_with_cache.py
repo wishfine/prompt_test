@@ -2042,7 +2042,7 @@ def postprocess_gpt56_hybrid(
         return calibrated
 
     step_match = re.search(
-        r"(?:实际有效推理(?:约|为|大约)?|实际(?:约|为|大约)?|"
+        r"(?:实际有效推理(?:约|为|有|大约)?|实际(?:约|为|有|大约)?|"
         r"完整有效推理约|有效物理决策共)\s*(\d+)",
         core_basis,
     )
@@ -2082,25 +2082,99 @@ def postprocess_gpt56_hybrid(
         sync_coarse_difficulty(calibrated)
         return calibrated
 
-    # GPT-5.6 裁定中，多公式力学题的完整负担经常被 Lite 用
-    # “每步都常规”压成中等。层层递进题仍要求 core_basis 明确至少 5 步，
-    # 以保留常规 4 步潜水器计算的中等边界。
+    # GPT-5.6 裁定中，真正的高密度力学链可能被 Lite 用“每步都常规”
+    # 压成中等；但“力学综合 + 多公式联立”本身不足以升档。必须再有
+    # 明确的 5 步完整链、决定性转换，或跨状态消去共同量/反求隐藏参数。
+    # 这可避免把三步平均速度联立加一个独立概念问误升为拔高。
+    independent_force_tasks = bool(
+        features.get("subquestion_dependency") == "多问但相互独立"
+        or contains_any(
+            core_basis,
+            [
+                "彼此独立",
+                "相互独立",
+                "两个独立小问",
+                "两问独立",
+                "各问独立",
+                "无答案或模型依赖",
+                "无共享状态或结论依赖",
+                "模型真正独立",
+            ],
+        )
+    )
+    decisive_force_transform = contains_any(
+        evidence_text,
+        [
+            "差值法",
+            "隐含力臂",
+            "几何转化",
+            "图像反推",
+            "等效替代",
+            "误差方向",
+            "临界条件",
+            "有效解筛选",
+        ],
+    )
+    shared_state_elimination = bool(
+        features.get("state_count")
+        in ["双状态", "多状态", "连续变化或临界状态"]
+        and contains_any(
+            evidence_text,
+            [
+                "两个状态分别建式",
+                "两种状态分别建式",
+                "前后状态分别建式",
+                "变化前后分别建式",
+                "共同反求",
+            ],
+        )
+        and contains_any(
+            evidence_text,
+            [
+                "消元",
+                "消去共同量",
+                "反求隐藏参数",
+                "反推出隐藏参数",
+                "共同反求",
+            ],
+        )
+    )
+    integrated_dual_state_force_chain = bool(
+        explicit_step_lower_bound >= 4
+        and not independent_force_tasks
+        and features.get("subquestion_dependency") == "无多问"
+        and features.get("state_count")
+        in ["双状态", "多状态", "连续变化或临界状态"]
+        and features.get("additional_structure") == "力学约束"
+    )
     dense_force_chain = bool(
         ENABLE_GPT56_STRUCTURAL_CALIBRATION
+        and raw_level == "中等题"
         and features.get("calculation_complexity") == "多公式联立"
         and features.get("problem_structure") == "力学综合"
         and features.get("knowledge_count") == "2-3个"
         and (
-            features.get("subquestion_dependency") != "多问且层层递进"
-            or explicit_step_lower_bound >= 5
+            (explicit_step_lower_bound >= 5 and not independent_force_tasks)
+            or decisive_force_transform
+            or shared_state_elimination
+            or integrated_dual_state_force_chain
         )
     )
     if dense_force_chain:
+        dense_force_evidence = ["力学综合", "多公式联立"]
+        if explicit_step_lower_bound >= 5 and not independent_force_tasks:
+            dense_force_evidence.append("明确至少5个有效物理决策")
+        if decisive_force_transform:
+            dense_force_evidence.append("存在决定性转换")
+        if shared_state_elimination:
+            dense_force_evidence.append("跨状态消去共同量或反求隐藏参数")
+        if integrated_dual_state_force_chain:
+            dense_force_evidence.append("单一任务中的双状态四步力学链")
         set_level_with_audit(
             calibrated,
             "拔高题",
             "gpt56_medium_to_hard_dense_force_chain",
-            ["力学综合", "多公式联立", "完整任务负担超过常规4步链"],
+            dense_force_evidence,
         )
         sync_coarse_difficulty(calibrated)
         return calibrated
