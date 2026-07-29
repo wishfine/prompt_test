@@ -13,7 +13,7 @@ import html
 import random
 import argparse
 from collections import defaultdict
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 
 # 抽样配比计划
 SAMPLE_PLAN = {
@@ -66,13 +66,151 @@ def escape(text: str) -> str:
         return ""
     return html.escape(text)
 
+
+def split_image_urls(value: Any) -> List[str]:
+    """把图片字段归一化为去重且保持原顺序的 URL 列表。"""
+    if isinstance(value, (list, tuple)):
+        candidates = [str(item).strip() for item in value]
+    else:
+        candidates = [part.strip() for part in str(value or "").split(",")]
+    return list(dict.fromkeys(url for url in candidates if url))
+
+
+def contains_image_reference(*values: Any) -> bool:
+    """判断题干、选项或解析文本是否明确引用了图片。"""
+    markers = ("<image", "如下图", "如图", "图中", "下图")
+    for value in values:
+        if isinstance(value, (list, tuple)):
+            if contains_image_reference(*value):
+                return True
+            continue
+        if isinstance(value, dict):
+            if contains_image_reference(*value.values()):
+                return True
+            continue
+        text = str(value or "").lower()
+        if any(marker in text for marker in markers):
+            return True
+    return False
+
+
+def partition_visualization_images(
+    value: Any,
+    *,
+    prefer_second_png_when_two: bool = False,
+) -> Tuple[List[str], List[str]]:
+    """区分完整渲染截图和原始题图。
+
+    V2 数据中 ``externalized`` 图片通常是包含文字、公式和嵌入题图的完整题干
+    或解析截图。存在这类图片时将其作为默认主图；其他来源的原始题图保留在
+    可展开区域，既减少重复展示，也避免启发式误删关键图片。若没有完整截图，
+    所有图片均作为主图直接展示。题干恰好包含两张 PNG 时，可显式采用
+    “第一张折叠、第二张展示”的顺序规则。
+    """
+    urls = split_image_urls(value)
+    if (
+        prefer_second_png_when_two
+        and len(urls) == 2
+        and all(url.lower().split("?", 1)[0].endswith(".png") for url in urls)
+    ):
+        return [urls[1]], [urls[0]]
+    rendered = [url for url in urls if "/image/externalized/" in url.lower()]
+    if not rendered:
+        return urls, []
+    rendered_set = set(rendered)
+    supporting = [url for url in urls if url not in rendered_set]
+    return rendered, supporting
+
+
+def render_image_section(
+    value: Any,
+    *,
+    title: str,
+    kind: str,
+    content_requires_image: bool = False,
+) -> str:
+    """渲染主图和折叠备用图，所有图片均可点击放大。"""
+    primary, supporting = partition_visualization_images(
+        value,
+        prefer_second_png_when_two=(kind == "stem"),
+    )
+    if not primary:
+        if content_requires_image:
+            empty_text = (
+                f"【{escape(title)}资源缺失：题目正文包含图示标记，"
+                "但数据未提供图片 URL】"
+            )
+            empty_class = "media-empty media-missing"
+        else:
+            empty_text = f"【该题无{escape(title)}】"
+            empty_class = "media-empty"
+        return f"""
+                <div class="media-section media-section-empty">
+                    <div class="{empty_class}">{empty_text}</div>
+                </div>
+"""
+
+    safe_kind = escape(kind)
+    pieces = [
+        '                <div class="media-section">',
+        '                    <div class="media-heading">',
+        f'                        <span>{escape(title)}</span>',
+        '                        <span class="media-hint">点击图片可放大查看</span>',
+        '                    </div>',
+        '                    <div class="image-container image-container-primary">',
+    ]
+    for index, url in enumerate(primary, 1):
+        pieces.append(
+            f'                        <figure class="image-frame primary-image">'
+            f'<img src="{html.escape(url)}" alt="{escape(title)} {index}" '
+            f'data-image-role="{safe_kind}-primary" '
+            f'data-image-source="'
+            f'{"externalized" if "/image/externalized/" in url.lower() else "original"}" '
+            f'onclick="openImagePreview(this)" '
+            f'onerror="markImageFailed(this)">'
+            f'<figcaption>完整{escape(title)}'
+            f'{" " + str(index) if len(primary) > 1 else ""}</figcaption></figure>'
+        )
+    pieces.append("                    </div>")
+
+    if supporting:
+        pieces.extend(
+            [
+                '                    <details class="supporting-images">',
+                (
+                    '                        <summary>查看原始题图 / 备用图片'
+                    f'（{len(supporting)}张）</summary>'
+                ),
+                '                        <div class="image-container image-container-supporting">',
+            ]
+        )
+        for index, url in enumerate(supporting, 1):
+            pieces.append(
+                f'                            <figure class="image-frame supporting-image">'
+                f'<img src="{html.escape(url)}" alt="{escape(title)}备用图 {index}" '
+                f'data-image-role="{safe_kind}-supporting" '
+                f'onclick="openImagePreview(this)" '
+                f'onerror="markImageFailed(this)">'
+                f'<figcaption>原始题图 {index}</figcaption></figure>'
+            )
+        pieces.extend(
+            [
+                "                        </div>",
+                "                    </details>",
+            ]
+        )
+
+    pieces.append("                </div>")
+    return "\n".join(pieces) + "\n"
+
+
 # HTML 网页基础骨架模板
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>初中物理评级验收面板 (__REVIEW_COUNT__题纯图片可视化优化版)</title>
+    <title>初中物理评级验收面板 (__REVIEW_COUNT__题智能图片验收版)</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -217,7 +355,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         /* ===== Level Section ===== */
         .level-section {
-            max-width: 1200px;
+            max-width: 1440px;
             margin: 0 auto;
             padding: 20px;
         }
@@ -298,30 +436,165 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         .question-body { padding: 20px; }
 
-        /* ===== Images Container ===== */
+        /* ===== Smart Image Sections ===== */
+        .media-section {
+            margin: 18px 0 24px;
+        }
+        .media-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 8px;
+            color: #334155;
+            font-size: 17px;
+            font-weight: 700;
+        }
+        .media-hint {
+            color: #64748b;
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .media-empty {
+            padding: 10px 0;
+            color: #94a3b8;
+            font-size: 14px;
+            font-style: italic;
+        }
+        .media-missing {
+            padding: 12px 14px;
+            border: 1px dashed #f59e0b;
+            border-radius: 8px;
+            background: #fffbeb;
+            color: #b45309;
+            font-weight: 650;
+        }
         .image-container {
-            margin: 10px 0 20px 0;
+            margin: 0;
             text-align: left;
             background: #fff;
-            padding: 12px;
-            border-radius: 8px;
+            padding: 16px;
+            border-radius: 10px;
             border: 1px solid #e2e8f0;
             display: flex;
             flex-direction: column;
-            gap: 12px;
+            gap: 18px;
         }
-        .image-container img {
-            max-width: 100%;
-            max-height: 500px;
+        .image-frame {
+            margin: 0;
+        }
+        .image-frame img {
+            display: block;
+            height: auto;
             object-fit: contain;
-            border-radius: 4px;
-            border: 1px solid #f1f5f9;
+            border-radius: 6px;
+            border: 1px solid #e2e8f0;
+            background: white;
+            cursor: zoom-in;
+        }
+        .primary-image img {
+            width: auto;
+            max-width: min(100%, 980px);
+            max-height: none;
+            margin: 0 auto;
+        }
+        .primary-image img.image-layout-long-document {
+            width: 100%;
+            max-width: 1320px;
+        }
+        .primary-image img.image-layout-standard {
+            width: auto;
+            max-width: min(100%, 980px);
+        }
+        .image-frame figcaption {
+            margin-top: 7px;
+            color: #64748b;
+            font-size: 13px;
+            text-align: center;
+        }
+        .supporting-images {
+            margin-top: 10px;
+            border: 1px solid #dbe4ee;
+            border-radius: 9px;
+            background: #f8fafc;
+        }
+        .supporting-images summary {
+            padding: 11px 14px;
+            color: #475569;
+            font-size: 14px;
+            font-weight: 650;
+            cursor: pointer;
+            user-select: none;
+        }
+        .image-container-supporting {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            border: 0;
+            border-top: 1px solid #dbe4ee;
+            border-radius: 0 0 9px 9px;
+            background: #f8fafc;
+        }
+        .supporting-image img {
+            width: 100%;
+            max-height: 440px;
+            margin: 0 auto;
+        }
+        .image-error {
+            padding: 18px;
+            border: 1px dashed #f87171;
+            border-radius: 6px;
+            background: #fef2f2;
+            color: #b91c1c;
+            font-size: 14px;
+        }
+
+        /* ===== Image Lightbox ===== */
+        .image-lightbox {
+            position: fixed;
+            inset: 0;
+            z-index: 3000;
+            display: none;
+            overflow: auto;
+            padding: 72px 3vw 40px;
+            background: rgba(15, 23, 42, 0.94);
+            cursor: zoom-out;
+        }
+        .image-lightbox.open {
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+        }
+        .image-lightbox img {
+            display: block;
+            width: auto;
+            min-width: min(1100px, 94vw);
+            max-width: none;
+            height: auto;
+            margin: 0 auto;
+            border-radius: 8px;
+            background: white;
+            box-shadow: 0 18px 60px rgba(0,0,0,0.5);
+            cursor: default;
+        }
+        .image-lightbox-close {
+            position: fixed;
+            top: 18px;
+            right: 24px;
+            width: 42px;
+            height: 42px;
+            border: 1px solid rgba(255,255,255,0.5);
+            border-radius: 50%;
+            background: rgba(15,23,42,0.75);
+            color: white;
+            font-size: 28px;
+            line-height: 38px;
+            cursor: pointer;
         }
 
         /* ===== Rating Section ===== */
         .rating-section {
             margin-top: 20px;
-            padding: 15px;
+            padding: 20px;
             background: #f4faf4;
             border-radius: 8px;
             border: 1px solid #d4eed5;
@@ -329,39 +602,45 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .rating-title {
             font-weight: bold;
             color: #2E7D32;
-            margin-bottom: 10px;
-            font-size: 14px;
+            margin-bottom: 12px;
+            font-size: 21px;
         }
         .rating-reasoning {
-            font-size: 13px;
+            font-size: 18px;
             color: #555;
-            margin-bottom: 12px;
-            line-height: 1.5;
+            margin-bottom: 16px;
+            line-height: 1.85;
             background: white;
-            padding: 10px;
+            padding: 16px 18px;
             border-radius: 6px;
             border: 1px solid #e2f0d9;
         }
+        .rating-reasoning strong {
+            color: #1f4f23;
+            font-size: 18px;
+        }
         .rating-details {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 8px;
-            font-size: 12px;
+            grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+            gap: 10px;
+            font-size: 16px;
         }
         .rating-detail-item {
-            padding: 6px 10px;
+            padding: 10px 12px;
             background: white;
             border-radius: 6px;
             border: 1px solid #e2f0d9;
         }
         .rating-detail-item .label {
             color: #7f8c8d;
-            font-size: 11px;
+            font-size: 15px;
         }
         .rating-detail-item .value {
             color: #2c3e50;
-            margin-top: 2px;
-            font-weight: 500;
+            margin-top: 4px;
+            font-size: 17px;
+            font-weight: 600;
+            line-height: 1.45;
         }
 
         /* ===== Annotation Section ===== */
@@ -480,7 +759,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
     <div class="header">
-        <h1>初中物理评级验收面板 (__REVIEW_COUNT__题纯图片可视化优化版)</h1>
+        <h1>初中物理评级验收面板 (__REVIEW_COUNT__题智能图片验收版)</h1>
     </div>
 
     <div class="stats-bar" id="statsBar">
@@ -500,6 +779,13 @@ __NAV_ITEMS_PLACEHOLDER__
         默认规则：未标注即视为“模型判定合理”；老师只需标记判定不准的题目。
     </div>
 
+    <div class="image-lightbox" id="imageLightbox" onclick="closeImagePreview(event)">
+        <button class="image-lightbox-close" type="button"
+                aria-label="关闭图片预览"
+                onclick="closeImagePreview(event, true)">×</button>
+        <img id="imageLightboxTarget" alt="放大图片">
+    </div>
+
 __QUESTION_CARDS_PLACEHOLDER__
 
     <a href="#" class="back-to-top">↑</a>
@@ -509,6 +795,66 @@ __QUESTION_CARDS_PLACEHOLDER__
     const LEVEL_NAMES = __LEVEL_NAMES_PLACEHOLDER__;
     const LEVEL_MAP = __LEVEL_MAP_PLACEHOLDER__;
     const allQuestions = __QUESTIONS_JSON_PLACEHOLDER__;
+
+    function openImagePreview(image) {
+        const lightbox = document.getElementById('imageLightbox');
+        const target = document.getElementById('imageLightboxTarget');
+        target.src = image.currentSrc || image.src;
+        target.alt = image.alt || '放大图片';
+        lightbox.classList.add('open');
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closeImagePreview(event, forceClose = false) {
+        const lightbox = document.getElementById('imageLightbox');
+        if (!forceClose && event && event.target !== lightbox) return;
+        lightbox.classList.remove('open');
+        document.getElementById('imageLightboxTarget').removeAttribute('src');
+        document.body.style.overflow = '';
+    }
+
+    function markImageFailed(image) {
+        const message = document.createElement('div');
+        message.className = 'image-error';
+        message.textContent = '图示加载失败，可能是图片地址失效或当前网络无法访问。';
+        const frame = image.closest('.image-frame');
+        if (frame) {
+            image.replaceWith(message);
+        }
+    }
+
+    function applyAdaptiveImageSizing(image) {
+        const sourceKind = image.dataset.imageSource || 'original';
+        const width = image.naturalWidth || 0;
+        const height = image.naturalHeight || 0;
+        const aspect = width > 0 ? height / width : 0;
+        const isLongDocument = sourceKind === 'externalized'
+            && (aspect >= 1.12 || (height >= 1600 && aspect >= 0.82));
+
+        image.classList.toggle('image-layout-long-document', isLongDocument);
+        image.classList.toggle('image-layout-standard', !isLongDocument);
+        image.dataset.naturalWidth = String(width);
+        image.dataset.naturalHeight = String(height);
+        image.dataset.layout = isLongDocument ? 'long-document' : 'standard';
+    }
+
+    function initializeAdaptiveImageSizing() {
+        document.querySelectorAll('.primary-image img').forEach(image => {
+            if (image.complete && image.naturalWidth > 0) {
+                applyAdaptiveImageSizing(image);
+            } else {
+                image.addEventListener(
+                    'load',
+                    () => applyAdaptiveImageSizing(image),
+                    { once: true },
+                );
+            }
+        });
+    }
+
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') closeImagePreview(null, true);
+    });
 
     function loadAnnotations() {
         try {
@@ -728,7 +1074,10 @@ __QUESTION_CARDS_PLACEHOLDER__
         });
     });
 
-    window.onload = restoreAnnotations;
+    window.addEventListener('load', () => {
+        restoreAnnotations();
+        initializeAdaptiveImageSizing();
+    });
     </script>
 </body>
 </html>
@@ -751,7 +1100,7 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
     <div id="level-{level}" class="level-section">
         <div class="level-header level-{level}">
             <div class="level-title">{LEVEL_NAMES[level]}</div>
-            <div class="level-desc">本档抽样验证共 {len(items)} 道题目 (已全面采用图片 URL 渲染)</div>
+            <div class="level-desc">本档抽样验证共 {len(items)} 道题目（完整截图优先，原始题图可展开）</div>
         </div>
 """
         for idx, item in enumerate(items, 1):
@@ -798,45 +1147,27 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
             <div class="question-body">
                 <div class="difficulty-badge badge-{level_num}">{escape(difficulty_level)}</div>
 """
-            # 渲染题干图片 (多图支持)
-            if stem_url:
-                cards_html += """
-                <div style="margin-bottom: 20px;">
-                    <div style="font-weight: bold; color: #555; margin-bottom: 6px;">题干图示：</div>
-                    <div class="image-container">
-"""
-                for u in stem_url.split(','):
-                    if u.strip():
-                        cards_html += f'                        <img src="{html.escape(u.strip())}" alt="题干图示" onerror="this.outerHTML=\'<div style=\\\'color:#e53e3e;font-style:italic\\\'>(图示加载失败，可能为局域网内网地址)</div>\'">\n'
-                cards_html += """                    </div>
-                </div>
-"""
-            else:
-                cards_html += """
-                <div style="margin-bottom: 20px;">
-                    <div style="font-weight: bold; color: #999; font-style: italic; margin-bottom: 6px;">【该题无题干图示】</div>
-                </div>
-"""
-
-            # 渲染解析图片 (多图支持)
-            if analysis_url:
-                cards_html += """
-                <div style="margin-bottom: 20px;">
-                    <div style="font-weight: bold; color: #1e3c72; margin-bottom: 6px;">解析图示：</div>
-                    <div class="image-container">
-"""
-                for u in analysis_url.split(','):
-                    if u.strip():
-                        cards_html += f'                        <img src="{html.escape(u.strip())}" alt="解析图示" onerror="this.outerHTML=\'<div style=\\\'color:#e53e3e;font-style:italic\\\'>(图示加载失败)</div>\'">\n'
-                cards_html += """                    </div>
-                </div>
-"""
-            else:
-                cards_html += """
-                <div style="margin-bottom: 20px;">
-                    <div style="font-weight: bold; color: #999; font-style: italic; margin-bottom: 6px;">【该题无解析图示】</div>
-                </div>
-"""
+            # V2 的 externalized 图片通常是包含文字与内嵌题图的完整截图。
+            # 默认展示完整截图；其他原始图片折叠保留，避免重复又不误删信息。
+            cards_html += render_image_section(
+                stem_url,
+                title="题干图示",
+                kind="stem",
+                content_requires_image=contains_image_reference(
+                    item.get("stem"),
+                    item.get("options"),
+                    item.get("sub_questions"),
+                ),
+            )
+            cards_html += render_image_section(
+                analysis_url,
+                title="解析图示",
+                kind="analysis",
+                content_requires_image=contains_image_reference(
+                    item.get("analysis"),
+                    item.get("sub_questions"),
+                ),
+            )
 
             # 理由与特征
             if features_obj or reasoning:
@@ -1007,17 +1338,34 @@ def main():
     # 3. 将 V1 数据映射并对齐图片资源
     aligned_data = []
     missing_pics = 0
+    empty_stem_pic_urls = 0
+    empty_analysis_pic_urls = 0
     for item in raw_data:
         qid = item.get("question_id")
         if qid in v2_image_index:
-            item["stem_pic_url"] = v2_image_index[qid]["stem_pic_url"]
-            item["analysis_pic_url"] = v2_image_index[qid]["analysis_pic_url"]
+            indexed_stem = v2_image_index[qid]["stem_pic_url"]
+            indexed_analysis = v2_image_index[qid]["analysis_pic_url"]
+            if split_image_urls(indexed_stem):
+                item["stem_pic_url"] = indexed_stem
+            elif not split_image_urls(item.get("stem_pic_url")):
+                empty_stem_pic_urls += 1
+            if split_image_urls(indexed_analysis):
+                item["analysis_pic_url"] = indexed_analysis
+            elif not split_image_urls(item.get("analysis_pic_url")):
+                empty_analysis_pic_urls += 1
         else:
             missing_pics += 1
         aligned_data.append(item)
     
     if missing_pics > 0:
         print(f"⚠️ 提示: 有 {missing_pics} 道题目在 V2 数据集中没有对齐到图片 URL。")
+    if empty_stem_pic_urls > 0 or empty_analysis_pic_urls > 0:
+        print(
+            "⚠️ 图片字段为空: "
+            f"题干 {empty_stem_pic_urls} 道，解析 {empty_analysis_pic_urls} 道。"
+            "脚本已保留输入结果中的非空 URL；正文含图示标记但仍无 URL 的题目"
+            "会在页面中明确标为“图片资源缺失”。"
+        )
 
     # 4. 按大模型打标难度分组
     grouped_data = defaultdict(list)
