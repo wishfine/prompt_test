@@ -1950,6 +1950,25 @@ def add_feature_audit_flags(
     features = rating_result.get("features") or {}
     level = rating_result.get("difficulty_level", "")
     flags: List[str] = []
+    core_basis = str(
+        (rating_result.get("reasoning") or {}).get("core_basis", "")
+    )
+    balanced_markers = (
+        "入口E=",
+        "规则广度B=",
+        "视觉作用V=",
+        "纵向D=",
+        "有效覆盖W=",
+        "广度校准=",
+    )
+    missing_markers = [
+        marker for marker in balanced_markers if marker not in core_basis
+    ]
+    if missing_markers:
+        flags.append(
+            "Balanced Core-12内部诊断不完整，core_basis缺少："
+            + "、".join(missing_markers)
+        )
     text = visible_text(data, include_analysis=True)
     if (
         VISUAL_REFERENCE_RE.search(text)
@@ -1999,7 +2018,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["postprocess_trace"] = []
     rating_result["postprocess_actions"] = []
     rating_result["postprocess_profile"] = (
-        "chemistry_core12_teacher_boundary_v2"
+        "chemistry_core12_balanced_v3"
     )
     rating_result["feature_schema_version"] = "chemistry_core12_strict_v1"
     rating_result["schema_validation_passed"] = True

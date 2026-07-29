@@ -51,7 +51,15 @@ def valid_rating(level: str = "中等题") -> dict:
         "features": features,
         "coarse_difficulty": coarse,
         "reasoning": {
-            "core_basis": "测试依据",
+            "core_basis": (
+                "入口E=形成中间结论后应用；"
+                "规则广度B=共享模型但无结果依赖；"
+                "视觉作用V=提供局部关系；"
+                "纵向D=3个有效化学决策；"
+                "有效覆盖W=2项；"
+                "广度校准=关闭（测试）。"
+                "关键任务边：操作→现象→结论。"
+            ),
             "hard_point": "测试难点",
             "why_not_lower": "不降档",
             "why_not_higher": "不升档",
@@ -328,6 +336,37 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "压轴题")
         self.assertEqual(result["postprocess_actions"], [])
 
+    def test_balanced_core12_diagnostics_are_audited_not_written_back(
+        self,
+    ) -> None:
+        rating = valid_rating("中等题")
+        rating["reasoning"]["core_basis"] = "仅描述纵向推理，没有广度诊断。"
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(result["postprocess_actions"], [])
+        self.assertTrue(
+            any(
+                "Balanced Core-12内部诊断不完整" in item
+                for item in result["feature_audit_flags"]
+            )
+        )
+
+    def test_balanced_core12_profile_and_complete_diagnostics(self) -> None:
+        result = chemistry.postprocess_chemistry_difficulty(
+            valid_rating("中等题"),
+            {},
+        )
+        self.assertEqual(
+            result["postprocess_profile"],
+            "chemistry_core12_balanced_v3",
+        )
+        self.assertFalse(
+            any(
+                "Balanced Core-12内部诊断不完整" in item
+                for item in result["feature_audit_flags"]
+            )
+        )
+
     def test_prompt_example_is_valid_and_uses_core12_enums(self) -> None:
         namespace = runpy.run_path(str(PROMPT_PATH))
         prefix = namespace["DIFFICULTY_RATING_PROMPT_PREFIX"]
@@ -358,13 +397,34 @@ class ChemistryRuntimeTests(unittest.TestCase):
             self.assertNotIn(placeholder, prefix)
         self.assertIn("冻结Core-12特征", suffix)
         self.assertNotIn("冻结18维特征", suffix)
-        self.assertGreaterEqual(prefix.count("教师等级："), 16)
+        self.assertGreaterEqual(prefix.count("教师等级："), 20)
         self.assertIn(
             "不能看到题目要求“判断”就自动解释为一步应用",
             prefix,
         )
         self.assertIn(
-            "没有答案依赖不能单独作为压轴降为拔高的依据",
+            "都不能单独作为压轴降为拔高的依据",
+            prefix,
+        )
+        self.assertIn("D/B/W 联合定档矩阵", prefix)
+        self.assertIn(
+            "`reasoning_depth`只记录最高难任务的纵向链",
+            prefix,
+        )
+        self.assertIn(
+            "入口E=...；规则广度B=...；视觉作用V=...",
+            prefix,
+        )
+        self.assertIn(
+            "最终等级不得与`reasoning_depth`形成机械一一映射",
+            prefix,
+        )
+        self.assertIn(
+            "复杂单问中的多来源拆分与组成反推",
+            prefix,
+        )
+        self.assertNotIn(
+            "用纵向深度 D 确定基准档",
             prefix,
         )
 
