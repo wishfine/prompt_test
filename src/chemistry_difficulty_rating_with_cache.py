@@ -1962,7 +1962,10 @@ def add_feature_audit_flags(
     high_count = len(core12_high_evidence(features))
     final_count = len(core12_final_evidence(features))
     if level == "送分题" and not core12_is_direct_retrieval(features):
-        flags.append("送分题与Core-12非直接检索结构存在张力")
+        flags.append(
+            "送分题包含非全低Core-12：可能是教师口径下的熟悉模板透明映射，"
+            "也可能是真实一步应用；仅审计，不自动升档"
+        )
     if level == "基础题" and core12_is_direct_retrieval(features):
         flags.append(
             "基础题呈现全低Core-12：可能是送分边界，也可能漏识别复合任务；"
@@ -1996,7 +1999,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["postprocess_trace"] = []
     rating_result["postprocess_actions"] = []
     rating_result["postprocess_profile"] = (
-        "chemistry_core12_conservative_adjacent_v1"
+        "chemistry_core12_teacher_boundary_v2"
     )
     rating_result["feature_schema_version"] = "chemistry_core12_strict_v1"
     rating_result["schema_validation_passed"] = True
@@ -2009,15 +2012,12 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     final_evidence = core12_final_evidence(features)
     depth = CORE12_DEPTH_ORDER[features["reasoning_depth"]]
 
-    if raw_level == "送分题" and not core12_is_direct_retrieval(features):
-        if len(basic_evidence) >= 2:
-            set_level_with_reason(
-                rating_result,
-                "基础题",
-                "自动升档：至少两项Core-12证据共同显示已离开直接检索束",
-                rule="core12_easy_to_basic_application",
-                evidence=basic_evidence[:4],
-            )
+    if raw_level == "送分题":
+        # 教师591题实跑中，旧规则把“单一约束”和“单一证据直接对应”
+        # 等弱描述叠加为升档证据，3次触发全部把正确送分题误升为基础题。
+        # 熟悉类别的一条固定规则直接判断也可能合法表现为1层或单一证据，
+        # 因而此边界只审计，不自动写回。
+        pass
     elif raw_level == "基础题":
         # Core-12全低可能是真送分，也可能是模型漏识别复合任务。
         # 历史591题回放中该自动降档无净收益，因此只审计、不写回。

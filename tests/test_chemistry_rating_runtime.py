@@ -208,7 +208,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
             )
         )
 
-    def test_real_application_easy_is_raised_to_basic(self) -> None:
+    def test_easy_application_is_audited_without_writeback(self) -> None:
         rating = valid_rating("送分题")
         rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
         rating["features"].update(
@@ -219,7 +219,27 @@ class ChemistryRuntimeTests(unittest.TestCase):
             }
         )
         result = chemistry.postprocess_chemistry_difficulty(rating, {})
-        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(result["difficulty_level"], "送分题")
+        self.assertEqual(result["postprocess_actions"], [])
+        self.assertTrue(
+            any(
+                "仅审计，不自动升档" in item
+                for item in result["feature_audit_flags"]
+            )
+        )
+
+    def test_weak_easy_features_do_not_stack_into_basic_writeback(self) -> None:
+        rating = valid_rating("送分题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["features"].update(
+            {
+                "constraint_complexity": "单一约束",
+                "evidence_relation": "单一证据直接对应",
+            }
+        )
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+        self.assertEqual(result["difficulty_level"], "送分题")
+        self.assertEqual(result["postprocess_actions"], [])
 
     def test_complete_equation_model_basic_is_raised_to_medium(self) -> None:
         rating = valid_rating("基础题")
@@ -339,6 +359,14 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertIn("冻结Core-12特征", suffix)
         self.assertNotIn("冻结18维特征", suffix)
         self.assertGreaterEqual(prefix.count("教师等级："), 16)
+        self.assertIn(
+            "不能看到题目要求“判断”就自动解释为一步应用",
+            prefix,
+        )
+        self.assertIn(
+            "没有答案依赖不能单独作为压轴降为拔高的依据",
+            prefix,
+        )
 
 
 if __name__ == "__main__":
