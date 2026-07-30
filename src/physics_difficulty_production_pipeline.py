@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """初中物理难度评级生产批处理入口。
 
-固定使用冻结 Prompt、Doubao Lite、三次独立评级和结构化送分边界校准。
+固定使用冻结 Prompt、Doubao Lite 和三次独立评级，默认采用确定性多数票。
+结构化送分边界校准仅作为显式开启的实验选项。
 负责版本签名、断点续跑保护、输入输出完整性校验和运行监控摘要。
 """
 
@@ -47,7 +48,7 @@ REQUIRED_REASONING_FIELDS = {
     "why_not_lower",
     "why_not_higher",
 }
-PIPELINE_VERSION = "physics-production-lite-3x-structured-v1"
+PIPELINE_VERSION = "physics-production-lite-3x-majority-v1"
 RUN_COUNT = 3
 MODEL_NAME = "doubao-seed-2.0-lite"
 RATING_PROFILE = "gpt56_hybrid"
@@ -255,6 +256,7 @@ def build_signature(
     timeout: int,
     retries: int,
     no_cache: bool,
+    structured_easy_guard: bool = False,
 ) -> Dict[str, Any]:
     rating_script = root / "src" / "physics_difficulty_rating_with_cache.py"
     ensemble_script = root / "src" / "physics_difficulty_lite_ensemble.py"
@@ -279,7 +281,10 @@ def build_signature(
         "rating_profile": RATING_PROFILE,
         "temperature": 1,
         "run_count": RUN_COUNT,
-        "ensemble_mode": "structured_easy_guard",
+        "ensemble_mode": (
+            "structured_easy_guard" if structured_easy_guard else "majority"
+        ),
+        "structured_easy_guard": structured_easy_guard,
         "environment": dict(PRODUCTION_ENV),
         "concurrency": concurrency,
         "timeout": timeout,
@@ -334,6 +339,24 @@ def ensure_manifest_compatible(
 def run_command(command: Sequence[str], *, cwd: Path, env: Dict[str, str]) -> None:
     print("+", " ".join(command), flush=True)
     subprocess.run(command, cwd=cwd, env=env, check=True)
+
+
+def build_ensemble_command(
+    *,
+    python_executable: str,
+    ensemble_script: Path,
+    run_paths: Sequence[Path],
+    final_path: Path,
+    structured_easy_guard: bool = False,
+) -> List[str]:
+    """构造合并命令；普通多数票为默认，结构化校准必须显式开启。"""
+    command = [python_executable, str(ensemble_script)]
+    for run_path in run_paths:
+        command.extend(["--run", str(run_path)])
+    if structured_easy_guard:
+        command.append("--structured-easy-guard")
+    command.extend(["-o", str(final_path)])
+    return command
 
 
 def build_monitoring_summary(
@@ -416,6 +439,10 @@ def build_monitoring_summary(
         "pipeline_version": PIPELINE_VERSION,
         "generated_at": utc_now(),
         "git_commit": signature["git_commit"],
+        "ensemble_mode": signature.get("ensemble_mode", "majority"),
+        "structured_easy_guard": bool(
+            signature.get("structured_easy_guard", False)
+        ),
         "input": str(input_path),
         "input_sha256": signature["input_sha256"],
         "input_rows": len(input_rows),
@@ -442,7 +469,7 @@ def build_monitoring_summary(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="冻结版初中物理难度评级：三次 Lite + 结构化送分校准"
+        description="冻结版初中物理难度评级：三次 Lite + 确定性多数票"
     )
     parser.add_argument("-i", "--input", required=True)
     parser.add_argument(
@@ -458,6 +485,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--use-cache",
         action="store_true",
         help="启用前缀缓存；生产冻结配置默认关闭",
+    )
+    parser.add_argument(
+        "--structured-easy-guard",
+        action="store_true",
+        help=(
+            "实验选项：在送分/基础2:1分歧中，根据基础题结果里的显性应用"
+            "证据覆盖普通多数票；默认关闭"
+        ),
     )
     parser.add_argument(
         "--allow-dirty",
@@ -494,6 +529,7 @@ def main() -> None:
         timeout=args.timeout,
         retries=args.retries,
         no_cache=not args.use_cache,
+        structured_easy_guard=args.structured_easy_guard,
     )
     if signature["tracked_worktree_dirty"] and not args.allow_dirty:
         raise ValueError(
@@ -559,16 +595,12 @@ def main() -> None:
         run_command(command, cwd=root, env=environment)
         validate_complete_output(run_path, expected_ids)
 
-    ensemble_script = root / "src" / "physics_difficulty_lite_ensemble.py"
-    ensemble_command = [sys.executable, str(ensemble_script)]
-    for run_path in run_paths:
-        ensemble_command.extend(["--run", str(run_path)])
-    ensemble_command.extend(
-        [
-            "--structured-easy-guard",
-            "-o",
-            str(final_path),
-        ]
+    ensemble_command = build_ensemble_command(
+        python_executable=sys.executable,
+        ensemble_script=root / "src" / "physics_difficulty_lite_ensemble.py",
+        run_paths=run_paths,
+        final_path=final_path,
+        structured_easy_guard=args.structured_easy_guard,
     )
     run_command(ensemble_command, cwd=root, env=environment)
     final_validation = validate_complete_output(
