@@ -2011,7 +2011,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["postprocess_trace"] = []
     rating_result["postprocess_actions"] = []
     rating_result["postprocess_profile"] = (
-        "chemistry_core12_boundary_v3_audit_first"
+        "chemistry_core12_boundaryfix_audit_first"
     )
     rating_result["postprocess_writeback_enabled"] = (
         CHEMISTRY_ENABLE_LEVEL_WRITEBACK

@@ -627,7 +627,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "中等题")
         self.assertEqual(result["postprocess_actions"], [])
 
-    def test_stable_profile_records_boundary_v3_audit_mode(
+    def test_stable_profile_records_boundaryfix_audit_mode(
         self,
     ) -> None:
         result = chemistry.postprocess_chemistry_difficulty(
@@ -636,7 +636,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             result["postprocess_profile"],
-            "chemistry_core12_boundary_v3_audit_first",
+            "chemistry_core12_boundaryfix_audit_first",
         )
 
     def test_prompt_example_is_valid_and_uses_core12_enums(self) -> None:
@@ -687,23 +687,10 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "`core_basis`必须说明D、B、W和至少一条真实任务边",
             prefix,
         )
-        self.assertIn("不同规则并不自动升档", prefix)
-        self.assertIn("至少一个实质应用动作", prefix)
-        self.assertIn("受控广度通道必须同时满足", prefix)
-        self.assertIn("高密度共享模型通道必须同时满足", prefix)
-        self.assertIn(
-            "当高密度共享模型通道全部满足时，应判为拔高题",
-            prefix,
-        )
-        self.assertIn(
-            "4—5层复杂主模型通道必须同时满足",
-            prefix,
-        )
-        self.assertIn("至少两个强支撑结构", prefix)
-        self.assertIn(
-            "当4—5层复杂主模型通道的全部条件均满足时，应判为压轴题",
-            prefix,
-        )
+        self.assertNotIn("B/W 只通过三类受控结构校准", prefix)
+        self.assertNotIn("受控广度通道必须同时满足", prefix)
+        self.assertNotIn("高密度共享模型通道必须同时满足", prefix)
+        self.assertNotIn("4—5层复杂主模型通道必须同时满足", prefix)
         self.assertNotIn(
             "多个选项分别涉及不同教材结论，至少进入基础题",
             prefix,
