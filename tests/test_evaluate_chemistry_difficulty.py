@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -90,6 +92,66 @@ class ChemistryEvaluationTests(unittest.TestCase):
 
         self.assertEqual(level_name, "压轴题")
         self.assertEqual(level_number, 5)
+
+    def test_mixed_run_signatures_are_rejected(self) -> None:
+        evaluation = load_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "mixed.jsonl"
+            rows = [
+                {
+                    "question_id": "q1",
+                    "run_signature": "signature-a",
+                    "difficulty_rating": {
+                        "difficulty_level": "基础题",
+                        "general_level_writeback_enabled": False,
+                        "final_boundary_guard_enabled": True,
+                        "final_boundary_guard_writeback_enabled": False,
+                    },
+                },
+                {
+                    "question_id": "q2",
+                    "run_signature": "signature-b",
+                    "difficulty_rating": {
+                        "difficulty_level": "中等题",
+                        "general_level_writeback_enabled": False,
+                        "final_boundary_guard_enabled": True,
+                        "final_boundary_guard_writeback_enabled": False,
+                    },
+                },
+            ]
+            path.write_text(
+                "".join(
+                    json.dumps(row, ensure_ascii=False) + "\n"
+                    for row in rows
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "混合运行签名"):
+                evaluation.validate_prediction_run_consistency(path)
+
+    def test_partially_signed_predictions_are_rejected(self) -> None:
+        evaluation = load_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "partial.jsonl"
+            path.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "question_id": "q1",
+                                "run_signature": "signature-a",
+                            }
+                        ),
+                        json.dumps({"question_id": "q2"}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "部分记录缺少"):
+                evaluation.validate_prediction_run_consistency(path)
 
 
 if __name__ == "__main__":

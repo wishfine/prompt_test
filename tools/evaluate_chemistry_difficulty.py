@@ -168,6 +168,78 @@ def load_predictions(
     return predictions, sorted(set(duplicates))
 
 
+def validate_prediction_run_consistency(
+    path: Path,
+) -> dict[str, Any]:
+    signatures: set[str] = set()
+    missing_signature_lines: list[int] = []
+    run_configs: set[str] = set()
+    flag_values: dict[str, set[str]] = {
+        "general_level_writeback_enabled": set(),
+        "final_boundary_guard_enabled": set(),
+        "final_boundary_guard_writeback_enabled": set(),
+    }
+    row_count = 0
+    for line_number, item in jsonl_items(path):
+        row_count += 1
+        signature = str(item.get("run_signature", "")).strip()
+        if signature:
+            signatures.add(signature)
+        else:
+            missing_signature_lines.append(line_number)
+        config = item.get("run_config")
+        if isinstance(config, dict):
+            run_configs.add(
+                json.dumps(
+                    config,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+        rating = item.get("difficulty_rating")
+        if not isinstance(rating, dict):
+            rating = {}
+        for field in flag_values:
+            if field in rating:
+                flag_values[field].add(
+                    json.dumps(rating[field], sort_keys=True)
+                )
+
+    if signatures and missing_signature_lines:
+        raise ValueError(
+            "预测文件部分记录缺少run_signature，疑似混合旧版与新版结果；"
+            f"首批缺失行={missing_signature_lines[:5]}"
+        )
+    if len(signatures) > 1:
+        raise ValueError(
+            f"预测文件包含混合运行签名: {sorted(signatures)}"
+        )
+    if len(run_configs) > 1:
+        raise ValueError("预测文件包含多个run_config，拒绝评测")
+    mixed_flags = {
+        field: sorted(values)
+        for field, values in flag_values.items()
+        if len(values) > 1
+    }
+    if mixed_flags:
+        raise ValueError(
+            "预测文件后处理开关不一致，拒绝评测: "
+            + json.dumps(mixed_flags, ensure_ascii=False)
+        )
+    return {
+        "row_count": row_count,
+        "signed": bool(signatures),
+        "run_signature": next(iter(signatures), None),
+        "run_config": (
+            json.loads(next(iter(run_configs)))
+            if run_configs
+            else None
+        ),
+        "legacy_unsigned": bool(row_count and not signatures),
+    }
+
+
 def load_error_ids(
     path: Path | None,
 ) -> tuple[set[str], dict[str, str]]:
@@ -449,6 +521,9 @@ def main() -> None:
         raise FileNotFoundError(
             f"预测文件不存在: {predictions_path}"
         )
+    run_consistency = validate_prediction_run_consistency(
+        predictions_path
+    )
     labels = load_labels(labels_path)
     predictions, duplicate_ids = load_predictions(
         predictions_path,
@@ -473,6 +548,7 @@ def main() -> None:
             "prediction_unique_ids": len(predictions),
             "error_unique_ids": len(error_ids),
             "duplicate_prediction_ids": duplicate_ids,
+            "run_consistency": run_consistency,
             "prediction_ids_without_clean_label": sorted(
                 set(predictions) - set(labels)
             ),

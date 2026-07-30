@@ -5,6 +5,7 @@ import importlib.util
 import json
 import re
 import runpy
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -78,8 +79,14 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD",
             False,
         )
+        self.old_final_boundary_guard_writeback = getattr(
+            chemistry,
+            "CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK",
+            False,
+        )
         chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = True
         chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD = False
+        chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK = False
 
     def tearDown(self) -> None:
         chemistry.CHEMISTRY_IMAGE_MODE = self.old_image_mode
@@ -88,6 +95,9 @@ class ChemistryRuntimeTests(unittest.TestCase):
         )
         chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD = (
             self.old_final_boundary_guard
+        )
+        chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK = (
+            self.old_final_boundary_guard_writeback
         )
 
     def test_lite_temperature_matches_physics_runtime(self) -> None:
@@ -102,6 +112,71 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertIsNone(
             chemistry.resolve_temperature("doubao-seed-2.0-pro", ""),
         )
+
+    def test_run_signature_changes_with_final_guard_writeback(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            input_path = root / "input.jsonl"
+            prompt_path = root / "prompt.txt"
+            input_path.write_text('{"question_id":"q1"}\n', encoding="utf-8")
+            prompt_path.write_text("prompt", encoding="utf-8")
+            chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK = (
+                False
+            )
+            config_off = chemistry.build_run_config(
+                input_path,
+                prompt_path,
+                seed=42,
+                num=None,
+            )
+            chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK = (
+                True
+            )
+            config_on = chemistry.build_run_config(
+                input_path,
+                prompt_path,
+                seed=42,
+                num=None,
+            )
+
+        self.assertNotEqual(
+            chemistry.build_run_signature(config_off),
+            chemistry.build_run_signature(config_on),
+        )
+
+    def test_resume_rejects_unsigned_or_mismatched_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "results.jsonl"
+            output_path.write_text(
+                '{"question_id":"q1"}\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "缺少run_signature"):
+                chemistry.ensure_output_run_signature(
+                    output_path,
+                    "expected",
+                )
+
+            output_path.write_text(
+                '{"question_id":"q1","run_signature":"other"}\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "运行签名不一致"):
+                chemistry.ensure_output_run_signature(
+                    output_path,
+                    "expected",
+                )
+
+            output_path.write_text(
+                '{"question_id":"q1","run_signature":"expected"}\n',
+                encoding="utf-8",
+            )
+            chemistry.ensure_output_run_signature(
+                output_path,
+                "expected",
+            )
 
     def test_source_label_is_not_sent_and_is_renamed_in_output(self) -> None:
         row = {
@@ -668,6 +743,71 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "core12_hard_to_final_4_5_coupled_guard",
         )
 
+    def test_dedicated_final_guard_writeback_applies_without_general_writeback(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD = True
+        chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK = True
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        rating = valid_rating("拔高题")
+        rating["features"].update(
+            {
+                "reasoning_depth": "4-5层",
+                "reasoning_direction": "分类讨论或综合推导",
+                "knowledge_relation": "多模块深度融合",
+                "representation_conversion": "宏观-微观-符号-定量多重转换",
+                "reaction_relation": "多反应连续转化",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "多条清晰证据联合",
+                "experiment_requirement": "多阶段探究与定量误差",
+                "graph_table_requirement": "多图表耦合建模",
+                "calculation_model": "多重守恒、差量、联立或分类",
+                "unfamiliar_information_transfer": "迁移后建立关系",
+                "subquestion_dependency": "多问存在结果或任务链依赖",
+            }
+        )
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+
+        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertTrue(result["postprocess_writeback_enabled"])
+        self.assertTrue(
+            result["final_boundary_guard_writeback_enabled"]
+        )
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "core12_hard_to_final_4_5_coupled_guard",
+        )
+
+    def test_dedicated_final_guard_writeback_ignores_other_candidates(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD = True
+        chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK = True
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        rating = valid_rating("基础题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["features"].update(
+            {
+                "reasoning_depth": "2-3层",
+                "reasoning_direction": "正向推导",
+                "reaction_relation": "单一直接反应",
+                "constraint_complexity": "单一约束",
+                "calculation_model": "单一方程式或关系式",
+            }
+        )
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(result["postprocess_actions"], [])
+        self.assertEqual(result["postprocess_candidate_level"], "中等题")
+        self.assertEqual(
+            result["final_boundary_guard_candidate_level"],
+            "基础题",
+        )
+        self.assertFalse(result["automatic_level_change_applied"])
+
     def test_d4_5_independent_high_signals_do_not_force_final(self) -> None:
         rating = valid_rating("拔高题")
         rating["features"].update(
@@ -710,7 +850,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "中等题")
         self.assertEqual(result["postprocess_actions"], [])
 
-    def test_stable_profile_records_final_anchor_v1_audit_mode(
+    def test_stable_profile_records_final_anchor_v2_audit_mode(
         self,
     ) -> None:
         result = chemistry.postprocess_chemistry_difficulty(
@@ -719,7 +859,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             result["postprocess_profile"],
-            "chemistry_core12_final_anchor_v1_audit_first",
+            "chemistry_core12_final_anchor_v2_audit_first",
         )
 
     def test_prompt_example_is_valid_and_uses_core12_enums(self) -> None:
@@ -791,6 +931,27 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertIn(
             "4—5层拔高/压轴对照",
             prefix,
+        )
+        example_12 = prefix.split(
+            "### 示例12：压轴题——陌生装置、温控和纯度测定",
+            1,
+        )[1].split("### 补充示例：", 1)[0]
+        self.assertIn("`reasoning_depth=4-5层`", example_12)
+        self.assertNotIn(
+            "`unfamiliar_information_transfer=完全陌生模型现场建立`",
+            example_12,
+        )
+        supplementary_final = prefix.split(
+            "### 补充示例：压轴题——部分变质中的守恒与差量连续计算",
+            1,
+        )[1].split("### 示例13：", 1)[0]
+        self.assertIn(
+            "`reasoning_depth=4-5层`",
+            supplementary_final,
+        )
+        self.assertNotIn(
+            "`constraint_complexity=多层嵌套约束`",
+            supplementary_final,
         )
 
 

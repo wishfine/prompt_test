@@ -624,11 +624,11 @@ Core-12 是生产输出的唯一特征契约。先按题目事实填写并冻结
 
 教师等级：压轴题。
 
-核心结构：`reasoning_depth=6层及以上`，`knowledge_relation=多模块深度融合`，`experiment_requirement=多阶段探究与定量误差`，`unfamiliar_information_transfer=完全陌生模型现场建立`，`subquestion_dependency=多问存在结果或任务链依赖`。
+核心结构：`reasoning_depth=4-5层`，`knowledge_relation=跨模块融合`，`representation_conversion=两类表征连续转换`，`reaction_relation=多反应连续转化`，`constraint_complexity=多个相互关联约束`，`experiment_requirement=多阶段探究与定量误差`，`calculation_model=单一守恒或多反应计算`，`unfamiliar_information_transfer=迁移后建立关系`，`subquestion_dependency=多问共享模型但无答案依赖`。
 
 关键任务边：陌生物性→装置与温控；水解关系→沉淀计量→取样倍数与纯度。
 
-为什么不更低：装置、安全、温控、防水和定量任务互相改变模型。
+为什么不更低：物性表格决定装置、温控和防水方案，制得产品后的水解与沉淀关系又决定纯度计算；即使各问答案不直接复用，制备对象、装置条件和定量关系仍构成同一复杂模型。
 
 ### 补充示例：压轴题——部分变质中的守恒与差量连续计算
 
@@ -636,11 +636,11 @@ Core-12 是生产输出的唯一特征契约。先按题目事实填写并冻结
 
 教师等级：压轴题。
 
-核心结构：`reasoning_depth=6层及以上`，`reaction_relation=多反应连续转化`，`calculation_model=多重守恒、差量、联立或分类`，`constraint_complexity=多层嵌套约束`，`representation_conversion=宏观-微观-符号-定量多重转换`。
+核心结构：`reasoning_depth=4-5层`，`reaction_relation=多反应连续转化`，`calculation_model=多重守恒、差量、联立或分类`，`constraint_complexity=多个相互关联约束`，`representation_conversion=宏观-微观-符号-定量多重转换`。
 
 关键任务边：盐酸用量→原NaOH总量；固体增重→吸收CO₂的差量→已变质质量→未变质质量。
 
-为什么不更低：原料组成、多个反应、元素守恒和差量前后不可拆分，前一步改变后续模型。
+为什么不更低：原料组成、多个反应、元素守恒和差量前后不可拆分，前一步改变后续模型；其压轴性来自4—5层主链中的守恒—差量耦合，不要求额外出现6层推理或多层嵌套约束。
 
 ### 示例13：特殊压轴口径——固定基团转换关系
 

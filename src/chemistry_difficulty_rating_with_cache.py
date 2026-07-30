@@ -92,6 +92,15 @@ CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD = os.getenv(
     "yes",
     "on",
 }
+CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK = os.getenv(
+    "CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK",
+    "0",
+).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 CHEMISTRY_IMAGE_MODE = os.getenv(
     "CHEMISTRY_IMAGE_MODE",
     "auto",
@@ -139,6 +148,8 @@ DEFAULT_INPUT_PATH = (
 
 DIFFICULTY_RATING_PROMPT_PREFIX = ""
 DIFFICULTY_RATING_PROMPT_SUFFIX = ""
+CURRENT_RUN_SIGNATURE = ""
+CURRENT_RUN_CONFIG: Dict[str, Any] = {}
 
 LEVEL_MAP = {
     "送分题": 1,
@@ -189,6 +200,88 @@ def load_prompt_config(prompt_path: str) -> None:
 # -------------------------- 2. 前缀缓存模块 --------------------------
 def compute_text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def compute_file_hash(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_run_config(
+    input_path: str | Path,
+    prompt_path: str | Path,
+    *,
+    seed: int,
+    num: Optional[int],
+) -> Dict[str, Any]:
+    return {
+        "signature_version": "chemistry-rating-run-v1",
+        "input_sha256": compute_file_hash(input_path),
+        "prompt_sha256": compute_file_hash(prompt_path),
+        "script_sha256": compute_file_hash(Path(__file__).resolve()),
+        "rating_profile": RATING_PROFILE,
+        "model_name": MODEL_NAME,
+        "temperature": TEMPERATURE,
+        "image_mode": CHEMISTRY_IMAGE_MODE,
+        "cache_enabled": USE_CACHE,
+        "seed": seed,
+        "num": num,
+        "general_level_writeback_enabled": (
+            CHEMISTRY_ENABLE_LEVEL_WRITEBACK
+        ),
+        "final_boundary_guard_enabled": (
+            CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD
+        ),
+        "final_boundary_guard_writeback_enabled": (
+            CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK
+        ),
+    }
+
+
+def build_run_signature(config: Dict[str, Any]) -> str:
+    canonical = json.dumps(
+        config,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def ensure_output_run_signature(
+    output_path: str | Path,
+    expected_signature: str,
+) -> None:
+    path = Path(output_path)
+    if not path.exists() or path.stat().st_size == 0:
+        return
+    signatures: set[str] = set()
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"断点文件第{line_number}行不是合法JSON，拒绝续跑"
+                ) from exc
+            signature = str(item.get("run_signature", "")).strip()
+            if not signature:
+                raise ValueError(
+                    f"断点文件第{line_number}行缺少run_signature，"
+                    "拒绝与旧版或未知配置结果混写；请更换输出文件"
+                )
+            signatures.add(signature)
+    if signatures != {expected_signature}:
+        raise ValueError(
+            "断点文件运行签名不一致，拒绝混写；"
+            f"期望={expected_signature}，已有={sorted(signatures)}"
+        )
+
 
 async def load_cache() -> Dict[str, Any]:
     async with CACHE_LOCK:
@@ -2020,13 +2113,20 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["postprocess_trace"] = []
     rating_result["postprocess_actions"] = []
     rating_result["postprocess_profile"] = (
-        "chemistry_core12_final_anchor_v1_audit_first"
+        "chemistry_core12_final_anchor_v2_audit_first"
     )
     rating_result["postprocess_writeback_enabled"] = (
+        CHEMISTRY_ENABLE_LEVEL_WRITEBACK
+        or CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK
+    )
+    rating_result["general_level_writeback_enabled"] = (
         CHEMISTRY_ENABLE_LEVEL_WRITEBACK
     )
     rating_result["final_boundary_guard_enabled"] = (
         CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD
+    )
+    rating_result["final_boundary_guard_writeback_enabled"] = (
+        CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK
     )
     rating_result["feature_schema_version"] = "chemistry_core12_strict_v1"
     rating_result["schema_validation_passed"] = True
@@ -2175,8 +2275,15 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         "difficulty_level",
         raw_level,
     )
-    writeback_applied = bool(
+    general_writeback_applied = bool(
         CHEMISTRY_ENABLE_LEVEL_WRITEBACK and candidate_actions
+    )
+    final_guard_writeback_applied = bool(
+        CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK
+        and final_boundary_guard_action
+    )
+    writeback_applied = bool(
+        general_writeback_applied or final_guard_writeback_applied
     )
     if writeback_applied:
         rating_result = candidate_result
@@ -2199,6 +2306,9 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         copy.deepcopy(final_boundary_guard_action)
         if final_boundary_guard_action
         else None
+    )
+    rating_result["final_boundary_guard_writeback_applied"] = (
+        final_guard_writeback_applied
     )
     sync_reasoning_after_postprocess(rating_result)
     rating_result["postprocess_actions"] = copy.deepcopy(
@@ -2692,6 +2802,10 @@ async def process_single_question(
                 output_data["model_name"] = MODEL_NAME
                 output_data["temperature"] = TEMPERATURE
                 output_data["cache_enabled"] = USE_CACHE
+                output_data["run_signature"] = CURRENT_RUN_SIGNATURE
+                output_data["run_config"] = copy.deepcopy(
+                    CURRENT_RUN_CONFIG
+                )
                 output_data["difficulty_rating_raw"] = copy.deepcopy(raw_result)
                 output_data["difficulty_level_raw"] = str(
                     raw_result.get("difficulty_level", "") or ""
@@ -2728,6 +2842,10 @@ async def process_single_question(
                 return
             except Exception as e:
                 error_data = make_output_base(data)
+                error_data["run_signature"] = CURRENT_RUN_SIGNATURE
+                error_data["run_config"] = copy.deepcopy(
+                    CURRENT_RUN_CONFIG
+                )
                 error_data["rating_error"] = (
                     f"question_id={question_id}; error={str(e)}"
                 )
@@ -2789,7 +2907,7 @@ def get_processed_question_ids(output_path: str) -> set:
 
 # -------------------------- 7. 主执行流 --------------------------
 async def main_batch_run() -> None:
-    global USE_CACHE
+    global USE_CACHE, CURRENT_RUN_SIGNATURE, CURRENT_RUN_CONFIG
     parser = argparse.ArgumentParser(description="初中化学难度评级多线程并发批量打标脚本 (带 Cache 优化)")
     parser.add_argument(
         "-p",
@@ -2831,6 +2949,19 @@ async def main_batch_run() -> None:
     if not os.path.exists(args.input):
         print(f"错误: 输入文件 {args.input} 不存在，终止运行！")
         sys.exit(1)
+
+    CURRENT_RUN_CONFIG = build_run_config(
+        args.input,
+        args.prompt,
+        seed=args.seed,
+        num=args.num,
+    )
+    CURRENT_RUN_SIGNATURE = build_run_signature(CURRENT_RUN_CONFIG)
+    ensure_output_run_signature(
+        args.output,
+        CURRENT_RUN_SIGNATURE,
+    )
+    print(f"运行签名: {CURRENT_RUN_SIGNATURE}")
 
     print("正在加载待打标数据集...")
     questions: List[Dict[str, Any]] = []
