@@ -52,12 +52,11 @@ def valid_rating(level: str = "中等题") -> dict:
         "coarse_difficulty": coarse,
         "reasoning": {
             "core_basis": (
-                "入口E=形成中间结论后应用；"
-                "规则广度B=共享模型但无结果依赖；"
-                "视觉作用V=提供局部关系；"
+                "并列核验类型=非并列题；"
+                "有效独立核验数=0。"
                 "纵向D=3个有效化学决策；"
                 "有效覆盖W=2项；"
-                "广度校准=关闭（测试）。"
+                "任务广度B=共享模型但无答案依赖。"
                 "关键任务边：操作→现象→结论。"
             ),
             "hard_point": "测试难点",
@@ -71,9 +70,15 @@ def valid_rating(level: str = "中等题") -> dict:
 class ChemistryRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.old_image_mode = chemistry.CHEMISTRY_IMAGE_MODE
+        self.old_heterogeneous_guard = (
+            chemistry.ENABLE_HETEROGENEOUS_EASY_GUARD
+        )
 
     def tearDown(self) -> None:
         chemistry.CHEMISTRY_IMAGE_MODE = self.old_image_mode
+        chemistry.ENABLE_HETEROGENEOUS_EASY_GUARD = (
+            self.old_heterogeneous_guard
+        )
 
     def test_lite_temperature_matches_physics_runtime(self) -> None:
         self.assertEqual(
@@ -249,7 +254,82 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "送分题")
         self.assertEqual(result["postprocess_actions"], [])
 
-    def test_complete_equation_model_basic_is_audited_without_writeback(
+    def test_heterogeneous_parallel_easy_is_raised_to_basic(self) -> None:
+        rating = valid_rating("送分题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["reasoning"]["core_basis"] = (
+            "并列核验类型=异质事实核验；有效独立核验数=四。"
+            "纵向D=0层；任务广度B包含挥发、吸水、氧化三种机制；"
+            "有效覆盖W=4项。"
+        )
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(len(result["postprocess_actions"]), 1)
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "core12_easy_to_basic_heterogeneous_parallel_guard",
+        )
+        self.assertEqual(
+            result["parallel_verification_audit"],
+            {
+                "guard_enabled": True,
+                "type": "异质事实核验",
+                "independent_check_count": 4,
+            },
+        )
+
+    def test_same_criterion_parallel_easy_remains_easy(self) -> None:
+        rating = valid_rating("送分题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["reasoning"]["core_basis"] = (
+            "并列核验类型=同一判据重复；有效独立核验数=4。"
+            "四项都只使用是否生成新物质这一统一判据。"
+        )
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+        self.assertEqual(result["difficulty_level"], "送分题")
+        self.assertEqual(result["postprocess_actions"], [])
+
+    def test_two_heterogeneous_checks_do_not_trigger_guard(self) -> None:
+        rating = valid_rating("送分题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["reasoning"]["core_basis"] = (
+            "并列核验类型=异质事实核验；有效独立核验数=2。"
+            "分别核验挥发与吸水。"
+        )
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+        self.assertEqual(result["difficulty_level"], "送分题")
+        self.assertEqual(result["postprocess_actions"], [])
+
+    def test_missing_parallel_marker_is_audited_without_guessing(self) -> None:
+        rating = valid_rating("送分题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["reasoning"]["core_basis"] = "纵向D=0层，直接检索。"
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+        self.assertEqual(result["difficulty_level"], "送分题")
+        self.assertEqual(result["postprocess_actions"], [])
+        self.assertTrue(
+            any(
+                "缺少并列核验类型标记" in item
+                for item in result["feature_audit_flags"]
+            )
+        )
+
+    def test_heterogeneous_guard_can_be_disabled(self) -> None:
+        chemistry.ENABLE_HETEROGENEOUS_EASY_GUARD = False
+        rating = valid_rating("送分题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["reasoning"]["core_basis"] = (
+            "并列核验类型=异质事实核验；有效独立核验数=4。"
+            "分别核验挥发、吸水、反应与稳定性。"
+        )
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+        self.assertEqual(result["difficulty_level"], "送分题")
+        self.assertEqual(result["postprocess_actions"], [])
+        self.assertFalse(
+            result["parallel_verification_audit"]["guard_enabled"]
+        )
+
+    def test_complete_equation_model_basic_is_raised_to_medium(
         self,
     ) -> None:
         rating = valid_rating("基础题")
@@ -264,10 +344,13 @@ class ChemistryRuntimeTests(unittest.TestCase):
             }
         )
         result = chemistry.postprocess_chemistry_difficulty(rating, {})
-        self.assertEqual(result["difficulty_level"], "基础题")
-        self.assertEqual(result["postprocess_actions"], [])
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "core12_basic_to_medium_complete_model",
+        )
 
-    def test_high_structure_basic_gets_one_level_underflow_guard(
+    def test_high_structure_basic_uses_complete_model_guard(
         self,
     ) -> None:
         rating = valid_rating("基础题")
@@ -287,10 +370,10 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(len(result["postprocess_actions"]), 1)
         self.assertEqual(
             result["postprocess_actions"][0]["rule"],
-            "core12_basic_to_medium_severe_underflow_guard",
+            "core12_basic_to_medium_complete_model",
         )
 
-    def test_three_structure_families_do_not_trigger_underflow_guard(
+    def test_complete_model_does_not_require_four_structure_families(
         self,
     ) -> None:
         rating = valid_rating("基础题")
@@ -305,8 +388,11 @@ class ChemistryRuntimeTests(unittest.TestCase):
             }
         )
         result = chemistry.postprocess_chemistry_difficulty(rating, {})
-        self.assertEqual(result["difficulty_level"], "基础题")
-        self.assertEqual(result["postprocess_actions"], [])
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "core12_basic_to_medium_complete_model",
+        )
 
     def test_medium_is_not_raised_by_one_weak_high_signal(self) -> None:
         rating = valid_rating("中等题")
@@ -342,7 +428,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(len(result["postprocess_actions"]), 1)
         self.assertEqual(rating, original)
 
-    def test_low_structure_medium_is_not_automatically_lowered(self) -> None:
+    def test_low_structure_medium_is_lowered_to_basic(self) -> None:
         rating = valid_rating("中等题")
         rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
         rating["features"].update(
@@ -357,10 +443,15 @@ class ChemistryRuntimeTests(unittest.TestCase):
             rating,
             {"stem": "根据一个显性现象判断物质性质。"},
         )
-        self.assertEqual(result["difficulty_level"], "中等题")
-        self.assertEqual(result["postprocess_actions"], [])
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "core12_medium_to_basic_low_structure",
+        )
 
-    def test_multi_task_experiment_medium_is_not_lowered(self) -> None:
+    def test_independent_shallow_experiment_tasks_do_not_veto_lowering(
+        self,
+    ) -> None:
         rating = valid_rating("中等题")
         rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
         rating["features"].update(
@@ -379,10 +470,13 @@ class ChemistryRuntimeTests(unittest.TestCase):
             ],
         }
         result = chemistry.postprocess_chemistry_difficulty(rating, data)
-        self.assertEqual(result["difficulty_level"], "中等题")
-        self.assertEqual(result["postprocess_actions"], [])
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "core12_medium_to_basic_low_structure",
+        )
 
-    def test_multi_criterion_purification_medium_is_not_lowered(self) -> None:
+    def test_shallow_purification_text_does_not_veto_lowering(self) -> None:
         rating = valid_rating("中等题")
         rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
         rating["features"].update(
@@ -401,10 +495,13 @@ class ChemistryRuntimeTests(unittest.TestCase):
             ],
         }
         result = chemistry.postprocess_chemistry_difficulty(rating, data)
-        self.assertEqual(result["difficulty_level"], "中等题")
-        self.assertEqual(result["postprocess_actions"], [])
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "core12_medium_to_basic_low_structure",
+        )
 
-    def test_single_choice_impurity_removal_medium_is_not_lowered(
+    def test_single_choice_text_does_not_override_frozen_features(
         self,
     ) -> None:
         rating = valid_rating("中等题")
@@ -427,8 +524,11 @@ class ChemistryRuntimeTests(unittest.TestCase):
             ),
         }
         result = chemistry.postprocess_chemistry_difficulty(rating, data)
-        self.assertEqual(result["difficulty_level"], "中等题")
-        self.assertEqual(result["postprocess_actions"], [])
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "core12_medium_to_basic_low_structure",
+        )
 
     def test_coupled_hard_is_raised_only_one_level_to_final(self) -> None:
         rating = valid_rating("拔高题")
@@ -504,7 +604,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "压轴题")
         self.assertEqual(result["postprocess_actions"], [])
 
-    def test_core12_diagnostics_are_audited_not_written_back(
+    def test_reasoning_wording_is_not_used_for_level_writeback(
         self,
     ) -> None:
         rating = valid_rating("中等题")
@@ -512,27 +612,15 @@ class ChemistryRuntimeTests(unittest.TestCase):
         result = chemistry.postprocess_chemistry_difficulty(rating, {})
         self.assertEqual(result["difficulty_level"], "中等题")
         self.assertEqual(result["postprocess_actions"], [])
-        self.assertTrue(
-            any(
-                "Core-12结构诊断不完整" in item
-                for item in result["feature_audit_flags"]
-            )
-        )
 
-    def test_boundary_rebased_profile_and_complete_diagnostics(self) -> None:
+    def test_stable_profile_uses_proven_boundaryfix_rules(self) -> None:
         result = chemistry.postprocess_chemistry_difficulty(
             valid_rating("中等题"),
             {},
         )
         self.assertEqual(
             result["postprocess_profile"],
-            "chemistry_core12_boundary_rebased_v5",
-        )
-        self.assertFalse(
-            any(
-                "Core-12结构诊断不完整" in item
-                for item in result["feature_audit_flags"]
-            )
+            "chemistry_core12_teacher_boundary_v3_parallel_guard",
         )
 
     def test_prompt_example_is_valid_and_uses_core12_enums(self) -> None:
@@ -565,42 +653,36 @@ class ChemistryRuntimeTests(unittest.TestCase):
             self.assertNotIn(placeholder, prefix)
         self.assertIn("冻结Core-12特征", suffix)
         self.assertNotIn("冻结18维特征", suffix)
-        self.assertGreaterEqual(prefix.count("教师等级："), 20)
+        self.assertGreaterEqual(prefix.count("教师等级："), 17)
         self.assertIn(
             "不能看到题目要求“判断”就自动解释为一步应用",
             prefix,
         )
-        self.assertIn(
-            "都不能单独作为压轴降为拔高的依据",
-            prefix,
-        )
-        self.assertIn("D/B/W 相邻校准矩阵", prefix)
-        self.assertIn(
-            "`reasoning_depth`只记录最高难任务的纵向链",
-            prefix,
-        )
-        self.assertIn(
-            "入口E=...；规则广度B=...；视觉作用V=...",
-            prefix,
-        )
-        self.assertIn(
-            "最终等级不得与`reasoning_depth`形成机械一一映射",
-            prefix,
-        )
-        self.assertIn(
-            "复杂单问中的多来源拆分与组成反推",
-            prefix,
-        )
-        self.assertIn(
-            "W≥4、至少2项实质应用、至少2类回答规则",
-            prefix,
-        )
-        self.assertIn(
-            "熟悉宏观现象与唯一微观教材结论的一步对应仍可判送分题",
-            prefix,
-        )
-        self.assertNotIn("有限横向广度", prefix)
         self.assertIn("用纵向深度 D 确定基准档", prefix)
+        self.assertIn(
+            "先由 D 确定基准档，再由 B/W 做至多一个相邻档校准",
+            prefix,
+        )
+        self.assertIn(
+            "独立小问不能机械累加到 `reasoning_depth`",
+            prefix,
+        )
+        self.assertIn(
+            "`并列核验类型`只能从`非并列题`、`同一判据重复`、"
+            "`异质事实核验`三个值中选择一个",
+            prefix,
+        )
+        self.assertIn("异质事实核验只建立基础题下限", prefix)
+        self.assertIn("判断并列题时使用替换检验", prefix)
+        self.assertIn("有效独立核验数=4", prefix)
+        self.assertNotIn(
+            "并列核验类型=非并列题/同一判据重复/异质事实核验",
+            prefix,
+        )
+        self.assertNotIn("D/B/W 相邻校准矩阵", prefix)
+        self.assertNotIn("入口E=", prefix)
+        self.assertNotIn("广度校准=开启/关闭", prefix)
+        self.assertNotIn("有限横向广度", prefix)
 
 
 if __name__ == "__main__":
