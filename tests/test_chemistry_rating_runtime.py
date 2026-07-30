@@ -52,8 +52,6 @@ def valid_rating(level: str = "中等题") -> dict:
         "coarse_difficulty": coarse,
         "reasoning": {
             "core_basis": (
-                "并列核验类型=非并列题；"
-                "有效独立核验数=0。"
                 "纵向D=3个有效化学决策；"
                 "有效覆盖W=2项；"
                 "任务广度B=共享模型但无答案依赖。"
@@ -70,15 +68,9 @@ def valid_rating(level: str = "中等题") -> dict:
 class ChemistryRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.old_image_mode = chemistry.CHEMISTRY_IMAGE_MODE
-        self.old_heterogeneous_guard = (
-            chemistry.ENABLE_HETEROGENEOUS_EASY_GUARD
-        )
 
     def tearDown(self) -> None:
         chemistry.CHEMISTRY_IMAGE_MODE = self.old_image_mode
-        chemistry.ENABLE_HETEROGENEOUS_EASY_GUARD = (
-            self.old_heterogeneous_guard
-        )
 
     def test_lite_temperature_matches_physics_runtime(self) -> None:
         self.assertEqual(
@@ -253,81 +245,6 @@ class ChemistryRuntimeTests(unittest.TestCase):
         result = chemistry.postprocess_chemistry_difficulty(rating, {})
         self.assertEqual(result["difficulty_level"], "送分题")
         self.assertEqual(result["postprocess_actions"], [])
-
-    def test_heterogeneous_parallel_easy_is_raised_to_basic(self) -> None:
-        rating = valid_rating("送分题")
-        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
-        rating["reasoning"]["core_basis"] = (
-            "并列核验类型=异质事实核验；有效独立核验数=四。"
-            "纵向D=0层；任务广度B包含挥发、吸水、氧化三种机制；"
-            "有效覆盖W=4项。"
-        )
-        result = chemistry.postprocess_chemistry_difficulty(rating, {})
-        self.assertEqual(result["difficulty_level"], "基础题")
-        self.assertEqual(len(result["postprocess_actions"]), 1)
-        self.assertEqual(
-            result["postprocess_actions"][0]["rule"],
-            "core12_easy_to_basic_heterogeneous_parallel_guard",
-        )
-        self.assertEqual(
-            result["parallel_verification_audit"],
-            {
-                "guard_enabled": True,
-                "type": "异质事实核验",
-                "independent_check_count": 4,
-            },
-        )
-
-    def test_same_criterion_parallel_easy_remains_easy(self) -> None:
-        rating = valid_rating("送分题")
-        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
-        rating["reasoning"]["core_basis"] = (
-            "并列核验类型=同一判据重复；有效独立核验数=4。"
-            "四项都只使用是否生成新物质这一统一判据。"
-        )
-        result = chemistry.postprocess_chemistry_difficulty(rating, {})
-        self.assertEqual(result["difficulty_level"], "送分题")
-        self.assertEqual(result["postprocess_actions"], [])
-
-    def test_two_heterogeneous_checks_do_not_trigger_guard(self) -> None:
-        rating = valid_rating("送分题")
-        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
-        rating["reasoning"]["core_basis"] = (
-            "并列核验类型=异质事实核验；有效独立核验数=2。"
-            "分别核验挥发与吸水。"
-        )
-        result = chemistry.postprocess_chemistry_difficulty(rating, {})
-        self.assertEqual(result["difficulty_level"], "送分题")
-        self.assertEqual(result["postprocess_actions"], [])
-
-    def test_missing_parallel_marker_is_audited_without_guessing(self) -> None:
-        rating = valid_rating("送分题")
-        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
-        rating["reasoning"]["core_basis"] = "纵向D=0层，直接检索。"
-        result = chemistry.postprocess_chemistry_difficulty(rating, {})
-        self.assertEqual(result["difficulty_level"], "送分题")
-        self.assertEqual(result["postprocess_actions"], [])
-        self.assertTrue(
-            any(
-                "缺少并列核验类型标记" in item
-                for item in result["feature_audit_flags"]
-            )
-        )
-
-    def test_heterogeneous_guard_can_be_disabled(self) -> None:
-        chemistry.ENABLE_HETEROGENEOUS_EASY_GUARD = False
-        rating = valid_rating("送分题")
-        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
-        rating["reasoning"]["core_basis"] = (
-            "并列核验类型=异质事实核验；有效独立核验数=4。"
-            "分别核验挥发、吸水、反应与稳定性。"
-        )
-        result = chemistry.postprocess_chemistry_difficulty(rating, {})
-        self.assertEqual(result["difficulty_level"], "送分题")
-        self.assertEqual(result["postprocess_actions"], [])
-        self.assertFalse(
-            result["parallel_verification_audit"]["guard_enabled"]
-        )
 
     def test_complete_equation_model_basic_is_raised_to_medium(
         self,
@@ -620,7 +537,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             result["postprocess_profile"],
-            "chemistry_core12_teacher_boundary_v3_parallel_guard",
+            "chemistry_core12_teacher_boundary_v2",
         )
 
     def test_prompt_example_is_valid_and_uses_core12_enums(self) -> None:
@@ -668,17 +585,11 @@ class ChemistryRuntimeTests(unittest.TestCase):
             prefix,
         )
         self.assertIn(
-            "`并列核验类型`只能从`非并列题`、`同一判据重复`、"
-            "`异质事实核验`三个值中选择一个",
+            "`core_basis`必须说明D、B、W和至少一条真实任务边",
             prefix,
         )
-        self.assertIn("异质事实核验只建立基础题下限", prefix)
-        self.assertIn("判断并列题时使用替换检验", prefix)
-        self.assertIn("有效独立核验数=4", prefix)
-        self.assertNotIn(
-            "并列核验类型=非并列题/同一判据重复/异质事实核验",
-            prefix,
-        )
+        self.assertNotIn("异质事实核验只建立基础题下限", prefix)
+        self.assertNotIn("并列核验类型=", prefix)
         self.assertNotIn("D/B/W 相邻校准矩阵", prefix)
         self.assertNotIn("入口E=", prefix)
         self.assertNotIn("广度校准=开启/关闭", prefix)

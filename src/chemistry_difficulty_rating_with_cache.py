@@ -84,15 +84,6 @@ if CHEMISTRY_IMAGE_MODE not in {"off", "auto", "all"}:
         "可选值：off, auto, all"
     )
 MAX_SCHEMA_RETRIES = int(os.getenv("CHEMISTRY_SCHEMA_RETRIES", "2"))
-ENABLE_HETEROGENEOUS_EASY_GUARD = os.getenv(
-    "ENABLE_CHEMISTRY_HETEROGENEOUS_EASY_GUARD",
-    "1",
-).strip().lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
 
 UNTRUSTED_LABEL_FIELDS = {
     "difficulty",
@@ -1975,16 +1966,6 @@ def add_feature_audit_flags(
             "送分题包含非全低Core-12：可能是教师口径下的熟悉模板透明映射，"
             "也可能是真实一步应用；仅审计，不自动升档"
         )
-    parallel_audit = rating_result.get("parallel_verification_audit") or {}
-    if (
-        level == "送分题"
-        and ENABLE_HETEROGENEOUS_EASY_GUARD
-        and parallel_audit.get("type") is None
-    ):
-        flags.append(
-            "送分题缺少并列核验类型标记：异质事实保护未触发；"
-            "保留原档并记录审计，不根据选项数量或关键词猜测"
-        )
     if level == "基础题" and core12_is_direct_retrieval(features):
         flags.append(
             "基础题呈现全低Core-12：可能是送分边界，也可能漏识别复合任务；"
@@ -2000,46 +1981,6 @@ def add_feature_audit_flags(
     if rating_result.get("postprocess_trace"):
         flags.append("后处理已作一次相邻档校准，原始模型结果另行保留")
     rating_result["feature_audit_flags"] = list(dict.fromkeys(flags))
-
-
-PARALLEL_VERIFICATION_TYPE_RE = re.compile(
-    r"并列核验类型\s*[=:：]\s*"
-    r"(非并列题|同一判据重复|异质事实核验)"
-)
-PARALLEL_VERIFICATION_COUNT_RE = re.compile(
-    r"有效独立核验数\s*[=:：]\s*([0-9一二三四五六七八九十]+)"
-)
-CHINESE_COUNT_MAP = {
-    "零": 0,
-    "一": 1,
-    "二": 2,
-    "三": 3,
-    "四": 4,
-    "五": 5,
-    "六": 6,
-    "七": 7,
-    "八": 8,
-    "九": 9,
-    "十": 10,
-}
-
-
-def extract_parallel_verification_audit(
-    rating_result: Dict[str, Any],
-) -> Tuple[Optional[str], int]:
-    """读取模型在core_basis中给出的窄边界审计，不推断题目关键词。"""
-    core_basis = str(
-        (rating_result.get("reasoning") or {}).get("core_basis", "")
-    )
-    type_match = PARALLEL_VERIFICATION_TYPE_RE.search(core_basis)
-    count_match = PARALLEL_VERIFICATION_COUNT_RE.search(core_basis)
-    audit_type = type_match.group(1) if type_match else None
-    raw_count = count_match.group(1) if count_match else ""
-    if raw_count.isdigit():
-        count = int(raw_count)
-    else:
-        count = CHINESE_COUNT_MAP.get(raw_count, 0)
-    return audit_type, count
 
 
 def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
@@ -2058,7 +1999,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["postprocess_trace"] = []
     rating_result["postprocess_actions"] = []
     rating_result["postprocess_profile"] = (
-        "chemistry_core12_teacher_boundary_v3_parallel_guard"
+        "chemistry_core12_teacher_boundary_v2"
     )
     rating_result["feature_schema_version"] = "chemistry_core12_strict_v1"
     rating_result["schema_validation_passed"] = True
@@ -2070,33 +2011,13 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     decisive_evidence = core12_decisive_evidence(features)
     final_evidence = core12_final_evidence(features)
     depth = CORE12_DEPTH_ORDER[features["reasoning_depth"]]
-    parallel_type, parallel_count = extract_parallel_verification_audit(
-        rating_result
-    )
-    rating_result["parallel_verification_audit"] = {
-        "guard_enabled": ENABLE_HETEROGENEOUS_EASY_GUARD,
-        "type": parallel_type,
-        "independent_check_count": parallel_count,
-    }
 
     if raw_level == "送分题":
-        # 只使用模型显式完成的语义审计，不根据选项数量或题目关键词升档。
-        # 异质事实核验只建立基础题下限，避免送分→中等的跨档修补。
-        if (
-            ENABLE_HETEROGENEOUS_EASY_GUARD
-            and parallel_type == "异质事实核验"
-            and parallel_count >= 3
-        ):
-            set_level_with_reason(
-                rating_result,
-                "基础题",
-                "自动升档：至少3项非重复异质事实核验不属于同一直接检索束",
-                rule="core12_easy_to_basic_heterogeneous_parallel_guard",
-                evidence=[
-                    f"并列核验类型={parallel_type}",
-                    f"有效独立核验数={parallel_count}",
-                ],
-            )
+        # 教师591题实跑中，旧规则把“单一约束”和“单一证据直接对应”
+        # 等弱描述叠加为升档证据，3次触发全部把正确送分题误升为基础题。
+        # 熟悉类别的一条固定规则直接判断也可能合法表现为1层或单一证据，
+        # 因而此边界只审计，不自动写回。
+        pass
     elif raw_level == "基础题":
         # Core-12全低可能是真送分，也可能是模型漏识别复合任务。
         # 历史591题回放中该自动降档无净收益，因此只审计、不写回。
