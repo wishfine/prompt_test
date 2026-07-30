@@ -906,7 +906,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "teacher_basic_to_medium_linked_application",
         )
 
-    def test_teacher_guard_audits_segment_graph_medium_as_hard(
+    def test_teacher_guard_does_not_promote_plain_segment_graph_medium(
         self,
     ) -> None:
         chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
@@ -921,11 +921,245 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "中等题")
         self.assertEqual(
             result["teacher_distribution_guard_candidate_level"],
+            "中等题",
+        )
+        self.assertIsNone(
+            result["teacher_distribution_guard_candidate_action"],
+        )
+
+    def test_teacher_guard_promotes_strong_segment_graph_chain_as_hard(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("中等题")
+        rating["features"].update(
+            {
+                "knowledge_relation": "跨模块融合",
+                "representation_conversion": "两类表征连续转换",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "多条清晰证据联合",
+                "experiment_requirement": "控制变量、现象解释或数据归纳",
+                "graph_table_requirement": "拐点、平台或分段反推",
+            }
+        )
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
             "拔高题",
         )
         self.assertEqual(
             result["teacher_distribution_guard_candidate_action"]["rule"],
-            "teacher_medium_to_hard_structural_breadth",
+            "teacher_medium_to_hard_strong_graph_chain",
+        )
+
+    def test_teacher_guard_requires_shared_model_for_new_information(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("中等题")
+        rating["features"]["unfamiliar_information_transfer"] = (
+            "给定新信息直接应用"
+        )
+        rating["features"]["subquestion_dependency"] = "无多问"
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "中等题",
+        )
+        self.assertIsNone(
+            result["teacher_distribution_guard_candidate_action"],
+        )
+
+    def test_teacher_guard_promotes_shared_new_information_model(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("中等题")
+        rating["features"].update(
+            {
+                "knowledge_relation": "跨模块融合",
+                "unfamiliar_information_transfer": "给定新信息直接应用",
+                "subquestion_dependency": "多问共享模型但无答案依赖",
+            }
+        )
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "拔高题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_medium_to_hard_shared_new_information",
+        )
+
+    def test_teacher_guard_applies_basic_floor_to_parallel_air_exposure(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("送分题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        data = {
+            "stem": "将下列物质长期暴露在空气中，质量减小的是",
+            "options": (
+                "A. 氢氧化钠\nB. 浓盐酸\n"
+                "C. 氢氧化钙\nD. 氯化钠"
+            ),
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "基础题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_easy_to_basic_parallel_application_floor",
+        )
+
+    def test_teacher_guard_applies_medium_floor_to_reaction_conversion(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("送分题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        data = {
+            "stem": "在给定条件下，下列物质的转化能实现的是",
+            "options": (
+                "A. Cu→CuO→CuSO4\nB. Fe→FeCl3→Fe(OH)3\n"
+                "C. CO2→CO→CaCO3\nD. NaCl→NaOH→Na2CO3"
+            ),
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "中等题",
+        )
+        action = result["teacher_distribution_guard_candidate_action"]
+        self.assertEqual(
+            action["rule"],
+            "teacher_easy_to_medium_reaction_conversion_floor",
+        )
+        self.assertEqual(action["from"], "送分题")
+        self.assertEqual(action["to"], "中等题")
+
+    def test_teacher_guard_can_write_back_two_level_severe_floor(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = (
+            True
+        )
+        rating = valid_rating("送分题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        data = {
+            "stem": "下列物质转化在给定条件下能够实现的是",
+            "options": (
+                "A. Cu→CuO→CuSO4\nB. Fe→FeCl2→Fe(OH)2\n"
+                "C. CO2→CO→CaCO3\nD. NaCl→NaOH→Na2CO3"
+            ),
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertTrue(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+        self.assertEqual(len(result["postprocess_actions"]), 1)
+        self.assertEqual(result["postprocess_actions"][0]["level_distance"], 2)
+        self.assertEqual(
+            result["coarse_difficulty"],
+            "基础/中等区间（2-3档）",
+        )
+
+    def test_general_level_setter_still_rejects_two_level_change(
+        self,
+    ) -> None:
+        rating = valid_rating("送分题")
+        with self.assertRaisesRegex(
+            ValueError,
+            "后处理调整距离超出该规则许可范围",
+        ):
+            chemistry.set_level_with_reason(
+                rating,
+                "中等题",
+                "普通规则不得跨两档",
+            )
+
+    def test_teacher_guard_promotes_equation_and_type_validation(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("基础题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        data = {
+            "stem": "下列化学方程式及所属基本反应类型都正确的是",
+            "options": (
+                "A. 2H2+O2=2H2O，化合反应\n"
+                "B. CaCO3=CaO+CO2，分解反应\n"
+                "C. Fe+HCl=FeCl2+H2，置换反应\n"
+                "D. NaOH+HCl=NaCl+H2O，复分解反应"
+            ),
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "中等题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_basic_to_medium_reaction_validation_floor",
+        )
+
+    def test_teacher_guard_promotes_dense_project_experiment_as_hard(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("中等题")
+        rating["features"].update(
+            {
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "多条清晰证据联合",
+                "experiment_requirement": "控制变量、现象解释或数据归纳",
+            }
+        )
+        data = {
+            "stem": (
+                "项目式学习：【活动一】实验1和实验2完成试剂制取；"
+                "【活动二】实验3研究变量，进一步探究并设计实验4，"
+                "根据多组数据解释现象并得出结论。"
+            ),
+            "options": "",
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "拔高题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_medium_to_hard_dense_project_floor",
         )
 
     def test_teacher_guard_audits_complex_model_hard_as_final(
@@ -963,6 +1197,129 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "teacher_hard_to_final_complex_model",
         )
 
+    def test_final_guard_respects_low_quantitative_experiment_ceiling(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD = True
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("拔高题")
+        rating["features"].update(
+            {
+                "reasoning_depth": "4-5层",
+                "reasoning_direction": "分类讨论或综合推导",
+                "knowledge_relation": "跨模块融合",
+                "representation_conversion": "两类表征连续转换",
+                "reaction_relation": "需要分情况判断的反应模型",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "需要排除竞争解释",
+                "experiment_requirement": "多阶段探究与定量误差",
+                "graph_table_requirement": "多组比较归纳",
+                "calculation_model": "口算或直接比例",
+                "subquestion_dependency": "多问存在结果或任务链依赖",
+            }
+        )
+
+        result = chemistry.postprocess_chemistry_difficulty(
+            rating,
+            {"stem": "根据多组实验判断未知溶液并评价方案", "options": ""},
+        )
+
+        self.assertEqual(
+            result["final_boundary_guard_candidate_level"],
+            "拔高题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "拔高题",
+        )
+        self.assertIn(
+            "缺少压轴级定量、四重表征或多图表耦合",
+            result["final_promotion_ceiling_reason"],
+        )
+
+    def test_final_guard_respects_short_independent_calculation_ceiling(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD = True
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("拔高题")
+        rating["features"].update(
+            {
+                "reasoning_depth": "4-5层",
+                "reasoning_direction": "正向推导",
+                "knowledge_relation": "跨模块融合",
+                "representation_conversion": "宏观-微观-符号-定量多重转换",
+                "reaction_relation": "多反应连续转化",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "多条清晰证据联合",
+                "experiment_requirement": "无",
+                "graph_table_requirement": "无",
+                "calculation_model": "多重守恒、差量、联立或分类",
+                "subquestion_dependency": "多问相互独立",
+            }
+        )
+
+        result = chemistry.postprocess_chemistry_difficulty(
+            rating,
+            {
+                "stem": "已知两种燃料的混合物质量和产物质量，求耗氧量。",
+                "options": "",
+            },
+        )
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "拔高题",
+        )
+        self.assertIn(
+            "短题中的独立常规定量任务",
+            result["final_promotion_ceiling_reason"],
+        )
+
+    def test_final_guard_respects_parallel_research_questions_ceiling(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD = True
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("拔高题")
+        rating["features"].update(
+            {
+                "reasoning_depth": "4-5层",
+                "reasoning_direction": "分类讨论或综合推导",
+                "knowledge_relation": "跨模块融合",
+                "representation_conversion": "宏观-微观-符号-定量多重转换",
+                "reaction_relation": "多反应连续转化",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "需要排除竞争解释",
+                "experiment_requirement": "方案设计、评价或补充实验",
+                "graph_table_requirement": "拐点、平台或分段反推",
+                "calculation_model": "多重守恒、差量、联立或分类",
+                "unfamiliar_information_transfer": "迁移后建立关系",
+                "subquestion_dependency": "多问共享模型但无答案依赖",
+            }
+        )
+        data = {
+            "stem": (
+                "问题1：认识物质；问题2：比较性质；问题3：设计实验；"
+                "问题4：完成计算；问题5：评价方案。"
+            ),
+            "options": "",
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "拔高题",
+        )
+        self.assertIn(
+            "并列研究问题",
+            result["final_promotion_ceiling_reason"],
+        )
+
     def test_teacher_guard_writeback_is_independent_and_adjacent(
         self,
     ) -> None:
@@ -972,8 +1329,12 @@ class ChemistryRuntimeTests(unittest.TestCase):
             True
         )
         rating = valid_rating("中等题")
-        rating["features"]["unfamiliar_information_transfer"] = (
-            "给定新信息直接应用"
+        rating["features"].update(
+            {
+                "knowledge_relation": "跨模块融合",
+                "unfamiliar_information_transfer": "给定新信息直接应用",
+                "subquestion_dependency": "多问共享模型但无答案依赖",
+            }
         )
 
         result = chemistry.postprocess_chemistry_difficulty(rating, {})
@@ -985,7 +1346,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(len(result["postprocess_actions"]), 1)
         self.assertEqual(
             result["postprocess_actions"][0]["rule"],
-            "teacher_medium_to_hard_structural_breadth",
+            "teacher_medium_to_hard_shared_new_information",
         )
 
     def test_teacher_guard_does_not_promote_weak_level_only_signal(
@@ -1063,7 +1424,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             result["postprocess_profile"],
-            "chemistry_core12_teacher_distribution_v1_audit_first",
+            "chemistry_core12_teacher_distribution_v2_severe_floor_audit_first",
         )
 
     def test_prompt_example_is_valid_and_uses_core12_enums(self) -> None:
@@ -1108,6 +1469,30 @@ class ChemistryRuntimeTests(unittest.TestCase):
         )
         self.assertIn(
             "中等题进入拔高比较的结构广度通道",
+            prefix,
+        )
+        self.assertIn(
+            "至少4个非重复有效任务",
+            prefix,
+        )
+        self.assertIn(
+            "至少2项属于实质应用、解释、实验分析、图表比较或计算",
+            prefix,
+        )
+        self.assertIn(
+            "严重低估安全底线",
+            prefix,
+        )
+        self.assertIn(
+            "多选项连续转化链",
+            prefix,
+        )
+        self.assertIn(
+            "短题中两个彼此独立的常规定量任务",
+            prefix,
+        )
+        self.assertIn(
+            "题干并列提出四个以上研究问题",
             prefix,
         )
         self.assertNotIn(

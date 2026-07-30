@@ -3,7 +3,9 @@
 
 运行与审计方式对齐当前物理正式流程：OpenAI-compatible Responses API、
 可选前缀缓存、并发、重试、断点续跑、JSONL 输入输出、严格 Core-12
-schema、原始/最终结果分离，以及每次最多调整一个相邻档的可审计后处理。
+schema、原始/最终结果分离，以及可审计的窄后处理。常规校准每次最多
+调整一个相邻档；只有基于题干客观结构的严重低估安全底线，才允许将
+明显的连续反应核验从送分题直接托底到中等题。
 
 化学使用历史效果更稳定的12个核心特征，不复用物理特征，也不把
 Evidence-15的三个辅助观察量加入生产输出协议。
@@ -889,6 +891,7 @@ def set_level_with_reason(
     *,
     rule: str = "chemistry_adjacent_calibration",
     evidence: Optional[Sequence[str]] = None,
+    max_level_distance: int = 1,
 ) -> None:
     """设置后处理难度，并记录可审计的改档轨迹。
 
@@ -902,11 +905,16 @@ def set_level_with_reason(
         raise ValueError(
             f"后处理档位非法: {previous_level!r} -> {level!r}"
         )
-    if previous_level != level and abs(
+    level_distance = abs(
         LEVEL_MAP[previous_level] - LEVEL_MAP[level]
-    ) != 1:
+    )
+    if previous_level != level and not (
+        1 <= level_distance <= max_level_distance
+    ):
         raise ValueError(
-            f"后处理只能调整一个相邻档: {previous_level} -> {level}"
+            "后处理调整距离超出该规则许可范围: "
+            f"{previous_level} -> {level}, "
+            f"max_level_distance={max_level_distance}"
         )
     rating_result.setdefault("postprocess_original_level", previous_level)
     rating_result.setdefault("postprocess_trace", [])
@@ -915,6 +923,7 @@ def set_level_with_reason(
             "rule": rule,
             "from": previous_level,
             "to": level,
+            "level_distance": level_distance,
             "evidence": list(evidence or [core_basis_prefix]),
             "reason": core_basis_prefix,
         })
@@ -958,6 +967,239 @@ def visible_text(data: Dict[str, Any], include_analysis: bool = False) -> str:
             if include_analysis:
                 parts.append(str(sq.get("analysis", "") or ""))
     return "\n".join(parts)
+
+
+def count_choice_options(data: Dict[str, Any]) -> int:
+    """统计显式 A-D 选项，仅作客观结构门控。"""
+    options = str(data.get("options", "") or "")
+    return len(
+        re.findall(
+            r"(?m)^\s*[A-DＡ-Ｄ][\.、．:：\)]",
+            options,
+        )
+    )
+
+
+def count_reaction_arrows(text: str) -> int:
+    return len(
+        re.findall(
+            r"(?:→|->|⇒|↔|⇌|\\xrightarrow|\\rightarrow|\\mathop\{?→)",
+            text,
+        )
+    )
+
+
+def parallel_application_floor_signal(
+    data: Dict[str, Any],
+) -> Optional[str]:
+    """识别不应落入纯直接检索的窄结构。
+
+    这些信号只建立基础题下限，不按物质名直接定档。所有判断均来自
+    题干和选项，不读取解析，也不依赖模型自报的 Core-12。
+    """
+    text = visible_text(data, include_analysis=False)
+    if count_choice_options(data) < 4:
+        return None
+
+    if (
+        re.search(
+            r"长期(?:暴露|露置)|长时间(?:暴露|露置)|"
+            r"久置|敞口放置",
+            text,
+        )
+    ):
+        return "多种物质在空气中变化需要分别应用吸水、挥发或反应规则"
+
+    numbered_items = re.findall(
+        r"(?:[①②③④⑤⑥⑦⑧⑨⑩]|"
+        r"(?<!\d)[（\(][1-9][）\)])",
+        text,
+    )
+    if (
+        len(numbered_items) >= 5
+        and re.search(r"(?:分别)?(?:放入|加入).{0,20}水", text)
+        and "充分搅拌" in text
+        and "得到溶液" in text
+    ):
+        return "多种材料需逐项判断分散体系形成条件"
+
+    property_families = sum(
+        bool(re.search(pattern, text))
+        for pattern in (
+            r"用途|清洁|清洗|去油污",
+            r"腐蚀|安全|皮肤|危险",
+            r"变质|久置|空气|密封",
+            r"指示剂|酚酞|石蕊|酸碱性",
+        )
+    )
+    if property_families >= 3:
+        return "同一物质的用途、安全、保存或指示剂性质需切换多类规则"
+
+    periodic_families = sum(
+        bool(re.search(pattern, text))
+        for pattern in (
+            r"元素符号|符号为",
+            r"质子数|电子数|原子序数",
+            r"相对原子质量|原子质量",
+            r"属于.{0,3}(?:金属|非金属)元素",
+        )
+    )
+    if periodic_families >= 3:
+        return "元素信息题同时核验符号、粒子数、类别或相对原子质量"
+
+    return None
+
+
+def reaction_validation_floor_signal(
+    data: Dict[str, Any],
+) -> Optional[str]:
+    """识别至少属于中等题比较的多选项反应核验。"""
+    text = visible_text(data, include_analysis=False)
+    stem = str(data.get("stem", "") or "")
+    if count_choice_options(data) < 4:
+        return None
+
+    if (
+        re.search(
+            r"转化|给定条件|一定条件|各步反应|实现下列",
+            stem,
+        )
+        and count_reaction_arrows(text) >= 2
+    ):
+        return "多个候选连续转化链需逐段核验反应物、条件和产物"
+
+    if (
+        "化学方程式" in text
+        and re.search(
+            r"反应类型|基本反应类型|化合反应|分解反应|"
+            r"置换反应|复分解反应",
+            text,
+        )
+    ):
+        return "每个候选同时核验方程式事实、配平条件和反应类型"
+
+    return None
+
+
+def dense_project_experiment_signal(
+    features: Dict[str, Any],
+    data: Dict[str, Any],
+) -> bool:
+    text = visible_text(data, include_analysis=False)
+    experiment_markers = set(re.findall(
+        r"实验[一二三四五六123456]",
+        text,
+    ))
+    all_markers = set(re.findall(
+        r"(?:活动|任务|实验)[一二三四五六123456]",
+        text,
+    ))
+    return bool(
+        len(experiment_markers) >= 4
+        and len(all_markers) >= 6
+        and features["constraint_complexity"]
+        in {"多个相互关联约束", "多层嵌套约束"}
+        and features["evidence_relation"]
+        in {
+            "多条清晰证据联合",
+            "需要排除竞争解释",
+            "证据冲突、筛选或多层排除",
+        }
+        and features["experiment_requirement"]
+        in {
+            "控制变量、现象解释或数据归纳",
+            "方案设计、评价或补充实验",
+            "多阶段探究与定量误差",
+        }
+    )
+
+
+def strong_segment_graph_chain_signal(
+    features: Dict[str, Any],
+) -> bool:
+    return bool(
+        features["graph_table_requirement"] == "拐点、平台或分段反推"
+        and features["knowledge_relation"]
+        in {"跨模块融合", "多模块深度融合"}
+        and features["representation_conversion"]
+        in {
+            "两类表征连续转换",
+            "宏观-微观-符号-定量多重转换",
+        }
+        and features["constraint_complexity"]
+        in {"多个相互关联约束", "多层嵌套约束"}
+        and features["evidence_relation"]
+        in {
+            "多条清晰证据联合",
+            "需要排除竞争解释",
+            "证据冲突、筛选或多层排除",
+        }
+        and features["experiment_requirement"]
+        in {
+            "控制变量、现象解释或数据归纳",
+            "方案设计、评价或补充实验",
+            "多阶段探究与定量误差",
+        }
+    )
+
+
+def shared_new_information_signal(
+    features: Dict[str, Any],
+) -> bool:
+    return bool(
+        features["unfamiliar_information_transfer"]
+        == "给定新信息直接应用"
+        and features["subquestion_dependency"]
+        == "多问共享模型但无答案依赖"
+        and features["knowledge_relation"]
+        in {
+            "同模块深度关联",
+            "跨模块融合",
+            "多模块深度融合",
+        }
+    )
+
+
+def final_promotion_ceiling_reason(
+    features: Dict[str, Any],
+    data: Dict[str, Any],
+) -> str:
+    """返回不应把拔高题再升为压轴题的客观低密度结构。"""
+    text = visible_text(data, include_analysis=False)
+    if (
+        features["calculation_model"] in {"无", "口算或直接比例"}
+        and features["knowledge_relation"] != "多模块深度融合"
+        and features["representation_conversion"]
+        != "宏观-微观-符号-定量多重转换"
+        and features["graph_table_requirement"] != "多图表耦合建模"
+    ):
+        return (
+            "实验或证据任务缺少压轴级定量、四重表征或多图表耦合，"
+            "保持拔高题上限"
+        )
+
+    if (
+        len(text) < 180
+        and features["subquestion_dependency"] == "多问相互独立"
+        and features["experiment_requirement"] == "无"
+        and features["graph_table_requirement"] == "无"
+    ):
+        return "短题中的独立常规定量任务未形成压轴级整体耦合"
+
+    explicit_questions = set(
+        re.findall(
+            r"问题\s*[一二三四五六123456]",
+            text,
+        )
+    )
+    if (
+        len(explicit_questions) >= 4
+        and features["subquestion_dependency"]
+        != "多问存在结果或任务链依赖"
+    ):
+        return "四个以上并列研究问题没有形成结果或任务链依赖"
+
+    return ""
 
 
 def count_fill_blanks(text: str) -> int:
@@ -2125,16 +2367,16 @@ def add_feature_audit_flags(
     ):
         flags.append("压轴题缺少6层以上深链或特殊结构的复合证据")
     if rating_result.get("postprocess_trace"):
-        flags.append("后处理已作一次相邻档校准，原始模型结果另行保留")
+        flags.append("后处理已作一次结构校准，原始模型结果另行保留")
     rating_result["feature_audit_flags"] = list(dict.fromkeys(flags))
 
 
 def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
     """化学后处理校准与审计主流程。
 
-    默认只记录候选动作，不写回难度等级。历史591题三次回放中，当前
-    自动动作共触发5次并净损失3题，因此只有显式设置
-    CHEMISTRY_ENABLE_LEVEL_WRITEBACK=1时才执行相邻档写回。
+    默认只记录候选动作，不写回难度等级。通用历史规则只在显式设置
+    CHEMISTRY_ENABLE_LEVEL_WRITEBACK=1时写回；教师分布校准及严重低估
+    安全底线使用独立开关，便于先做 A/B 再决定生产写回。
     """
     if not rating_result:
         return rating_result
@@ -2148,7 +2390,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["postprocess_trace"] = []
     rating_result["postprocess_actions"] = []
     rating_result["postprocess_profile"] = (
-        "chemistry_core12_teacher_distribution_v1_audit_first"
+        "chemistry_core12_teacher_distribution_v2_severe_floor_audit_first"
     )
     rating_result["postprocess_writeback_enabled"] = (
         CHEMISTRY_ENABLE_LEVEL_WRITEBACK
@@ -2201,6 +2443,30 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 }
             )
         )
+    )
+    complex_final_guard_signal = bool(
+        depth >= 3
+        and len(final_evidence) >= 3
+        and (
+            features["calculation_model"]
+            == "多重守恒、差量、联立或分类"
+            or features["representation_conversion"]
+            == "宏观-微观-符号-定量多重转换"
+        )
+    )
+    final_ceiling_reason = (
+        final_promotion_ceiling_reason(features, data)
+        if (
+            raw_level == "拔高题"
+            and (
+                existing_final_guard_signal
+                or complex_final_guard_signal
+            )
+        )
+        else ""
+    )
+    rating_result["final_promotion_ceiling_reason"] = (
+        final_ceiling_reason
     )
 
     if raw_level == "送分题":
@@ -2259,7 +2525,8 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 evidence=medium_evidence[:4],
             )
         elif (
-            (
+            not final_ceiling_reason
+            and (
                 depth >= 4
                 or (
                     CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD
@@ -2317,16 +2584,42 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         else raw_level
     )
 
-    # 教师分布校准只使用可复核的结构特征，并且每题最多提出一次相邻档
-    # 调整。它不按题库配额切档，默认仅产出独立候选，便于与原始结果
-    # 做A/B；只有专用写回开关开启时才改变最终等级。
+    # 教师分布校准只使用可复核的结构特征，并且每题最多提出一次调整。
+    # 常规动作只移动一个相邻档；唯一的两档托底是“送分→中等”的多选项
+    # 连续反应核验，它依赖题干中的多个反应箭头和条件核验，不依赖模型
+    # 自报 depth。规则不按题库配额切档，默认仅产出候选以便做 A/B。
     teacher_guard_active = bool(
         CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS
         or CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
     )
     teacher_candidate_result = copy.deepcopy(rating_result)
+    parallel_floor = parallel_application_floor_signal(data)
+    reaction_floor = reaction_validation_floor_signal(data)
     if teacher_guard_active:
         if (
+            raw_level == "送分题"
+            and reaction_floor
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "中等题",
+                "严重低估安全底线：多选项连续反应核验不是直接识记",
+                rule="teacher_easy_to_medium_reaction_conversion_floor",
+                evidence=[reaction_floor],
+                max_level_distance=2,
+            )
+        elif (
+            raw_level == "送分题"
+            and parallel_floor
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "基础题",
+                "严重低估安全底线：多个对象需要切换不同化学应用规则",
+                rule="teacher_easy_to_basic_parallel_application_floor",
+                evidence=[parallel_floor],
+            )
+        elif (
             raw_level == "送分题"
             and features["experiment_requirement"] == "基础操作或读数"
         ):
@@ -2338,6 +2631,17 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 evidence=[
                     f"实验要求={features['experiment_requirement']}",
                 ],
+            )
+        elif (
+            raw_level == "基础题"
+            and reaction_floor
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "中等题",
+                "严重低估安全底线：连续转化或方程式—反应类型需要双重核验",
+                rule="teacher_basic_to_medium_reaction_validation_floor",
+                evidence=[reaction_floor],
             )
         elif (
             raw_level == "基础题"
@@ -2362,38 +2666,62 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         elif (
             raw_level == "中等题"
             and depth >= 2
-            and (
-                features["graph_table_requirement"]
-                == "拐点、平台或分段反推"
-                or features["unfamiliar_information_transfer"]
-                == "给定新信息直接应用"
-                or (
-                    features["subquestion_dependency"]
-                    == "多问共享模型但无答案依赖"
-                    and features["knowledge_relation"]
-                    in {
-                        "同模块深度关联",
-                        "跨模块融合",
-                        "多模块深度融合",
-                    }
-                )
-            )
+            and dense_project_experiment_signal(features, data)
         ):
             set_level_with_reason(
                 teacher_candidate_result,
                 "拔高题",
-                "结构边界窄校准：常规深度中出现分段反推、新信息迁移或共享深层模型",
-                rule="teacher_medium_to_hard_structural_breadth",
+                "严重低估安全底线：四个以上实验形成变量、证据和方案的项目链",
+                rule="teacher_medium_to_hard_dense_project_floor",
+                evidence=[
+                    f"推理深度={features['reasoning_depth']}",
+                    f"实验要求={features['experiment_requirement']}",
+                    f"约束复杂度={features['constraint_complexity']}",
+                    f"证据关系={features['evidence_relation']}",
+                ],
+            )
+        elif (
+            raw_level == "中等题"
+            and depth >= 2
+            and strong_segment_graph_chain_signal(features)
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "拔高题",
+                "结构边界窄校准：分段图像与跨模块表征、约束和实验证据共同建模",
+                rule="teacher_medium_to_hard_strong_graph_chain",
                 evidence=[
                     f"推理深度={features['reasoning_depth']}",
                     f"图表要求={features['graph_table_requirement']}",
+                    f"知识关系={features['knowledge_relation']}",
+                    f"表征转换={features['representation_conversion']}",
+                    f"约束复杂度={features['constraint_complexity']}",
+                    f"实验要求={features['experiment_requirement']}",
+                ],
+            )
+        elif (
+            raw_level == "中等题"
+            and depth >= 2
+            and shared_new_information_signal(features)
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "拔高题",
+                "结构边界窄校准：给定新信息被多个小问在同一深层模型中共同使用",
+                rule="teacher_medium_to_hard_shared_new_information",
+                evidence=[
+                    f"推理深度={features['reasoning_depth']}",
                     "陌生信息迁移="
                     + features["unfamiliar_information_transfer"],
                     f"小问关系={features['subquestion_dependency']}",
                     f"知识关系={features['knowledge_relation']}",
                 ],
             )
-        elif raw_level == "拔高题" and existing_final_guard_signal:
+        elif (
+            raw_level == "拔高题"
+            and not final_ceiling_reason
+            and existing_final_guard_signal
+        ):
             set_level_with_reason(
                 teacher_candidate_result,
                 "压轴题",
@@ -2403,14 +2731,8 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             )
         elif (
             raw_level == "拔高题"
-            and depth >= 3
-            and len(final_evidence) >= 3
-            and (
-                features["calculation_model"]
-                == "多重守恒、差量、联立或分类"
-                or features["representation_conversion"]
-                == "宏观-微观-符号-定量多重转换"
-            )
+            and not final_ceiling_reason
+            and complex_final_guard_signal
         ):
             set_level_with_reason(
                 teacher_candidate_result,
@@ -2427,7 +2749,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         teacher_candidate_result.get("postprocess_trace", [])
     )
     if len(teacher_candidate_actions) > 1:
-        raise RuntimeError("教师分布窄校准违反单次相邻调整约束")
+        raise RuntimeError("教师分布窄校准违反每题单次调整约束")
     teacher_guard_action = (
         teacher_candidate_actions[0]
         if teacher_candidate_actions
@@ -2500,12 +2822,15 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["teacher_distribution_guard_writeback_applied"] = (
         teacher_guard_writeback_applied
     )
+    rating_result["final_promotion_ceiling_reason"] = (
+        final_ceiling_reason
+    )
     sync_reasoning_after_postprocess(rating_result)
     rating_result["postprocess_actions"] = copy.deepcopy(
         rating_result.get("postprocess_trace", [])
     )
     if len(rating_result["postprocess_actions"]) > 1:
-        raise RuntimeError("后处理违反单次相邻调整约束")
+        raise RuntimeError("后处理违反每题单次调整约束")
     rating_result["automatic_level_change_applied"] = bool(
         rating_result["postprocess_actions"]
     )
@@ -2518,13 +2843,17 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     add_feature_audit_flags(rating_result, data)
     if candidate_actions and not CHEMISTRY_ENABLE_LEVEL_WRITEBACK:
         rating_result["feature_audit_flags"].append(
-            "存在相邻档候选校准，但自动写回默认关闭；"
+            "存在通用候选校准，但自动写回默认关闭；"
             "仅记录postprocess_candidate_actions"
         )
     if teacher_guard_action and not teacher_guard_writeback_applied:
         rating_result["feature_audit_flags"].append(
             "存在结构边界窄校准候选，但专用写回默认关闭；"
             "仅记录teacher_distribution_guard_candidate_action"
+        )
+    if final_ceiling_reason:
+        rating_result["feature_audit_flags"].append(
+            "压轴升档被客观低密度上限阻止：" + final_ceiling_reason
         )
     return rating_result
 
