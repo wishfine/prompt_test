@@ -57,7 +57,7 @@ def valid_rating(level: str = "中等题") -> dict:
                 "视觉作用V=提供局部关系；"
                 "纵向D=3个有效化学决策；"
                 "有效覆盖W=2项；"
-                "共享结构校准=关闭（测试）。"
+                "广度校准=关闭（测试）。"
                 "关键任务边：操作→现象→结论。"
             ),
             "hard_point": "测试难点",
@@ -267,6 +267,47 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "基础题")
         self.assertEqual(result["postprocess_actions"], [])
 
+    def test_high_structure_basic_gets_one_level_underflow_guard(
+        self,
+    ) -> None:
+        rating = valid_rating("基础题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["features"].update(
+            {
+                "reasoning_depth": "2-3层",
+                "reasoning_direction": "正向推导",
+                "reaction_relation": "2-3个并列或简单连续反应",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "多条清晰证据联合",
+                "subquestion_dependency": "多问共享模型但无答案依赖",
+            }
+        )
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(len(result["postprocess_actions"]), 1)
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "core12_basic_to_medium_severe_underflow_guard",
+        )
+
+    def test_three_structure_families_do_not_trigger_underflow_guard(
+        self,
+    ) -> None:
+        rating = valid_rating("基础题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["features"].update(
+            {
+                "reasoning_depth": "2-3层",
+                "reasoning_direction": "正向推导",
+                "reaction_relation": "2-3个并列或简单连续反应",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "多条清晰证据联合",
+            }
+        )
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(result["postprocess_actions"], [])
+
     def test_medium_is_not_raised_by_one_weak_high_signal(self) -> None:
         rating = valid_rating("中等题")
         rating["features"].update(
@@ -301,7 +342,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(len(result["postprocess_actions"]), 1)
         self.assertEqual(rating, original)
 
-    def test_truly_low_structure_medium_is_lowered_to_basic(self) -> None:
+    def test_low_structure_medium_is_not_automatically_lowered(self) -> None:
         rating = valid_rating("中等题")
         rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
         rating["features"].update(
@@ -316,11 +357,8 @@ class ChemistryRuntimeTests(unittest.TestCase):
             rating,
             {"stem": "根据一个显性现象判断物质性质。"},
         )
-        self.assertEqual(result["difficulty_level"], "基础题")
-        self.assertEqual(
-            result["postprocess_actions"][0]["rule"],
-            "core12_medium_to_basic_low_structure",
-        )
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(result["postprocess_actions"], [])
 
     def test_multi_task_experiment_medium_is_not_lowered(self) -> None:
         rating = valid_rating("中等题")
@@ -343,12 +381,6 @@ class ChemistryRuntimeTests(unittest.TestCase):
         result = chemistry.postprocess_chemistry_difficulty(rating, data)
         self.assertEqual(result["difficulty_level"], "中等题")
         self.assertEqual(result["postprocess_actions"], [])
-        self.assertGreater(
-            result["postprocess_evidence_counts"][
-                "medium_downgrade_veto"
-            ],
-            0,
-        )
 
     def test_multi_criterion_purification_medium_is_not_lowered(self) -> None:
         rating = valid_rating("中等题")
@@ -420,7 +452,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "压轴题")
         self.assertEqual(len(result["postprocess_actions"]), 1)
 
-    def test_d4_5_shared_coupled_hard_is_raised_to_final(self) -> None:
+    def test_d4_5_shared_coupled_hard_is_not_forced_to_final(self) -> None:
         rating = valid_rating("拔高题")
         rating["features"].update(
             {
@@ -436,11 +468,8 @@ class ChemistryRuntimeTests(unittest.TestCase):
             }
         )
         result = chemistry.postprocess_chemistry_difficulty(rating, {})
-        self.assertEqual(result["difficulty_level"], "压轴题")
-        self.assertEqual(
-            result["postprocess_actions"][0]["rule"],
-            "core12_hard_to_final_strict_coupled_chain",
-        )
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["postprocess_actions"], [])
 
     def test_d4_5_independent_high_signals_do_not_force_final(self) -> None:
         rating = valid_rating("拔高题")
@@ -490,14 +519,14 @@ class ChemistryRuntimeTests(unittest.TestCase):
             )
         )
 
-    def test_refined_core12_profile_and_complete_diagnostics(self) -> None:
+    def test_boundary_rebased_profile_and_complete_diagnostics(self) -> None:
         result = chemistry.postprocess_chemistry_difficulty(
             valid_rating("中等题"),
             {},
         )
         self.assertEqual(
             result["postprocess_profile"],
-            "chemistry_core12_refined_v4",
+            "chemistry_core12_boundary_rebased_v5",
         )
         self.assertFalse(
             any(
@@ -545,7 +574,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "都不能单独作为压轴降为拔高的依据",
             prefix,
         )
-        self.assertIn("D/B/W 联合定档矩阵", prefix)
+        self.assertIn("D/B/W 相邻校准矩阵", prefix)
         self.assertIn(
             "`reasoning_depth`只记录最高难任务的纵向链",
             prefix,
@@ -563,7 +592,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
             prefix,
         )
         self.assertIn(
-            "多个独立的一步应用即使切换不同教材规则，通常仍判基础题",
+            "W≥4、至少2项实质应用、至少2类回答规则",
             prefix,
         )
         self.assertIn(
@@ -571,14 +600,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
             prefix,
         )
         self.assertNotIn("有限横向广度", prefix)
-        self.assertNotIn(
-            "W≥3、至少2项真实应用、至少2类回答规则",
-            prefix,
-        )
-        self.assertNotIn(
-            "用纵向深度 D 确定基准档",
-            prefix,
-        )
+        self.assertIn("用纵向深度 D 确定基准档", prefix)
 
 
 if __name__ == "__main__":

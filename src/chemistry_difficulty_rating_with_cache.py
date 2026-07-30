@@ -2144,6 +2144,80 @@ def core12_final_coupling_gate(
     return d4_5_decisive_pair or deep_coupled_chain, evidence
 
 
+def core12_basic_to_medium_underflow_evidence(
+    features: Dict[str, Any],
+) -> List[str]:
+    """识别明显被压到基础档的高结构复合题。
+
+    该规则只处理 ``reasoning_depth>=2-3层`` 且至少四类结构证据同时
+    出现的极窄情形。它不会把独立小问累计成纵向步骤，也不根据题型名称
+    或单个关键词升档；目的只是把已经由 Core-12 明确认出的复合结构从
+    基础题校准到中等题，最多调整一个相邻档。
+    """
+    if CORE12_DEPTH_ORDER[features["reasoning_depth"]] < 2:
+        return []
+
+    families: List[str] = []
+    if features["evidence_relation"] in {
+        "多条清晰证据联合",
+        "需要排除竞争解释",
+        "证据冲突、筛选或多层排除",
+    }:
+        families.append(f"证据关系={features['evidence_relation']}")
+    if features["experiment_requirement"] in {
+        "控制变量、现象解释或数据归纳",
+        "方案设计、评价或补充实验",
+        "多阶段探究与定量误差",
+    }:
+        families.append(f"实验要求={features['experiment_requirement']}")
+    if features["graph_table_requirement"] in {
+        "多组比较归纳",
+        "拐点、平台或分段反推",
+        "多图表耦合建模",
+    }:
+        families.append(f"图表要求={features['graph_table_requirement']}")
+    if features["reaction_relation"] in {
+        "2-3个并列或简单连续反应",
+        "多反应连续转化",
+        "先后、竞争或过量不足",
+        "需要分情况判断的反应模型",
+    }:
+        families.append(f"反应关系={features['reaction_relation']}")
+    if features["constraint_complexity"] in {
+        "多个相互关联约束",
+        "多层嵌套约束",
+    }:
+        families.append(f"约束复杂度={features['constraint_complexity']}")
+    if features["representation_conversion"] in {
+        "两类表征连续转换",
+        "宏观-微观-符号-定量多重转换",
+    }:
+        families.append(
+            f"表征转换={features['representation_conversion']}"
+        )
+    if features["knowledge_relation"] in {
+        "同模块深度关联",
+        "跨模块融合",
+        "多模块深度融合",
+    }:
+        families.append(f"知识关系={features['knowledge_relation']}")
+    if features["calculation_model"] in {
+        "单一方程式或关系式",
+        "单一守恒或多反应计算",
+        "多重守恒、差量、联立或分类",
+    }:
+        families.append(f"计算模型={features['calculation_model']}")
+    if features["subquestion_dependency"] in {
+        "多问共享模型但无答案依赖",
+        "多问存在结果或任务链依赖",
+    }:
+        families.append(f"小问关系={features['subquestion_dependency']}")
+
+    if len(families) < 4:
+        return []
+    return families
+
+
 def core12_is_direct_retrieval(features: Dict[str, Any]) -> bool:
     return (
         features["reasoning_depth"] == "0层"
@@ -2178,7 +2252,7 @@ def add_feature_audit_flags(
         "视觉作用V=",
         "纵向D=",
         "有效覆盖W=",
-        "共享结构校准=",
+        "广度校准=",
     )
     missing_markers = [
         marker for marker in structured_markers if marker not in core_basis
@@ -2236,22 +2310,19 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["postprocess_original_level"] = raw_level
     rating_result["postprocess_trace"] = []
     rating_result["postprocess_actions"] = []
-    rating_result["postprocess_profile"] = "chemistry_core12_refined_v4"
+    rating_result["postprocess_profile"] = (
+        "chemistry_core12_boundary_rebased_v5"
+    )
     rating_result["feature_schema_version"] = "chemistry_core12_strict_v1"
     rating_result["schema_validation_passed"] = True
     features = rating_result["features"]
-    medium_evidence = core12_medium_evidence(features)
     basic_evidence = core12_basic_application_evidence(features)
     complete_model_evidence = core12_complete_model_evidence(features)
     high_evidence = core12_high_evidence(features)
     decisive_evidence = core12_decisive_evidence(features)
     final_evidence = core12_final_evidence(features)
-    medium_downgrade_veto = core12_medium_to_basic_veto(
-        features,
-        data,
-    )
-    final_coupling_ok, final_coupling_evidence = (
-        core12_final_coupling_gate(features)
+    underflow_evidence = core12_basic_to_medium_underflow_evidence(
+        features
     )
     depth = CORE12_DEPTH_ORDER[features["reasoning_depth"]]
 
@@ -2262,28 +2333,19 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         # 因而此边界只审计，不自动写回。
         pass
     elif raw_level == "基础题":
-        # Core-12全低可能是真送分，也可能是模型漏识别复合任务。
-        # 历史591题回放中该自动降档无净收益，因此只审计、不写回。
-        # 同一回放中“基础→中等”完整模型规则仅触发1次且为误伤；
-        # 基础/中等边界交由 Prompt 主判，后处理只记录证据、不写回。
-        pass
-    elif raw_level == "中等题":
-        if (
-            depth <= 1
-            and not complete_model_evidence
-            and not medium_downgrade_veto
-        ):
+        if underflow_evidence:
             set_level_with_reason(
                 rating_result,
-                "基础题",
-                "自动降档：仅有0—1层显性应用且无完整常规模型",
-                rule="core12_medium_to_basic_low_structure",
+                "中等题",
+                "自动升档：基础档结果同时包含2—3层以上深度和至少四类复合结构证据",
+                rule="core12_basic_to_medium_severe_underflow_guard",
                 evidence=[
                     f"推理深度={features['reasoning_depth']}",
-                    "缺少联合证据、完整实验流程或完整计算模型",
+                    *underflow_evidence[:5],
                 ],
             )
-        elif (
+    elif raw_level == "中等题":
+        if (
             depth >= 3
             and len(decisive_evidence) >= 2
         ):
@@ -2298,27 +2360,33 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 ],
             )
     elif raw_level == "拔高题":
-        if depth <= 2 and not decisive_evidence:
-            set_level_with_reason(
-                rating_result,
-                "中等题",
-                "自动降档：常规2—3层正向模型且无决定性高阶卡点",
-                rule="core12_hard_to_medium_routine_model",
-                evidence=medium_evidence[:4],
-            )
-        elif (
-            final_coupling_ok
+        if (
+            depth >= 4
             and len(final_evidence) >= 4
+            and (
+                features["subquestion_dependency"]
+                == "多问存在结果或任务链依赖"
+                or (
+                    features["reaction_relation"]
+                    in {
+                        "多反应连续转化",
+                        "先后、竞争或过量不足",
+                        "需要分情况判断的反应模型",
+                    }
+                    and features["calculation_model"]
+                    in {
+                        "单一守恒或多反应计算",
+                        "多重守恒、差量、联立或分类",
+                    }
+                )
+            )
         ):
             set_level_with_reason(
                 rating_result,
                 "压轴题",
-                "自动升档：4—5层以上链中复杂定量与高阶实验/图表形成决定性组合",
-                rule="core12_hard_to_final_strict_coupled_chain",
-                evidence=[
-                    *final_coupling_evidence[:5],
-                    *final_evidence[:3],
-                ],
+                "自动升档：6层以上深链中多个高阶任务相互改变模型",
+                rule="core12_hard_to_final_coupled_chain",
+                evidence=final_evidence[:6],
             )
     elif raw_level == "压轴题":
         if depth <= 3 and len(final_evidence) < 2:
@@ -2348,8 +2416,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         "complete_model": len(complete_model_evidence),
         "decisive_transform": len(decisive_evidence),
         "final_coupling": len(final_evidence),
-        "medium_downgrade_veto": len(medium_downgrade_veto),
-        "strict_final_coupling": len(final_coupling_evidence),
+        "severe_underflow_guard": len(underflow_evidence),
     }
     add_feature_audit_flags(rating_result, data)
     return rating_result
