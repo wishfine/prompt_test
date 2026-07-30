@@ -2,9 +2,11 @@
 """
 @File    : sample_and_generate_chemistry_html.py
 @Description:
-    从已打标的 3000 道初中化学题中，精准抽样 500 道生成交互式评议验收网页。
-    - 评级判定：依据 V1 纯文本打标与后处理纠偏结果。
-    - 可视化优化：题干和解析完全采用 V2 对应的图片 URL 进行渲染展示，不再渲染任何纯文本，规避 LaTeX 乱码。
+    从初中化学难度打标结果中按档抽样，或直接渲染全部结果，生成交互式
+    评议验收网页。
+    - 评级判定：读取 chemistry_stable 的最终 difficulty_rating。
+    - 特征展示：对齐当前 chemistry_core12_strict_v1 特征契约。
+    - 图片展示：优先使用原始 V2 数据中的题干和解析图片 URL。
 """
 
 import json
@@ -13,6 +15,7 @@ import html
 import random
 import argparse
 from collections import defaultdict
+from pathlib import Path
 from typing import Dict, Any, List
 
 # 抽样配比计划 (对齐物理 500 题配比)
@@ -23,6 +26,31 @@ SAMPLE_PLAN = {
     "拔高题": 100,
     "压轴题": 60
 }
+
+
+def build_sample_plan(sample_size: int) -> Dict[str, int]:
+    """按既有 500 题配比缩放抽样计划，并保证总数精确。"""
+    if sample_size <= 0:
+        raise ValueError("sample_size 必须大于 0")
+    total_weight = sum(SAMPLE_PLAN.values())
+    exact = {
+        level: sample_size * weight / total_weight
+        for level, weight in SAMPLE_PLAN.items()
+    }
+    plan = {level: int(value) for level, value in exact.items()}
+    remainder = sample_size - sum(plan.values())
+    ranked = sorted(
+        SAMPLE_PLAN,
+        key=lambda level: (
+            exact[level] - plan[level],
+            SAMPLE_PLAN[level],
+        ),
+        reverse=True,
+    )
+    for level in ranked[:remainder]:
+        plan[level] += 1
+    return plan
+
 
 LEVEL_MAP = {
     "送分题": 1,
@@ -43,7 +71,7 @@ LEVEL_NAMES = {
 def escape(text: str) -> str:
     if not text:
         return ""
-    return html.escape(text)
+    return html.escape(str(text))
 
 # HTML 网页基础骨架模板 (针对化学优化)
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -412,6 +440,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-color: #FF9800;
             box-shadow: 0 0 0 3px rgba(255,152,0,0.1);
         }
+        .corrected-level-select {
+            min-width: 180px;
+            padding: 7px 10px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background: white;
+            font-size: 13px;
+        }
 
         /* ===== Back to Top ===== */
         .back-to-top {
@@ -510,6 +546,18 @@ __QUESTION_CARDS_PLACEHOLDER__
         saveAnnotations(annotations);
     }
 
+    function saveCorrectedLevel(select) {
+        const qid = select.getAttribute('data-qid');
+        const annotations = loadAnnotations();
+        if (!annotations[qid]) annotations[qid] = {};
+        if (select.value) {
+            annotations[qid].corrected_level = select.value;
+        } else {
+            delete annotations[qid].corrected_level;
+        }
+        saveAnnotations(annotations);
+    }
+
     // ===== 仪表盘汇总 =====
     function updateStats() {
         const annotations = loadAnnotations();
@@ -563,6 +611,10 @@ __QUESTION_CARDS_PLACEHOLDER__
                     const textarea = card.querySelector('.annotation-textarea');
                     if (textarea) textarea.value = ann.reason;
                 }
+                if (ann.corrected_level) {
+                    const select = card.querySelector('.corrected-level-select');
+                    if (select) select.value = ann.corrected_level;
+                }
             }
         });
         updateStats();
@@ -577,6 +629,9 @@ __QUESTION_CARDS_PLACEHOLDER__
                 exportLines.push(JSON.stringify({
                     question_id: q.question_id,
                     model_difficulty_level: q.difficulty_level,
+                    human_difficulty_level: ann.verdict === 'wrong'
+                        ? (ann.corrected_level || "")
+                        : q.difficulty_level,
                     verdict: ann.verdict,
                     human_notes: ann.reason || ""
                 }, null, 0));
@@ -616,8 +671,9 @@ __QUESTION_CARDS_PLACEHOLDER__
                 if (ann.verdict === 'correct') correctCount++; else wrongCount++;
                 
                 details += `题目ID: ${q.question_id}\\n`;
-                details += `模型定位: ${q.difficulty_level} (原始教师定位: ${q.raw_difficulty}档)\\n`;
+                details += `模型定位: ${q.difficulty_level} (来源难度，仅审计: ${q.raw_difficulty})\\n`;
                 details += `评议结论: ${statusStr}\\n`;
+                if (ann.corrected_level) details += `建议正确档位: ${ann.corrected_level}\\n`;
                 if (ann.reason) details += `评审备注: ${ann.reason}\\n`;
                 details += "--------------------------------------------------\\n";
             }
@@ -691,7 +747,10 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
             parent_id = item.get('parent_id', question_id)
             api_time = item.get('api_time_use', 0)
             api_tokens = item.get('api_total_tokens', 0)
-            raw_diff = item.get('difficulty', '无')
+            raw_diff = item.get(
+                'source_difficulty_untrusted',
+                item.get('difficulty', '无'),
+            )
 
             stem_url = item.get('stem_pic_url', '')
             analysis_url = item.get('analysis_pic_url', '')
@@ -716,7 +775,7 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
             <div class="question-header">
                 <span class="question-id">#{idx} | ID: {question_id}</span>
                 <div class="question-tags">
-                    <span class="tag tag-raw">原始教师难度: {raw_diff}档</span>
+                    <span class="tag tag-raw">来源难度（不可信）: {escape(raw_diff)}</span>
                     <span class="tag tag-time">消耗: {api_time}s</span>
                     <span class="tag tag-tokens">{api_tokens} tokens</span>
                 </div>
@@ -789,26 +848,20 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
 
                 if features_obj:
                     cards_html += '                    <div class="rating-details">\n'
-                    # 对齐化学打标中的 18 维归一化特征
+                    # 对齐 chemistry_core12_strict_v1 的唯一生产特征契约。
                     feature_fields = [
-                        ('step_count', '解析步骤数'),
-                        ('equation_count', '化学方程式数量'),
-                        ('calculation_complexity', '计算复杂度'),
-                        ('reasoning_chain', '推理链条'),
-                        ('problem_structure', '题型结构'),
-                        ('additional_structure', '附加结构'),
-                        ('information_carrier', '信息载体'),
-                        ('reality_question', '现实生活情境'),
-                        ('subquestion_dependency', '子问依赖性'),
-                        ('knowledge_count', '知识点个数'),
-                        ('knowledge_diff', '知识点难度'),
-                        ('cross_module', '跨模块综合'),
-                        ('chemistry_process_count', '化学反应/转化过程数'),
-                        ('constraint_count', '反应约束条件'),
-                        ('evidence_relation', '证据推理关系'),
-                        ('experiment_requirement', '实验探究要求'),
-                        ('graph_table_requirement', '图像分析要求'),
-                        ('error_risk', '易错风险'),
+                        ('reasoning_depth', '纵向推理深度 D'),
+                        ('reasoning_direction', '推理方向'),
+                        ('knowledge_relation', '知识关系'),
+                        ('representation_conversion', '表征转换'),
+                        ('reaction_relation', '反应关系'),
+                        ('constraint_complexity', '约束复杂度'),
+                        ('evidence_relation', '证据关系'),
+                        ('experiment_requirement', '实验要求'),
+                        ('graph_table_requirement', '图表要求'),
+                        ('calculation_model', '计算模型'),
+                        ('unfamiliar_information_transfer', '陌生信息迁移'),
+                        ('subquestion_dependency', '小问依赖关系'),
                     ]
                     for key, label in feature_fields:
                         value = features_obj.get(key, '')
@@ -837,6 +890,17 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
                     <div class="annotation-row">
                         <label>修改意见与错误原因归类 (如有错误，请指出正确档位与缺陷，如模型把送分判为基础)：</label>
                     </div>
+                    <div class="annotation-row">
+                        <label>建议正确档位：</label>
+                        <select class="corrected-level-select" data-qid="{escape(question_id)}" onchange="saveCorrectedLevel(this)">
+                            <option value="">请选择（判定有误时填写）</option>
+                            <option value="送分题">送分题</option>
+                            <option value="基础题">基础题</option>
+                            <option value="中等题">中等题</option>
+                            <option value="拔高题">拔高题</option>
+                            <option value="压轴题">压轴题</option>
+                        </select>
+                    </div>
                     <textarea class="annotation-textarea" data-qid="{escape(question_id)}" placeholder="请说明缺陷具体原因及您的推荐档级..." oninput="saveAnnotationText(this)"></textarea>
                 </div>
             </div>
@@ -856,25 +920,40 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
 
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
-    print(f"✨ 成功渲染生成纯图片交互可视化网页: {os.path.abspath(output_path)}")
+    print(f"成功生成化学交互可视化网页: {os.path.abspath(output_path)}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="基于 V1 评级、V2 纯图片可视化的 500 道初中化学题抽样生成网页工具")
+    parser = argparse.ArgumentParser(
+        description="化学难度评级结果交互式 HTML 验收工具"
+    )
     parser.add_argument("-i", "--input", type=str, default="chemistry_difficulty_rated_results.jsonl",
-                        help="输入的化学已打标 V1 结果 JSONL 路径")
-    parser.add_argument("-v2", "--v2-source", type=str, default="../data/chemistry_sampled_5000_per_difficulty_v2.jsonl",
+                        help="输入的化学已打标结果 JSONL 路径")
+    parser.add_argument("-v2", "--v2-source", type=str, default="data/chemistry_sampled_5000_per_difficulty_v2.jsonl",
                         help="含有化学全量图片的 V2 数据集路径")
     parser.add_argument("-oj", "--output-jsonl", type=str, default="chemistry_sampled_500_results.jsonl",
                         help="输出抽样后的 500 题 JSONL 数据集路径")
     parser.add_argument("-oh", "--output-html", type=str, default="chemistry_difficulty_rated_validation_500.html",
                         help="生成的化学可视化 HTML 验收网页保存路径")
-    parser.add_argument("--seed", type=int, default=42, help="随机种子数")
+    parser.add_argument(
+        "--all-results",
+        action="store_true",
+        help="不再二次抽样，按模型最终等级渲染输入中的全部有效结果",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=20260730,
+        help="按档抽样时使用的固定随机种子",
+    )
+    parser.add_argument(
+        "--sample-size",
+        type=int,
+        default=500,
+        help="按模型档位抽样的总题数；--all-results 时忽略",
+    )
 
     args = parser.parse_args()
-
-    # 设置随机数种子，实现结果可复现
-    random.seed(args.seed)
 
     if not os.path.exists(args.input):
         print(f"错误: 找不到打标输入文件 {args.input}！")
@@ -883,8 +962,8 @@ def main():
         print(f"错误: 找不到 V2 图片资源文件 {args.v2_source}！")
         return
 
-    # 1. 载入所有打标数据 (V1 结果)
-    print(f"正在读取 V1 打标数据: {args.input} ...")
+    # 1. 载入所有打标结果。
+    print(f"正在读取化学打标数据: {args.input} ...")
     raw_data = []
     with open(args.input, 'r', encoding='utf-8') as f:
         for line in f:
@@ -905,7 +984,7 @@ def main():
             if line:
                 try:
                     item = json.loads(line)
-                    qid = item.get("question_id")
+                    qid = str(item.get("question_id") or "").strip()
                     if qid:
                         v2_image_index[qid] = {
                             "stem_pic_url": item.get("stem_pic_url", ""),
@@ -915,20 +994,26 @@ def main():
                     continue
     print(f"图片索引建立完成，共索引 {len(v2_image_index)} 道题的图片。")
 
-    # 3. 将 V1 数据映射并对齐图片资源
+    # 3. 将打标数据映射并对齐图片资源。
     aligned_data = []
     missing_pics = 0
     for item in raw_data:
-        qid = item.get("question_id")
+        qid = str(item.get("question_id") or "").strip()
         if qid in v2_image_index:
-            item["stem_pic_url"] = v2_image_index[qid]["stem_pic_url"]
-            item["analysis_pic_url"] = v2_image_index[qid]["analysis_pic_url"]
+            indexed = v2_image_index[qid]
+            if indexed["stem_pic_url"]:
+                item["stem_pic_url"] = indexed["stem_pic_url"]
+            if indexed["analysis_pic_url"]:
+                item["analysis_pic_url"] = indexed["analysis_pic_url"]
         else:
             missing_pics += 1
         aligned_data.append(item)
     
     if missing_pics > 0:
-        print(f"⚠️ 提示: 有 {missing_pics} 道化学题目在 V2 数据集中没有对齐到图片 URL。")
+        print(
+            f"提示: 有 {missing_pics} 道化学题目"
+            "在 V2 数据集中没有对齐到图片 URL。"
+        )
 
     # 4. 按大模型打标难度分组
     grouped_data = defaultdict(list)
@@ -940,37 +1025,90 @@ def main():
         if level in LEVEL_MAP:
             grouped_data[level].append(item)
 
-    # 5. 精准抽样 (500 题)
+    # 5. 精准抽样，或直接保留全部有效结果。
     sampled_data = []
     sampled_for_html = defaultdict(list)
 
-    print("\n================ 抽样计划执行 ================")
-    for level, target_count in SAMPLE_PLAN.items():
-        pool = grouped_data[level]
-        pool_size = len(pool)
-        
-        if pool_size >= target_count:
-            sampled_items = random.sample(pool, target_count)
-            print(f"  🎯 {level}: 池内共有 {pool_size} 道，精准抽样 {target_count} 道")
-        else:
-            sampled_items = pool
-            print(f"  ⚠️ {level}: 不足！池内仅有 {pool_size} 道，全部保留 (计划抽 {target_count} 道)")
-            
-        sampled_data.extend(sampled_items)
-        level_num = LEVEL_MAP[level]
-        sampled_for_html[level_num] = sampled_items
+    if args.all_results:
+        print("\n================ 全量结果渲染 ================")
+        for level in SAMPLE_PLAN:
+            items = grouped_data[level]
+            sampled_data.extend(items)
+            sampled_for_html[LEVEL_MAP[level]] = items
+            print(f"  {level}: {len(items)} 道")
+    else:
+        if len(aligned_data) < args.sample_size:
+            raise ValueError(
+                f"打标结果仅 {len(aligned_data)} 道，"
+                f"无法抽取 {args.sample_size} 道"
+            )
+        rng = random.Random(args.seed)
+        sample_plan = build_sample_plan(args.sample_size)
+        remaining_by_level: Dict[str, List[Dict[str, Any]]] = {}
+        print(
+            "\n================ "
+            f"抽样计划执行（seed={args.seed}） ================"
+        )
+        for level, target_count in sample_plan.items():
+            pool = grouped_data[level]
+            pool_size = len(pool)
+            if pool_size >= target_count:
+                sampled_items = rng.sample(pool, target_count)
+                print(
+                    f"  {level}: 池内共有 {pool_size} 道，"
+                    f"精准抽样 {target_count} 道"
+                )
+            else:
+                sampled_items = list(pool)
+                print(
+                    f"  {level}: 池内仅有 {pool_size} 道，"
+                    f"全部保留（计划 {target_count} 道）"
+                )
+
+            sampled_data.extend(sampled_items)
+            sampled_for_html[LEVEL_MAP[level]] = sampled_items
+            sampled_ids = {id(item) for item in sampled_items}
+            remaining_by_level[level] = [
+                item for item in pool if id(item) not in sampled_ids
+            ]
+
+        missing = args.sample_size - len(sampled_data)
+        if missing:
+            refill_pool = [
+                item
+                for level in SAMPLE_PLAN
+                for item in remaining_by_level[level]
+            ]
+            if len(refill_pool) < missing:
+                raise ValueError(
+                    f"合法五档结果不足，尚缺 {missing} 道，无法补足抽样"
+                )
+            refill = rng.sample(refill_pool, missing)
+            sampled_data.extend(refill)
+            for item in refill:
+                level = item["difficulty_rating"]["difficulty_level"]
+                sampled_for_html[LEVEL_MAP[level]].append(item)
+            print(f"  从其他档剩余题目补足 {missing} 道")
 
     # 6. 导出抽样 JSONL
     print(f"\n正在导出抽样后的 JSONL 副本至: {args.output_jsonl} ...")
+    Path(args.output_jsonl).expanduser().resolve().parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    Path(args.output_html).expanduser().resolve().parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
     with open(args.output_jsonl, 'w', encoding='utf-8') as f:
         for item in sampled_data:
             f.write(json.dumps(item, ensure_ascii=False) + '\n')
-    print(f"👉 成功写入 {len(sampled_data)} 条抽样数据。")
+    print(f"成功写入 {len(sampled_data)} 条抽样数据。")
 
-    # 7. 渲染纯图片 HTML
-    print(f"正在渲染纯图片可视化验收网页至: {args.output_html} ...")
+    # 7. 渲染 HTML。
+    print(f"正在渲染化学可视化验收网页至: {args.output_html} ...")
     generate_html_file(sampled_for_html, args.output_html)
-    print("✨ 纯图片可视化优化网页生成已顺利完成！")
+    print("化学可视化网页生成完成。")
 
 if __name__ == "__main__":
     main()
