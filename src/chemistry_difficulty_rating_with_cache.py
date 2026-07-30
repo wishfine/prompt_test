@@ -105,7 +105,7 @@ CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK = os.getenv(
 }
 CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = os.getenv(
     "CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS",
-    "0",
+    "1",
 ).strip().lower() in {
     "1",
     "true",
@@ -114,7 +114,7 @@ CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = os.getenv(
 }
 CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = os.getenv(
     "CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK",
-    "0",
+    "1",
 ).strip().lower() in {
     "1",
     "true",
@@ -1079,6 +1079,121 @@ def reaction_validation_floor_signal(
         return "每个候选同时核验方程式事实、配平条件和反应类型"
 
     return None
+
+
+def coordinated_multigraph_reaction_signal(
+    features: Dict[str, Any],
+    data: Dict[str, Any],
+) -> bool:
+    """识别同一反应进程中三幅以上关联图像的联合反推。"""
+    text = visible_text(data, include_analysis=False)
+    figure_markers: set[str] = set()
+    for left, right in re.findall(
+        r"([甲乙丙丁戊己])\s*图|图\s*([甲乙丙丁戊己])",
+        text,
+    ):
+        figure_markers.add(left or right)
+    return bool(
+        len(figure_markers) >= 3
+        and re.search(r"同一.{0,8}(?:实验|反应|过程)", text)
+        and re.search(r"随.{0,6}(?:时间|反应).{0,8}变化", text)
+        and features["graph_table_requirement"]
+        == "拐点、平台或分段反推"
+        and features["knowledge_relation"]
+        in {"跨模块融合", "多模块深度融合"}
+        and features["representation_conversion"]
+        in {
+            "两类表征连续转换",
+            "宏观-微观-符号-定量多重转换",
+        }
+        and features["constraint_complexity"]
+        in {"多个相互关联约束", "多层嵌套约束"}
+        and features["evidence_relation"]
+        in {
+            "多条清晰证据联合",
+            "需要排除竞争解释",
+            "证据冲突、筛选或多层排除",
+        }
+    )
+
+
+def cross_module_knowledge_breadth_signal(
+    features: Dict[str, Any],
+    data: Dict[str, Any],
+) -> bool:
+    """识别跨多个生活板块、含大量独立判断的知识归纳题。"""
+    text = visible_text(data, include_analysis=False)
+    numbered_items = re.findall(
+        r"[①②③④⑤⑥⑦⑧⑨⑩]|(?<!\d)[（\(][1-9][）\)]",
+        text,
+    )
+    knowledge_sections = re.findall(
+        r"化学与[\u4e00-\u9fff]{1,8}",
+        text,
+    )
+    return bool(
+        len(numbered_items) >= 8
+        and len(knowledge_sections) >= 3
+        and features["reasoning_depth"] in {"0层", "1层"}
+        and features["knowledge_relation"]
+        in {"跨模块融合", "多模块深度融合"}
+        and features["representation_conversion"] == "无"
+        and features["experiment_requirement"] == "无"
+        and features["graph_table_requirement"] == "无"
+        and features["calculation_model"] == "无"
+        and features["subquestion_dependency"] == "多问相互独立"
+    )
+
+
+def controllable_gas_scheme_signal(
+    features: Dict[str, Any],
+    data: Dict[str, Any],
+) -> bool:
+    """识别可随开随停装置对多组气体制备方案的双约束筛选。"""
+    text = visible_text(data, include_analysis=False)
+    numbered_items = re.findall(
+        r"[①②③④⑤⑥⑦⑧⑨⑩]|(?<!\d)[（\(][1-9][）\)]",
+        text,
+    )
+    return bool(
+        len(numbered_items) >= 4
+        and contains_any(text, ["制备气体", "制取气体"])
+        and re.search(
+            r"控制反应的(?:发生与停止|发生和停止)|"
+            r"随时控制反应|随开随停|启普发生器",
+            text,
+        )
+        and features["constraint_complexity"]
+        in {"多个相互关联约束", "多层嵌套约束"}
+        and features["experiment_requirement"] != "无"
+    )
+
+
+def multi_activity_project_signal(
+    features: Dict[str, Any],
+    data: Dict[str, Any],
+) -> bool:
+    """识别至少两项活动、三项实验构成的项目式探究链。"""
+    text = visible_text(data, include_analysis=False)
+    activity_markers = set(
+        re.findall(r"活动\s*[一二三四五六123456]", text)
+    )
+    experiment_markers = set(
+        re.findall(r"实验\s*[一二三四五六123456]", text)
+    )
+    return bool(
+        contains_any(text, ["项目式学习", "项目学习"])
+        and len(activity_markers) >= 2
+        and len(experiment_markers) >= 3
+        and features["constraint_complexity"]
+        in {"多个相互关联约束", "多层嵌套约束"}
+        and features["experiment_requirement"]
+        in {
+            "控制变量、现象解释或数据归纳",
+            "方案设计、评价或补充实验",
+            "多阶段探究与定量误差",
+        }
+    )
 
 
 def dense_project_experiment_signal(
@@ -2374,9 +2489,9 @@ def add_feature_audit_flags(
 def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
     """化学后处理校准与审计主流程。
 
-    默认只记录候选动作，不写回难度等级。通用历史规则只在显式设置
-    CHEMISTRY_ENABLE_LEVEL_WRITEBACK=1时写回；教师分布校准及严重低估
-    安全底线使用独立开关，便于先做 A/B 再决定生产写回。
+    chemistry_stable 默认启用教师分布结构校准并写回最终等级；做 A/B
+    消融时可显式关闭 CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK。
+    通用历史规则仍只在 CHEMISTRY_ENABLE_LEVEL_WRITEBACK=1 时写回。
     """
     if not rating_result:
         return rating_result
@@ -2390,7 +2505,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["postprocess_trace"] = []
     rating_result["postprocess_actions"] = []
     rating_result["postprocess_profile"] = (
-        "chemistry_core12_teacher_distribution_v2_severe_floor_audit_first"
+        "chemistry_core12_teacher_distribution_v3_severe_zero_production"
     )
     rating_result["postprocess_writeback_enabled"] = (
         CHEMISTRY_ENABLE_LEVEL_WRITEBACK
@@ -2587,7 +2702,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     # 教师分布校准只使用可复核的结构特征，并且每题最多提出一次调整。
     # 常规动作只移动一个相邻档；唯一的两档托底是“送分→中等”的多选项
     # 连续反应核验，它依赖题干中的多个反应箭头和条件核验，不依赖模型
-    # 自报 depth。规则不按题库配额切档，默认仅产出候选以便做 A/B。
+    # 自报 depth。规则不按题库配额切档；生产默认写回，A/B 时可关闭。
     teacher_guard_active = bool(
         CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS
         or CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
@@ -2645,6 +2760,36 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             )
         elif (
             raw_level == "基础题"
+            and controllable_gas_scheme_signal(features, data)
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "中等题",
+                "严重低估安全底线：可控气体发生装置需对多组方案进行双约束筛选",
+                rule="teacher_basic_to_medium_controllable_gas_scheme_floor",
+                evidence=[
+                    "题面同时出现可随开随停装置和四组以上制气方案",
+                    f"约束复杂度={features['constraint_complexity']}",
+                    f"实验要求={features['experiment_requirement']}",
+                ],
+            )
+        elif (
+            raw_level == "基础题"
+            and cross_module_knowledge_breadth_signal(features, data)
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "中等题",
+                "严重低估安全底线：跨多个生活板块的大量独立判断形成真实任务广度",
+                rule="teacher_basic_to_medium_cross_module_breadth_floor",
+                evidence=[
+                    "题面包含三个以上知识板块和八项以上独立判断",
+                    f"知识关系={features['knowledge_relation']}",
+                    f"小问关系={features['subquestion_dependency']}",
+                ],
+            )
+        elif (
+            raw_level == "基础题"
             and depth >= 1
             and features["constraint_complexity"]
             == "多个相互关联约束"
@@ -2665,6 +2810,22 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             )
         elif (
             raw_level == "中等题"
+            and coordinated_multigraph_reaction_signal(features, data)
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "拔高题",
+                "严重低估安全底线：三幅以上关联图像共同描述同一反应进程",
+                rule="teacher_medium_to_hard_coordinated_multigraph_floor",
+                evidence=[
+                    f"图表要求={features['graph_table_requirement']}",
+                    f"表征转换={features['representation_conversion']}",
+                    f"约束复杂度={features['constraint_complexity']}",
+                    f"证据关系={features['evidence_relation']}",
+                ],
+            )
+        elif (
+            raw_level == "中等题"
             and depth >= 2
             and dense_project_experiment_signal(features, data)
         ):
@@ -2678,6 +2839,21 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                     f"实验要求={features['experiment_requirement']}",
                     f"约束复杂度={features['constraint_complexity']}",
                     f"证据关系={features['evidence_relation']}",
+                ],
+            )
+        elif (
+            raw_level == "中等题"
+            and multi_activity_project_signal(features, data)
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "拔高题",
+                "严重低估安全底线：多活动、多实验共同形成变量与证据项目链",
+                rule="teacher_medium_to_hard_multi_activity_project_floor",
+                evidence=[
+                    "题面包含至少两项活动和三项实验",
+                    f"实验要求={features['experiment_requirement']}",
+                    f"约束复杂度={features['constraint_complexity']}",
                 ],
             )
         elif (

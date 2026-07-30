@@ -120,6 +120,12 @@ class ChemistryRuntimeTests(unittest.TestCase):
             self.old_teacher_distribution_guard_writeback
         )
 
+    def test_stable_profile_defaults_teacher_guard_writeback_on(
+        self,
+    ) -> None:
+        self.assertTrue(self.old_teacher_distribution_guard)
+        self.assertTrue(self.old_teacher_distribution_guard_writeback)
+
     def test_lite_temperature_matches_physics_runtime(self) -> None:
         self.assertEqual(
             chemistry.resolve_temperature("doubao-seed-2.0-lite", "0"),
@@ -1162,6 +1168,314 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "teacher_medium_to_hard_dense_project_floor",
         )
 
+    def test_teacher_guard_promotes_coordinated_multigraph_reaction_floor(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("中等题")
+        rating["features"].update(
+            {
+                "reasoning_depth": "2-3层",
+                "knowledge_relation": "跨模块融合",
+                "representation_conversion": "两类表征连续转换",
+                "reaction_relation": "单一直接反应",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "多条清晰证据联合",
+                "experiment_requirement": "无",
+                "graph_table_requirement": "拐点、平台或分段反推",
+                "calculation_model": "无",
+                "subquestion_dependency": "无多问",
+            }
+        )
+        data = {
+            "stem": (
+                "在同一密闭反应实验中，甲图为实验装置，"
+                "乙图至丁图分别表示相同时间内固体质量、"
+                "气体分子数和质量分数随反应时间的变化，"
+                "结合各图中的a、b、c、d点判断说法。"
+            ),
+            "options": "A. 说法一\nB. 说法二\nC. 说法三\nD. 说法四",
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "拔高题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_medium_to_hard_coordinated_multigraph_floor",
+        )
+
+    def test_teacher_guard_keeps_single_graph_reaction_as_medium(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("中等题")
+        rating["features"].update(
+            {
+                "reasoning_depth": "2-3层",
+                "knowledge_relation": "跨模块融合",
+                "representation_conversion": "两类表征连续转换",
+                "reaction_relation": "单一直接反应",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "多条清晰证据联合",
+                "experiment_requirement": "无",
+                "graph_table_requirement": "拐点、平台或分段反推",
+                "calculation_model": "无",
+                "subquestion_dependency": "无多问",
+            }
+        )
+        data = {
+            "stem": "根据图甲的一条反应曲线判断各阶段物质质量。",
+            "options": "A. 说法一\nB. 说法二\nC. 说法三\nD. 说法四",
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "中等题",
+        )
+        self.assertIsNone(
+            result["teacher_distribution_guard_candidate_action"],
+        )
+
+    def test_teacher_guard_promotes_cross_module_knowledge_breadth_floor(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("基础题")
+        rating["features"].update(
+            {
+                "reasoning_depth": "0层",
+                "reasoning_direction": "直接识记",
+                "knowledge_relation": "跨模块融合",
+                "representation_conversion": "无",
+                "reaction_relation": "无反应关系",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "无证据任务",
+                "experiment_requirement": "无",
+                "graph_table_requirement": "无",
+                "calculation_model": "无",
+                "subquestion_dependency": "多问相互独立",
+            }
+        )
+        data = {
+            "stem": (
+                "下列知识归纳都正确的一项是："
+                "A. 化学与能源 ①判断一 ②判断二 ③判断三；"
+                "B. 化学与安全 ①判断一 ②判断二 ③判断三；"
+                "C. 化学与生活 ①判断一 ②判断二 ③判断三；"
+                "D. 化学与健康 ①判断一 ②判断二 ③判断三。"
+            ),
+            "options": "A. A\nB. B\nC. C\nD. D",
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "中等题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_basic_to_medium_cross_module_breadth_floor",
+        )
+
+    def test_teacher_guard_keeps_small_parallel_knowledge_set_as_basic(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("基础题")
+        rating["features"].update(
+            {
+                "reasoning_depth": "0层",
+                "reasoning_direction": "直接识记",
+                "knowledge_relation": "跨模块融合",
+                "representation_conversion": "无",
+                "reaction_relation": "无反应关系",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "无证据任务",
+                "experiment_requirement": "无",
+                "graph_table_requirement": "无",
+                "calculation_model": "无",
+                "subquestion_dependency": "多问相互独立",
+            }
+        )
+        data = {
+            "stem": (
+                "判断四条生活常识："
+                "A. 化学与能源；B. 化学与安全；"
+                "C. 化学与生活；D. 化学与健康。"
+            ),
+            "options": "A. A\nB. B\nC. C\nD. D",
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "基础题",
+        )
+        self.assertIsNone(
+            result["teacher_distribution_guard_candidate_action"],
+        )
+
+    def test_teacher_guard_promotes_controllable_gas_scheme_floor(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("基础题")
+        rating["features"].update(
+            {
+                "reasoning_depth": "1层",
+                "knowledge_relation": "同模块简单关联",
+                "representation_conversion": "无",
+                "reaction_relation": "无反应关系",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "单一证据直接对应",
+                "experiment_requirement": "基础操作或读数",
+                "graph_table_requirement": "直接读数",
+                "calculation_model": "无",
+                "subquestion_dependency": "无多问",
+            }
+        )
+        data = {
+            "stem": (
+                "用如图装置制备气体，并随时控制反应的发生与停止。"
+                "判断下列五组试剂是否合适："
+                "①锌片和稀盐酸；②高锰酸钾；③块状石灰石和稀盐酸；"
+                "④氯酸钾和二氧化锰；⑤粉末和溶液。"
+            ),
+            "options": "A. ①③\nB. ②④\nC. ①④\nD. ③⑤",
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "中等题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_basic_to_medium_controllable_gas_scheme_floor",
+        )
+
+    def test_teacher_guard_keeps_single_gas_preparation_as_basic(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("基础题")
+        rating["features"].update(
+            {
+                "reasoning_depth": "1层",
+                "knowledge_relation": "同模块简单关联",
+                "representation_conversion": "无",
+                "reaction_relation": "无反应关系",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "单一证据直接对应",
+                "experiment_requirement": "基础操作或读数",
+                "graph_table_requirement": "直接读数",
+                "calculation_model": "无",
+                "subquestion_dependency": "无多问",
+            }
+        )
+        data = {
+            "stem": "实验室用锌片和稀盐酸制取氢气，应选择哪套装置？",
+            "options": "A. 甲\nB. 乙\nC. 丙\nD. 丁",
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "基础题",
+        )
+        self.assertIsNone(
+            result["teacher_distribution_guard_candidate_action"],
+        )
+
+    def test_teacher_guard_promotes_multi_activity_project_floor(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("中等题")
+        rating["features"].update(
+            {
+                "reasoning_depth": "1层",
+                "knowledge_relation": "同模块简单关联",
+                "representation_conversion": "无",
+                "reaction_relation": "无反应关系",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "单一证据直接对应",
+                "experiment_requirement": "控制变量、现象解释或数据归纳",
+                "graph_table_requirement": "多组比较归纳",
+                "calculation_model": "无",
+                "subquestion_dependency": "多问相互独立",
+            }
+        )
+        data = {
+            "stem": (
+                "开展项目式学习。【活动一】实验1制取指示剂，"
+                "实验2记录不同pH下的颜色；【活动二】实验3研究"
+                "影响彩虹管效果的变量，并根据多组数据补充对照实验。"
+            ),
+            "options": "",
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "拔高题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_medium_to_hard_multi_activity_project_floor",
+        )
+
+    def test_teacher_guard_keeps_two_step_standard_experiment_as_medium(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("中等题")
+        rating["features"].update(
+            {
+                "reasoning_depth": "1层",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "单一证据直接对应",
+                "experiment_requirement": "控制变量、现象解释或数据归纳",
+                "graph_table_requirement": "多组比较归纳",
+            }
+        )
+        data = {
+            "stem": (
+                "实验1记录溶液颜色，实验2改变一个变量并比较现象，"
+                "根据结果得出结论。"
+            ),
+            "options": "",
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "中等题",
+        )
+        self.assertIsNone(
+            result["teacher_distribution_guard_candidate_action"],
+        )
+
     def test_teacher_guard_audits_complex_model_hard_as_final(
         self,
     ) -> None:
@@ -1424,7 +1738,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             result["postprocess_profile"],
-            "chemistry_core12_teacher_distribution_v2_severe_floor_audit_first",
+            "chemistry_core12_teacher_distribution_v3_severe_zero_production",
         )
 
     def test_prompt_example_is_valid_and_uses_core12_enums(self) -> None:
