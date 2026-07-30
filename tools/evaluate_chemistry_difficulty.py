@@ -38,6 +38,7 @@ def parse_args() -> argparse.Namespace:
             "pre-postprocess",
             "postprocess-candidate",
             "final-boundary-guard-candidate",
+            "teacher-distribution-guard-candidate",
         ],
         default="final",
     )
@@ -113,6 +114,10 @@ def extract_prediction(
             level_name = rating.get(
                 "final_boundary_guard_candidate_level"
             )
+        elif level_source == "teacher-distribution-guard-candidate":
+            level_name = rating.get(
+                "teacher_distribution_guard_candidate_level"
+            )
         level_name = level_name or rating.get("difficulty_level")
     if level_name is None:
         level_name = item.get("difficulty_level")
@@ -159,6 +164,9 @@ def load_predictions(
             "final_boundary_guard_candidate_level": rating.get(
                 "final_boundary_guard_candidate_level"
             ),
+            "teacher_distribution_guard_candidate_level": rating.get(
+                "teacher_distribution_guard_candidate_level"
+            ),
             "postprocess_trace": rating.get("postprocess_trace", []),
             "postprocess_candidate_actions": rating.get(
                 "postprocess_candidate_actions",
@@ -178,6 +186,8 @@ def validate_prediction_run_consistency(
         "general_level_writeback_enabled": set(),
         "final_boundary_guard_enabled": set(),
         "final_boundary_guard_writeback_enabled": set(),
+        "teacher_distribution_guard_enabled": set(),
+        "teacher_distribution_guard_writeback_enabled": set(),
     }
     row_count = 0
     for line_number, item in jsonl_items(path):
@@ -345,6 +355,12 @@ def evaluate_predictions(
                         "postprocess_candidate_level"
                     )
                     or "",
+                    "teacher_distribution_guard_candidate_level": (
+                        prediction.get(
+                            "teacher_distribution_guard_candidate_level"
+                        )
+                        or ""
+                    ),
                     "postprocess_trace": json.dumps(
                         prediction.get("postprocess_trace", []),
                         ensure_ascii=False,
@@ -495,6 +511,7 @@ def write_csv(
         "stem",
         "postprocess_original_level",
         "postprocess_candidate_level",
+        "teacher_distribution_guard_candidate_level",
         "postprocess_trace",
         "postprocess_candidate_actions",
         "rating_error",

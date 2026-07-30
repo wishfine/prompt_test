@@ -74,6 +74,7 @@ class ChemistryEvaluationTests(unittest.TestCase):
                 "postprocess_original_level": "拔高题",
                 "postprocess_candidate_level": "压轴题",
                 "final_boundary_guard_candidate_level": "压轴题",
+                "teacher_distribution_guard_candidate_level": "中等题",
             },
         }
 
@@ -84,6 +85,14 @@ class ChemistryEvaluationTests(unittest.TestCase):
 
         self.assertEqual(level_name, "压轴题")
         self.assertEqual(level_number, 5)
+
+        level_name, level_number = evaluation.extract_prediction(
+            item,
+            "teacher-distribution-guard-candidate",
+        )
+
+        self.assertEqual(level_name, "中等题")
+        self.assertEqual(level_number, 3)
 
         level_name, level_number = evaluation.extract_prediction(
             item,

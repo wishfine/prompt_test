@@ -101,6 +101,35 @@ CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK = os.getenv(
     "yes",
     "on",
 }
+CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = os.getenv(
+    "CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS",
+    "0",
+).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = os.getenv(
+    "CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK",
+    "0",
+).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+if (
+    CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
+    and (
+        CHEMISTRY_ENABLE_LEVEL_WRITEBACK
+        or CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK
+    )
+):
+    raise ValueError(
+        "教师分布窄校准写回不能与通用写回或压轴边界写回同时开启；"
+        "请只选择一种写回策略"
+    )
 CHEMISTRY_IMAGE_MODE = os.getenv(
     "CHEMISTRY_IMAGE_MODE",
     "auto",
@@ -237,6 +266,12 @@ def build_run_config(
         ),
         "final_boundary_guard_writeback_enabled": (
             CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK
+        ),
+        "teacher_distribution_guards_enabled": (
+            CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS
+        ),
+        "teacher_distribution_guards_writeback_enabled": (
+            CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
         ),
     }
 
@@ -2113,11 +2148,12 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["postprocess_trace"] = []
     rating_result["postprocess_actions"] = []
     rating_result["postprocess_profile"] = (
-        "chemistry_core12_final_anchor_v2_audit_first"
+        "chemistry_core12_teacher_distribution_v1_audit_first"
     )
     rating_result["postprocess_writeback_enabled"] = (
         CHEMISTRY_ENABLE_LEVEL_WRITEBACK
         or CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK
+        or CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
     )
     rating_result["general_level_writeback_enabled"] = (
         CHEMISTRY_ENABLE_LEVEL_WRITEBACK
@@ -2127,6 +2163,12 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     )
     rating_result["final_boundary_guard_writeback_enabled"] = (
         CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK
+    )
+    rating_result["teacher_distribution_guard_enabled"] = (
+        CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS
+    )
+    rating_result["teacher_distribution_guard_writeback_enabled"] = (
+        CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
     )
     rating_result["feature_schema_version"] = "chemistry_core12_strict_v1"
     rating_result["schema_validation_passed"] = True
@@ -2139,6 +2181,27 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     final_evidence = core12_final_evidence(features)
     depth = CORE12_DEPTH_ORDER[features["reasoning_depth"]]
     candidate_result = copy.deepcopy(rating_result)
+    existing_final_guard_signal = bool(
+        depth >= 3
+        and len(final_evidence) >= 4
+        and (
+            features["subquestion_dependency"]
+            == "多问存在结果或任务链依赖"
+            or (
+                features["reaction_relation"]
+                in {
+                    "多反应连续转化",
+                    "先后、竞争或过量不足",
+                    "需要分情况判断的反应模型",
+                }
+                and features["calculation_model"]
+                in {
+                    "单一守恒或多反应计算",
+                    "多重守恒、差量、联立或分类",
+                }
+            )
+        )
+    )
 
     if raw_level == "送分题":
         # 教师591题实跑中，旧规则把“单一约束”和“单一证据直接对应”
@@ -2203,24 +2266,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                     and depth >= 3
                 )
             )
-            and len(final_evidence) >= 4
-            and (
-                features["subquestion_dependency"]
-                == "多问存在结果或任务链依赖"
-                or (
-                    features["reaction_relation"]
-                    in {
-                        "多反应连续转化",
-                        "先后、竞争或过量不足",
-                        "需要分情况判断的反应模型",
-                    }
-                    and features["calculation_model"]
-                    in {
-                        "单一守恒或多反应计算",
-                        "多重守恒、差量、联立或分类",
-                    }
-                )
-            )
+            and existing_final_guard_signal
         ):
             set_level_with_reason(
                 candidate_result,
@@ -2270,6 +2316,129 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         if final_boundary_guard_action
         else raw_level
     )
+
+    # 教师分布校准只使用可复核的结构特征，并且每题最多提出一次相邻档
+    # 调整。它不按题库配额切档，默认仅产出独立候选，便于与原始结果
+    # 做A/B；只有专用写回开关开启时才改变最终等级。
+    teacher_guard_active = bool(
+        CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS
+        or CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
+    )
+    teacher_candidate_result = copy.deepcopy(rating_result)
+    if teacher_guard_active:
+        if (
+            raw_level == "送分题"
+            and features["experiment_requirement"] == "基础操作或读数"
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "基础题",
+                "结构边界窄校准：基础实验操作或读数属于规则应用，不是纯直接检索",
+                rule="teacher_easy_to_basic_experiment_application",
+                evidence=[
+                    f"实验要求={features['experiment_requirement']}",
+                ],
+            )
+        elif (
+            raw_level == "基础题"
+            and depth >= 1
+            and features["constraint_complexity"]
+            == "多个相互关联约束"
+            and features["knowledge_relation"] != "单一知识点"
+            and features["representation_conversion"] != "无"
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "中等题",
+                "结构边界窄校准：关联约束、知识关系与表征转换共同形成完整常规模型",
+                rule="teacher_basic_to_medium_linked_application",
+                evidence=[
+                    f"推理深度={features['reasoning_depth']}",
+                    f"约束复杂度={features['constraint_complexity']}",
+                    f"知识关系={features['knowledge_relation']}",
+                    f"表征转换={features['representation_conversion']}",
+                ],
+            )
+        elif (
+            raw_level == "中等题"
+            and depth >= 2
+            and (
+                features["graph_table_requirement"]
+                == "拐点、平台或分段反推"
+                or features["unfamiliar_information_transfer"]
+                == "给定新信息直接应用"
+                or (
+                    features["subquestion_dependency"]
+                    == "多问共享模型但无答案依赖"
+                    and features["knowledge_relation"]
+                    in {
+                        "同模块深度关联",
+                        "跨模块融合",
+                        "多模块深度融合",
+                    }
+                )
+            )
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "拔高题",
+                "结构边界窄校准：常规深度中出现分段反推、新信息迁移或共享深层模型",
+                rule="teacher_medium_to_hard_structural_breadth",
+                evidence=[
+                    f"推理深度={features['reasoning_depth']}",
+                    f"图表要求={features['graph_table_requirement']}",
+                    "陌生信息迁移="
+                    + features["unfamiliar_information_transfer"],
+                    f"小问关系={features['subquestion_dependency']}",
+                    f"知识关系={features['knowledge_relation']}",
+                ],
+            )
+        elif raw_level == "拔高题" and existing_final_guard_signal:
+            set_level_with_reason(
+                teacher_candidate_result,
+                "压轴题",
+                "结构边界窄校准：4—5层以上主链中至少四项压轴证据形成任务耦合",
+                rule="core12_hard_to_final_4_5_coupled_guard",
+                evidence=final_evidence[:6],
+            )
+        elif (
+            raw_level == "拔高题"
+            and depth >= 3
+            and len(final_evidence) >= 3
+            and (
+                features["calculation_model"]
+                == "多重守恒、差量、联立或分类"
+                or features["representation_conversion"]
+                == "宏观-微观-符号-定量多重转换"
+            )
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "压轴题",
+                "结构边界窄校准：4—5层复杂主模型由多重定量或四重表征转换闭合",
+                rule="teacher_hard_to_final_complex_model",
+                evidence=[
+                    f"推理深度={features['reasoning_depth']}",
+                    *final_evidence[:6],
+                ],
+            )
+
+    teacher_candidate_actions = copy.deepcopy(
+        teacher_candidate_result.get("postprocess_trace", [])
+    )
+    if len(teacher_candidate_actions) > 1:
+        raise RuntimeError("教师分布窄校准违反单次相邻调整约束")
+    teacher_guard_action = (
+        teacher_candidate_actions[0]
+        if teacher_candidate_actions
+        else None
+    )
+    teacher_guard_candidate_level = (
+        teacher_candidate_result.get("difficulty_level", raw_level)
+        if teacher_guard_action
+        else raw_level
+    )
+
     rating_result["postprocess_candidate_actions"] = candidate_actions
     rating_result["postprocess_candidate_level"] = candidate_result.get(
         "difficulty_level",
@@ -2282,11 +2451,21 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK
         and final_boundary_guard_action
     )
+    teacher_guard_writeback_applied = bool(
+        CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
+        and teacher_guard_action
+    )
     writeback_applied = bool(
-        general_writeback_applied or final_guard_writeback_applied
+        general_writeback_applied
+        or final_guard_writeback_applied
+        or teacher_guard_writeback_applied
     )
     if writeback_applied:
-        rating_result = candidate_result
+        rating_result = (
+            teacher_candidate_result
+            if teacher_guard_writeback_applied
+            else candidate_result
+        )
         rating_result["postprocess_writeback_enabled"] = True
         rating_result["postprocess_candidate_actions"] = (
             candidate_actions
@@ -2310,6 +2489,17 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["final_boundary_guard_writeback_applied"] = (
         final_guard_writeback_applied
     )
+    rating_result["teacher_distribution_guard_candidate_level"] = (
+        teacher_guard_candidate_level
+    )
+    rating_result["teacher_distribution_guard_candidate_action"] = (
+        copy.deepcopy(teacher_guard_action)
+        if teacher_guard_action
+        else None
+    )
+    rating_result["teacher_distribution_guard_writeback_applied"] = (
+        teacher_guard_writeback_applied
+    )
     sync_reasoning_after_postprocess(rating_result)
     rating_result["postprocess_actions"] = copy.deepcopy(
         rating_result.get("postprocess_trace", [])
@@ -2330,6 +2520,11 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         rating_result["feature_audit_flags"].append(
             "存在相邻档候选校准，但自动写回默认关闭；"
             "仅记录postprocess_candidate_actions"
+        )
+    if teacher_guard_action and not teacher_guard_writeback_applied:
+        rating_result["feature_audit_flags"].append(
+            "存在结构边界窄校准候选，但专用写回默认关闭；"
+            "仅记录teacher_distribution_guard_candidate_action"
         )
     return rating_result
 

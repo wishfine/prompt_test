@@ -84,9 +84,23 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK",
             False,
         )
+        self.old_teacher_distribution_guard = getattr(
+            chemistry,
+            "CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS",
+            False,
+        )
+        self.old_teacher_distribution_guard_writeback = getattr(
+            chemistry,
+            "CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK",
+            False,
+        )
         chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = True
         chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD = False
         chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = (
+            False
+        )
 
     def tearDown(self) -> None:
         chemistry.CHEMISTRY_IMAGE_MODE = self.old_image_mode
@@ -98,6 +112,12 @@ class ChemistryRuntimeTests(unittest.TestCase):
         )
         chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK = (
             self.old_final_boundary_guard_writeback
+        )
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = (
+            self.old_teacher_distribution_guard
+        )
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = (
+            self.old_teacher_distribution_guard_writeback
         )
 
     def test_lite_temperature_matches_physics_runtime(self) -> None:
@@ -134,6 +154,35 @@ class ChemistryRuntimeTests(unittest.TestCase):
             chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK = (
                 True
             )
+            config_on = chemistry.build_run_config(
+                input_path,
+                prompt_path,
+                seed=42,
+                num=None,
+            )
+
+        self.assertNotEqual(
+            chemistry.build_run_signature(config_off),
+            chemistry.build_run_signature(config_on),
+        )
+
+    def test_run_signature_changes_with_teacher_distribution_guard(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            input_path = root / "input.jsonl"
+            prompt_path = root / "prompt.txt"
+            input_path.write_text('{"question_id":"q1"}\n', encoding="utf-8")
+            prompt_path.write_text("prompt", encoding="utf-8")
+            chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = False
+            config_off = chemistry.build_run_config(
+                input_path,
+                prompt_path,
+                seed=42,
+                num=None,
+            )
+            chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
             config_on = chemistry.build_run_config(
                 input_path,
                 prompt_path,
@@ -808,6 +857,161 @@ class ChemistryRuntimeTests(unittest.TestCase):
         )
         self.assertFalse(result["automatic_level_change_applied"])
 
+    def test_teacher_guard_audits_easy_with_basic_experiment_as_basic(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("送分题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["features"]["experiment_requirement"] = "基础操作或读数"
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+
+        self.assertEqual(result["difficulty_level"], "送分题")
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "基础题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_easy_to_basic_experiment_application",
+        )
+
+    def test_teacher_guard_audits_linked_basic_as_medium(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("基础题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["features"].update(
+            {
+                "reasoning_depth": "1层",
+                "knowledge_relation": "同模块简单关联",
+                "representation_conversion": "一次表征转换",
+                "constraint_complexity": "多个相互关联约束",
+            }
+        )
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "中等题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_basic_to_medium_linked_application",
+        )
+
+    def test_teacher_guard_audits_segment_graph_medium_as_hard(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("中等题")
+        rating["features"]["graph_table_requirement"] = (
+            "拐点、平台或分段反推"
+        )
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "拔高题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_medium_to_hard_structural_breadth",
+        )
+
+    def test_teacher_guard_audits_complex_model_hard_as_final(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("拔高题")
+        rating["features"].update(
+            {
+                "reasoning_depth": "4-5层",
+                "reasoning_direction": "分类讨论或综合推导",
+                "knowledge_relation": "跨模块融合",
+                "representation_conversion": "宏观-微观-符号-定量多重转换",
+                "reaction_relation": "2-3个并列或简单连续反应",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "多条清晰证据联合",
+                "experiment_requirement": "无",
+                "graph_table_requirement": "无",
+                "calculation_model": "多重守恒、差量、联立或分类",
+                "unfamiliar_information_transfer": "课内直接原型",
+                "subquestion_dependency": "无多问",
+            }
+        )
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "压轴题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_hard_to_final_complex_model",
+        )
+
+    def test_teacher_guard_writeback_is_independent_and_adjacent(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = (
+            True
+        )
+        rating = valid_rating("中等题")
+        rating["features"]["unfamiliar_information_transfer"] = (
+            "给定新信息直接应用"
+        )
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertTrue(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+        self.assertEqual(len(result["postprocess_actions"]), 1)
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "teacher_medium_to_hard_structural_breadth",
+        )
+
+    def test_teacher_guard_does_not_promote_weak_level_only_signal(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("中等题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["features"].update(
+            {
+                "reasoning_depth": "2-3层",
+                "reasoning_direction": "正向推导",
+            }
+        )
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "中等题",
+        )
+        self.assertIsNone(
+            result["teacher_distribution_guard_candidate_action"]
+        )
+
     def test_d4_5_independent_high_signals_do_not_force_final(self) -> None:
         rating = valid_rating("拔高题")
         rating["features"].update(
@@ -859,7 +1063,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             result["postprocess_profile"],
-            "chemistry_core12_final_anchor_v2_audit_first",
+            "chemistry_core12_teacher_distribution_v1_audit_first",
         )
 
     def test_prompt_example_is_valid_and_uses_core12_enums(self) -> None:
@@ -898,6 +1102,20 @@ class ChemistryRuntimeTests(unittest.TestCase):
             prefix,
         )
         self.assertIn("用纵向深度 D 确定基准档", prefix)
+        self.assertIn(
+            "独立任务不增加纵向深度D，但会增加整题任务广度B",
+            prefix,
+        )
+        self.assertIn(
+            "中等题进入拔高比较的结构广度通道",
+            prefix,
+        )
+        self.assertNotIn(
+            "多个独立选项分别一步判断、同一规则重复填空、"
+            "只共享生活背景或图片、装置中直接填写名称和现象"
+            "但没有连续依赖，均不能据此升中等。",
+            prefix,
+        )
         self.assertIn(
             "先由 D 确定基准档，再由 B/W 做至多一个相邻档校准",
             prefix,
