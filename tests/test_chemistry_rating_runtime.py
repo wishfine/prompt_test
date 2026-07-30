@@ -68,9 +68,18 @@ def valid_rating(level: str = "中等题") -> dict:
 class ChemistryRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.old_image_mode = chemistry.CHEMISTRY_IMAGE_MODE
+        self.old_writeback = getattr(
+            chemistry,
+            "CHEMISTRY_ENABLE_LEVEL_WRITEBACK",
+            False,
+        )
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = True
 
     def tearDown(self) -> None:
         chemistry.CHEMISTRY_IMAGE_MODE = self.old_image_mode
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = (
+            self.old_writeback
+        )
 
     def test_lite_temperature_matches_physics_runtime(self) -> None:
         self.assertEqual(
@@ -265,6 +274,94 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(
             result["postprocess_actions"][0]["rule"],
             "core12_basic_to_medium_complete_model",
+        )
+
+    def test_disabled_writeback_keeps_raw_level_and_audits_candidate(
+        self,
+    ) -> None:
+        old_value = getattr(
+            chemistry,
+            "CHEMISTRY_ENABLE_LEVEL_WRITEBACK",
+            None,
+        )
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        try:
+            rating = valid_rating("基础题")
+            rating["features"] = copy.deepcopy(
+                chemistry.FEATURE_DEFAULTS
+            )
+            rating["features"].update(
+                {
+                    "reasoning_depth": "2-3层",
+                    "reasoning_direction": "正向推导",
+                    "reaction_relation": "单一直接反应",
+                    "constraint_complexity": "单一约束",
+                    "calculation_model": "单一方程式或关系式",
+                }
+            )
+            result = chemistry.postprocess_chemistry_difficulty(
+                rating,
+                {},
+            )
+        finally:
+            if old_value is None:
+                del chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK
+            else:
+                chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = old_value
+
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(result["postprocess_actions"], [])
+        self.assertFalse(result["postprocess_writeback_enabled"])
+        self.assertEqual(
+            result["postprocess_candidate_actions"][0]["rule"],
+            "core12_basic_to_medium_complete_model",
+        )
+
+    def test_disabled_writeback_preserves_model_coarse_interval(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        rating = valid_rating("基础题")
+        rating["coarse_difficulty"] = "基础/中等区间（2-3档）"
+
+        result = chemistry.postprocess_chemistry_difficulty(
+            rating,
+            {},
+        )
+
+        self.assertEqual(
+            result["coarse_difficulty"],
+            "基础/中等区间（2-3档）",
+        )
+        self.assertEqual(
+            result["coarse_difficulty_raw"],
+            "基础/中等区间（2-3档）",
+        )
+        self.assertEqual(
+            result["coarse_difficulty_final"],
+            "基础/中等区间（2-3档）",
+        )
+
+    def test_enabled_writeback_syncs_final_coarse_interval(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = True
+        rating = valid_rating("基础题")
+        rating["coarse_difficulty"] = "送分/基础区间（1-2档）"
+
+        result = chemistry.postprocess_chemistry_difficulty(
+            rating,
+            {},
+        )
+
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(
+            result["coarse_difficulty_raw"],
+            "送分/基础区间（1-2档）",
+        )
+        self.assertEqual(
+            result["coarse_difficulty_final"],
+            "基础/中等区间（2-3档）",
         )
 
     def test_high_structure_basic_uses_complete_model_guard(
@@ -530,14 +627,16 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "中等题")
         self.assertEqual(result["postprocess_actions"], [])
 
-    def test_stable_profile_uses_proven_boundaryfix_rules(self) -> None:
+    def test_stable_profile_records_boundary_v3_audit_mode(
+        self,
+    ) -> None:
         result = chemistry.postprocess_chemistry_difficulty(
             valid_rating("中等题"),
             {},
         )
         self.assertEqual(
             result["postprocess_profile"],
-            "chemistry_core12_teacher_boundary_v2",
+            "chemistry_core12_boundary_v3_audit_first",
         )
 
     def test_prompt_example_is_valid_and_uses_core12_enums(self) -> None:
@@ -586,6 +685,27 @@ class ChemistryRuntimeTests(unittest.TestCase):
         )
         self.assertIn(
             "`core_basis`必须说明D、B、W和至少一条真实任务边",
+            prefix,
+        )
+        self.assertIn("不同规则并不自动升档", prefix)
+        self.assertIn("至少一个实质应用动作", prefix)
+        self.assertIn("受控广度通道必须同时满足", prefix)
+        self.assertIn("高密度共享模型通道必须同时满足", prefix)
+        self.assertIn(
+            "当高密度共享模型通道全部满足时，应判为拔高题",
+            prefix,
+        )
+        self.assertIn(
+            "4—5层复杂主模型通道必须同时满足",
+            prefix,
+        )
+        self.assertIn("至少两个强支撑结构", prefix)
+        self.assertIn(
+            "当4—5层复杂主模型通道的全部条件均满足时，应判为压轴题",
+            prefix,
+        )
+        self.assertNotIn(
+            "多个选项分别涉及不同教材结论，至少进入基础题",
             prefix,
         )
         self.assertNotIn("异质事实核验只建立基础题下限", prefix)

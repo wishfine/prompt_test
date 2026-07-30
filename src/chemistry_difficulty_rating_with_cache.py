@@ -74,6 +74,15 @@ USE_CACHE = os.getenv("USE_CACHE", "1").strip().lower() not in {
     "no",
     "off",
 }
+CHEMISTRY_ENABLE_LEVEL_WRITEBACK = os.getenv(
+    "CHEMISTRY_ENABLE_LEVEL_WRITEBACK",
+    "0",
+).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 CHEMISTRY_IMAGE_MODE = os.getenv(
     "CHEMISTRY_IMAGE_MODE",
     "auto",
@@ -1984,10 +1993,11 @@ def add_feature_audit_flags(
 
 
 def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
-    """化学后处理自动纠偏主流程。
+    """化学后处理校准与审计主流程。
 
-    与物理正式逻辑一致：以原始模型档位选择唯一边界分支，每题最多调整
-    一个相邻档；未达到主动升档条件不等于必须降档。
+    默认只记录候选动作，不写回难度等级。历史591题三次回放中，当前
+    自动动作共触发5次并净损失3题，因此只有显式设置
+    CHEMISTRY_ENABLE_LEVEL_WRITEBACK=1时才执行相邻档写回。
     """
     if not rating_result:
         return rating_result
@@ -1995,11 +2005,16 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result = validate_rating_contract(rating_result)
     normalize_reasoning_schema(rating_result)
     raw_level = rating_result["difficulty_level"]
+    raw_coarse_difficulty = rating_result["coarse_difficulty"]
+    rating_result["coarse_difficulty_raw"] = raw_coarse_difficulty
     rating_result["postprocess_original_level"] = raw_level
     rating_result["postprocess_trace"] = []
     rating_result["postprocess_actions"] = []
     rating_result["postprocess_profile"] = (
-        "chemistry_core12_teacher_boundary_v2"
+        "chemistry_core12_boundary_v3_audit_first"
+    )
+    rating_result["postprocess_writeback_enabled"] = (
+        CHEMISTRY_ENABLE_LEVEL_WRITEBACK
     )
     rating_result["feature_schema_version"] = "chemistry_core12_strict_v1"
     rating_result["schema_validation_passed"] = True
@@ -2011,6 +2026,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     decisive_evidence = core12_decisive_evidence(features)
     final_evidence = core12_final_evidence(features)
     depth = CORE12_DEPTH_ORDER[features["reasoning_depth"]]
+    candidate_result = copy.deepcopy(rating_result)
 
     if raw_level == "送分题":
         # 教师591题实跑中，旧规则把“单一约束”和“单一证据直接对应”
@@ -2023,7 +2039,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         # 历史591题回放中该自动降档无净收益，因此只审计、不写回。
         if depth >= 2 and complete_model_evidence:
             set_level_with_reason(
-                rating_result,
+                candidate_result,
                 "中等题",
                 "自动升档：形成2—3层以上完整常规化学模型",
                 rule="core12_basic_to_medium_complete_model",
@@ -2035,7 +2051,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     elif raw_level == "中等题":
         if depth <= 1 and not complete_model_evidence:
             set_level_with_reason(
-                rating_result,
+                candidate_result,
                 "基础题",
                 "自动降档：仅有0—1层显性应用且无完整常规模型",
                 rule="core12_medium_to_basic_low_structure",
@@ -2049,7 +2065,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             and len(decisive_evidence) >= 2
         ):
             set_level_with_reason(
-                rating_result,
+                candidate_result,
                 "拔高题",
                 "自动升档：4—5层链中存在至少两项决定性转换证据",
                 rule="core12_medium_to_hard_decisive_transform",
@@ -2061,7 +2077,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     elif raw_level == "拔高题":
         if depth <= 2 and not decisive_evidence:
             set_level_with_reason(
-                rating_result,
+                candidate_result,
                 "中等题",
                 "自动降档：常规2—3层正向模型且无决定性高阶卡点",
                 rule="core12_hard_to_medium_routine_model",
@@ -2089,7 +2105,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             )
         ):
             set_level_with_reason(
-                rating_result,
+                candidate_result,
                 "压轴题",
                 "自动升档：6层以上深链中多个高阶任务相互改变模型",
                 rule="core12_hard_to_final_coupled_chain",
@@ -2098,7 +2114,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     elif raw_level == "压轴题":
         if depth <= 3 and len(final_evidence) < 2:
             set_level_with_reason(
-                rating_result,
+                candidate_result,
                 "拔高题",
                 "自动降档：题面明确只形成有限常规链，未达到压轴耦合",
                 rule="core12_final_to_hard_clear_low_density",
@@ -2108,7 +2124,31 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 ],
             )
 
-    sync_coarse_difficulty(rating_result)
+    candidate_actions = copy.deepcopy(
+        candidate_result.get("postprocess_trace", [])
+    )
+    rating_result["postprocess_candidate_actions"] = candidate_actions
+    rating_result["postprocess_candidate_level"] = candidate_result.get(
+        "difficulty_level",
+        raw_level,
+    )
+    writeback_applied = bool(
+        CHEMISTRY_ENABLE_LEVEL_WRITEBACK and candidate_actions
+    )
+    if writeback_applied:
+        rating_result = candidate_result
+        rating_result["postprocess_writeback_enabled"] = True
+        rating_result["postprocess_candidate_actions"] = (
+            candidate_actions
+        )
+        rating_result["postprocess_candidate_level"] = (
+            candidate_result["difficulty_level"]
+        )
+        sync_coarse_difficulty(rating_result)
+
+    rating_result["coarse_difficulty_final"] = rating_result[
+        "coarse_difficulty"
+    ]
     sync_reasoning_after_postprocess(rating_result)
     rating_result["postprocess_actions"] = copy.deepcopy(
         rating_result.get("postprocess_trace", [])
@@ -2125,6 +2165,11 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         "final_coupling": len(final_evidence),
     }
     add_feature_audit_flags(rating_result, data)
+    if candidate_actions and not CHEMISTRY_ENABLE_LEVEL_WRITEBACK:
+        rating_result["feature_audit_flags"].append(
+            "存在相邻档候选校准，但自动写回默认关闭；"
+            "仅记录postprocess_candidate_actions"
+        )
     return rating_result
 
 
