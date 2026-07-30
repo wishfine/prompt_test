@@ -83,6 +83,15 @@ CHEMISTRY_ENABLE_LEVEL_WRITEBACK = os.getenv(
     "yes",
     "on",
 }
+CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD = os.getenv(
+    "CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD",
+    "0",
+).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 CHEMISTRY_IMAGE_MODE = os.getenv(
     "CHEMISTRY_IMAGE_MODE",
     "auto",
@@ -2011,10 +2020,13 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["postprocess_trace"] = []
     rating_result["postprocess_actions"] = []
     rating_result["postprocess_profile"] = (
-        "chemistry_core12_boundaryfix_audit_first"
+        "chemistry_core12_final_anchor_v1_audit_first"
     )
     rating_result["postprocess_writeback_enabled"] = (
         CHEMISTRY_ENABLE_LEVEL_WRITEBACK
+    )
+    rating_result["final_boundary_guard_enabled"] = (
+        CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD
     )
     rating_result["feature_schema_version"] = "chemistry_core12_strict_v1"
     rating_result["schema_validation_passed"] = True
@@ -2084,7 +2096,13 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 evidence=medium_evidence[:4],
             )
         elif (
-            depth >= 4
+            (
+                depth >= 4
+                or (
+                    CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD
+                    and depth >= 3
+                )
+            )
             and len(final_evidence) >= 4
             and (
                 features["subquestion_dependency"]
@@ -2107,8 +2125,19 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             set_level_with_reason(
                 candidate_result,
                 "压轴题",
-                "自动升档：6层以上深链中多个高阶任务相互改变模型",
-                rule="core12_hard_to_final_coupled_chain",
+                (
+                    "实验保护升档：4—5层以上主链中至少四项压轴证据"
+                    "通过任务依赖或反应—计算关系耦合"
+                    if depth == 3
+                    else
+                    "自动升档：6层以上深链中多个高阶任务相互改变模型"
+                ),
+                rule=(
+                    "core12_hard_to_final_4_5_coupled_guard"
+                    if depth == 3
+                    else
+                    "core12_hard_to_final_coupled_chain"
+                ),
                 evidence=final_evidence[:6],
             )
     elif raw_level == "压轴题":
@@ -2126,6 +2155,20 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
 
     candidate_actions = copy.deepcopy(
         candidate_result.get("postprocess_trace", [])
+    )
+    final_boundary_guard_action = next(
+        (
+            action
+            for action in candidate_actions
+            if action.get("rule")
+            == "core12_hard_to_final_4_5_coupled_guard"
+        ),
+        None,
+    )
+    final_boundary_guard_candidate_level = (
+        candidate_result.get("difficulty_level", raw_level)
+        if final_boundary_guard_action
+        else raw_level
     )
     rating_result["postprocess_candidate_actions"] = candidate_actions
     rating_result["postprocess_candidate_level"] = candidate_result.get(
@@ -2149,6 +2192,14 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["coarse_difficulty_final"] = rating_result[
         "coarse_difficulty"
     ]
+    rating_result["final_boundary_guard_candidate_level"] = (
+        final_boundary_guard_candidate_level
+    )
+    rating_result["final_boundary_guard_candidate_action"] = (
+        copy.deepcopy(final_boundary_guard_action)
+        if final_boundary_guard_action
+        else None
+    )
     sync_reasoning_after_postprocess(rating_result)
     rating_result["postprocess_actions"] = copy.deepcopy(
         rating_result.get("postprocess_trace", [])

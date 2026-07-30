@@ -73,12 +73,21 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "CHEMISTRY_ENABLE_LEVEL_WRITEBACK",
             False,
         )
+        self.old_final_boundary_guard = getattr(
+            chemistry,
+            "CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD",
+            False,
+        )
         chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = True
+        chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD = False
 
     def tearDown(self) -> None:
         chemistry.CHEMISTRY_IMAGE_MODE = self.old_image_mode
         chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = (
             self.old_writeback
+        )
+        chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD = (
+            self.old_final_boundary_guard
         )
 
     def test_lite_temperature_matches_physics_runtime(self) -> None:
@@ -585,6 +594,80 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "拔高题")
         self.assertEqual(result["postprocess_actions"], [])
 
+    def test_experimental_d4_5_final_boundary_guard_raises_coupled_hard(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD = True
+        rating = valid_rating("拔高题")
+        rating["features"].update(
+            {
+                "reasoning_depth": "4-5层",
+                "reasoning_direction": "分类讨论或综合推导",
+                "knowledge_relation": "多模块深度融合",
+                "representation_conversion": "宏观-微观-符号-定量多重转换",
+                "reaction_relation": "多反应连续转化",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "多条清晰证据联合",
+                "experiment_requirement": "多阶段探究与定量误差",
+                "graph_table_requirement": "多图表耦合建模",
+                "calculation_model": "多重守恒、差量、联立或分类",
+                "unfamiliar_information_transfer": "迁移后建立关系",
+                "subquestion_dependency": "多问存在结果或任务链依赖",
+            }
+        )
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+
+        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "core12_hard_to_final_4_5_coupled_guard",
+        )
+
+    def test_experimental_final_guard_is_auditable_without_writeback(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD = True
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        rating = valid_rating("拔高题")
+        rating["features"].update(
+            {
+                "reasoning_depth": "4-5层",
+                "reasoning_direction": "分类讨论或综合推导",
+                "knowledge_relation": "多模块深度融合",
+                "representation_conversion": "宏观-微观-符号-定量多重转换",
+                "reaction_relation": "多反应连续转化",
+                "constraint_complexity": "多个相互关联约束",
+                "evidence_relation": "多条清晰证据联合",
+                "experiment_requirement": "多阶段探究与定量误差",
+                "graph_table_requirement": "多图表耦合建模",
+                "calculation_model": "多重守恒、差量、联立或分类",
+                "unfamiliar_information_transfer": "迁移后建立关系",
+                "subquestion_dependency": "多问存在结果或任务链依赖",
+            }
+        )
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["postprocess_actions"], [])
+        self.assertEqual(
+            result["postprocess_candidate_level"],
+            "压轴题",
+        )
+        self.assertEqual(
+            result["postprocess_candidate_actions"][0]["rule"],
+            "core12_hard_to_final_4_5_coupled_guard",
+        )
+        self.assertEqual(
+            result["final_boundary_guard_candidate_level"],
+            "压轴题",
+        )
+        self.assertEqual(
+            result["final_boundary_guard_candidate_action"]["rule"],
+            "core12_hard_to_final_4_5_coupled_guard",
+        )
+
     def test_d4_5_independent_high_signals_do_not_force_final(self) -> None:
         rating = valid_rating("拔高题")
         rating["features"].update(
@@ -627,7 +710,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "中等题")
         self.assertEqual(result["postprocess_actions"], [])
 
-    def test_stable_profile_records_boundaryfix_audit_mode(
+    def test_stable_profile_records_final_anchor_v1_audit_mode(
         self,
     ) -> None:
         result = chemistry.postprocess_chemistry_difficulty(
@@ -636,7 +719,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             result["postprocess_profile"],
-            "chemistry_core12_boundaryfix_audit_first",
+            "chemistry_core12_final_anchor_v1_audit_first",
         )
 
     def test_prompt_example_is_valid_and_uses_core12_enums(self) -> None:
@@ -701,6 +784,14 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertNotIn("入口E=", prefix)
         self.assertNotIn("广度校准=开启/关闭", prefix)
         self.assertNotIn("有限横向广度", prefix)
+        self.assertIn(
+            "`reasoning_depth=6层及以上`不是压轴题的必要条件",
+            prefix,
+        )
+        self.assertIn(
+            "4—5层拔高/压轴对照",
+            prefix,
+        )
 
 
 if __name__ == "__main__":
