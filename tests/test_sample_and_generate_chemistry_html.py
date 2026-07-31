@@ -95,6 +95,25 @@ class ChemistryVisualizationTests(unittest.TestCase):
         self.assertIn("function applyAdaptiveImageSizing", template)
         self.assertIn("image-lightbox", template)
 
+    def test_human_review_uses_default_acceptance_exception_flow(
+        self,
+    ) -> None:
+        template = MODULE.HTML_TEMPLATE
+        self.assertIn("const correct = total - wrong;", template)
+        self.assertIn(
+            "review_source: manuallyRejected ? "
+            "'manual_exception' : 'default_model_accepted'",
+            template,
+        )
+        self.assertIn(
+            "annotations[qid].verdict = 'wrong';",
+            template,
+        )
+        self.assertIn(
+            "输入修改意见后自动标记为异常",
+            template,
+        )
+
     def test_missing_required_chemistry_image_is_explicit(self) -> None:
         self.assertTrue(
             MODULE.contains_image_reference("根据微观示意图回答")
@@ -201,6 +220,15 @@ class ChemistryVisualizationTests(unittest.TestCase):
             self.assertIn("纵向推理深度 D", rendered)
             self.assertIn("两类表征连续转换", rendered)
             self.assertIn("corrected-level-select", rendered)
+            self.assertIn(
+                "人工评议验收（默认模型判定合理）",
+                rendered,
+            )
+            self.assertIn("✗ 模型判定不准", rendered)
+            self.assertIn("✓ 恢复默认合理", rendered)
+            self.assertIn("仅标错，暂不指定档位", rendered)
+            self.assertNotIn("✓ 模型判定合理</button>", rendered)
+            self.assertNotIn("— 清除状态", rendered)
             self.assertIn("来源难度（不可信）", rendered)
 
 
