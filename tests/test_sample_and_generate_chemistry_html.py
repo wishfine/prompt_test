@@ -54,6 +54,60 @@ class ChemistryVisualizationTests(unittest.TestCase):
         self.assertEqual(sum(plan.values()), 37)
         self.assertEqual(set(plan), set(MODULE.SAMPLE_PLAN))
 
+    def test_externalized_image_is_primary_and_original_is_collapsed(
+        self,
+    ) -> None:
+        section = MODULE.render_image_section(
+            "https://example.com/original.png,"
+            "https://example.com/image/externalized/full.png",
+            title="题干图示",
+            kind="stem",
+        )
+        primary_index = section.index(
+            "https://example.com/image/externalized/full.png"
+        )
+        supporting_index = section.index(
+            "https://example.com/original.png"
+        )
+        self.assertLess(primary_index, supporting_index)
+        self.assertIn(
+            '<details class="supporting-images">',
+            section,
+        )
+        self.assertIn(
+            "查看原始题图 / 备用图片（1张）",
+            section,
+        )
+        self.assertIn(
+            'data-image-source="externalized"',
+            section,
+        )
+
+    def test_visualization_matches_physics_font_and_image_controls(
+        self,
+    ) -> None:
+        template = MODULE.HTML_TEMPLATE
+        self.assertIn("max-width: 1440px", template)
+        self.assertIn("font-size: 21px", template)
+        self.assertIn("font-size: 18px", template)
+        self.assertIn("font-size: 17px", template)
+        self.assertIn("image-layout-long-document", template)
+        self.assertIn("function applyAdaptiveImageSizing", template)
+        self.assertIn("image-lightbox", template)
+
+    def test_missing_required_chemistry_image_is_explicit(self) -> None:
+        self.assertTrue(
+            MODULE.contains_image_reference("根据微观示意图回答")
+        )
+        section = MODULE.render_image_section(
+            "",
+            title="题干图示",
+            kind="stem",
+            content_requires_image=True,
+        )
+        self.assertIn("题干图示资源缺失", section)
+        self.assertIn("media-missing", section)
+
     def test_all_results_renders_core12_and_exports_aligned_images(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -79,7 +133,11 @@ class ChemistryVisualizationTests(unittest.TestCase):
                         json.dumps(
                             {
                                 "question_id": 1001,
-                                "stem_pic_url": "https://example.com/1001.png",
+                                "stem_pic_url": (
+                                    "https://example.com/1001.png,"
+                                    "https://example.com/image/"
+                                    "externalized/1001-full.png"
+                                ),
                                 "analysis_pic_url": "",
                             }
                         ),
@@ -123,7 +181,22 @@ class ChemistryVisualizationTests(unittest.TestCase):
             self.assertEqual(len(exported), 2)
             self.assertEqual(
                 exported[0]["stem_pic_url"],
-                "https://example.com/1001.png",
+                (
+                    "https://example.com/1001.png,"
+                    "https://example.com/image/"
+                    "externalized/1001-full.png"
+                ),
+            )
+            primary_index = rendered.index(
+                "https://example.com/image/externalized/1001-full.png"
+            )
+            supporting_index = rendered.index(
+                "https://example.com/1001.png"
+            )
+            self.assertLess(primary_index, supporting_index)
+            self.assertIn(
+                "查看原始题图 / 备用图片（1张）",
+                rendered,
             )
             self.assertIn("纵向推理深度 D", rendered)
             self.assertIn("两类表征连续转换", rendered)
