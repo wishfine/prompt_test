@@ -22,14 +22,6 @@ LEVEL_NUMBER_TO_NAME = {
     value: key for key, value in LEVEL_NAME_TO_NUMBER.items()
 }
 LEVEL_NAMES = list(LEVEL_NAME_TO_NUMBER)
-PREDICTION_LEVEL_NAME_TO_NUMBER = {
-    **LEVEL_NAME_TO_NUMBER,
-    "难度1档": 1,
-    "难度2档": 2,
-    "难度3档": 3,
-    "难度4档": 4,
-    "难度5档": 5,
-}
 
 
 def parse_args() -> argparse.Namespace:
@@ -128,18 +120,12 @@ def extract_prediction(
             )
         level_name = level_name or rating.get("difficulty_level")
     if level_name is None:
-        if level_source == "pre-postprocess":
-            level_name = item.get("difficulty_level_step1")
-        level_name = (
-            level_name
-            or item.get("final_difficulty_level")
-            or item.get("difficulty_level")
-        )
+        level_name = item.get("difficulty_level")
     if level_name is not None:
         level_name = str(level_name).strip()
     return (
         level_name,
-        PREDICTION_LEVEL_NAME_TO_NUMBER.get(level_name) if level_name else None,
+        LEVEL_NAME_TO_NUMBER.get(level_name) if level_name else None,
     )
 
 

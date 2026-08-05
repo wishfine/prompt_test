@@ -102,24 +102,6 @@ class ChemistryEvaluationTests(unittest.TestCase):
         self.assertEqual(level_name, "压轴题")
         self.assertEqual(level_number, 5)
 
-    def test_high_chemistry_top_level_levels_are_supported(self) -> None:
-        evaluation = load_module()
-        item = {
-            "question_id": "q1",
-            "difficulty_level_step1": "难度4档",
-            "final_difficulty_level": "难度3档",
-        }
-
-        level_name, level_number = evaluation.extract_prediction(item, "final")
-        self.assertEqual(level_name, "难度3档")
-        self.assertEqual(level_number, 3)
-
-        level_name, level_number = evaluation.extract_prediction(
-            item, "pre-postprocess"
-        )
-        self.assertEqual(level_name, "难度4档")
-        self.assertEqual(level_number, 4)
-
     def test_mixed_run_signatures_are_rejected(self) -> None:
         evaluation = load_module()
         with tempfile.TemporaryDirectory() as temp_dir:
