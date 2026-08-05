@@ -96,6 +96,30 @@ class AccuracyAndSchemaTests(unittest.TestCase):
                 )
             )
 
+    def test_normalization_derives_l1_from_valid_l2(self) -> None:
+        rating = {
+            "features": base_features(
+                knowledge_L1=["元素化学"],
+                knowledge_L2=[
+                    "原子结构与元素周期律",
+                    "水溶液中的离子平衡",
+                    "实验探究与方案设计",
+                ],
+            ),
+            "reason": "测试",
+            "predicted_accuracy": 70,
+        }
+
+        normalized, log = core.normalize_stage1_rating(rating)
+
+        self.assertEqual(
+            normalized["features"]["knowledge_L1"],
+            ["化学基本概念", "化学反应原理", "化学实验"],
+        )
+        self.assertTrue(
+            any(item.get("field") == "knowledge_L1" for item in log)
+        )
+
 
 @unittest.skipIf(core is None, "高中化学核心模块尚未实现")
 class ChemistryHighFeatureTests(unittest.TestCase):

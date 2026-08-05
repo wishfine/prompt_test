@@ -86,6 +86,20 @@ class HighChemistryAssetTests(unittest.TestCase):
         ):
             self.assertIn(required, stage1)
 
+    def test_stage1_defines_taxonomy_mapping_and_experiment_task_boundary(self) -> None:
+        namespace = {}
+        source = PROMPT.read_text(encoding="utf-8")
+        exec(compile(source, str(PROMPT), "exec"), namespace)
+        stage1 = namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
+        for required in (
+            "knowledge_L2 到 knowledge_L1 的固定映射",
+            "原子结构与元素周期律 → 化学基本概念",
+            "实验探究与方案设计 → 化学实验",
+            "experiment_requirement 描述实验任务深度",
+            "不得填写 knowledge_L1 或 knowledge_L2 的模块名称",
+        ):
+            self.assertIn(required, stage1)
+
     def test_stage1_json_example_matches_program_derived_scope(self) -> None:
         namespace = {}
         source = PROMPT.read_text(encoding="utf-8")

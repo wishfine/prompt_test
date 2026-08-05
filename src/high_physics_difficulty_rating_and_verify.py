@@ -565,7 +565,6 @@ async def call_stage1(
     total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     last_error = ""
     repair_feedback: str | None = None
-    format_repair_used = False
     for attempt in range(retries):
         use_cache = bool(cache_id and repair_feedback is None)
         if repair_feedback is not None:
@@ -619,13 +618,12 @@ async def call_stage1(
                         normalization_log=normalization_log,
                     )
                 except ValueError as exc:
-                    if not format_repair_used and attempt < retries - 1:
+                    if attempt < retries - 1:
                         repair_feedback = (
                             f"上一次 JSON 校验失败：{exc}\n"
                             "上一次输出如下：\n"
                             + _json_block(parsed)
                         )
-                        format_repair_used = True
                         last_error = str(exc)
                         continue
                     raise

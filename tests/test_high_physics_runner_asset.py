@@ -92,6 +92,12 @@ class RunnerAssetTests(unittest.TestCase):
         self.assertIn("finalize_level", source)
         self.assertIn("ENABLE_STAGE2_AUTO_ADJUST", source)
 
+    def test_stage1_schema_repair_uses_latest_validation_error(self) -> None:
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertNotIn("format_repair_used", source)
+        self.assertIn("if attempt < retries - 1:", source)
+        self.assertIn("上一次 JSON 校验失败", source)
+
     def test_verification_rejects_duplicate_high_features(self) -> None:
         value = {
             "difficulty_source": "测试",

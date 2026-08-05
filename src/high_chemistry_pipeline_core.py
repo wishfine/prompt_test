@@ -499,6 +499,29 @@ def normalize_stage1_rating(
     elif shared in {"否", "false", "False", 0}:
         features["shared_model_across_subquestions"] = False
         log.append({"field": "shared_model_across_subquestions", "from": shared, "to": False})
+
+    # L1 是 L2 的确定性父级，不应让模型重复填写造成整题失败。
+    # 只有当 L2 本身完整合法时才自动派生；非法或缺失 L2 仍交给校验报错。
+    knowledge_l2 = features.get("knowledge_L2")
+    if (
+        isinstance(knowledge_l2, list)
+        and knowledge_l2
+        and all(value in KNOWLEDGE_L2_TO_L1 for value in knowledge_l2)
+    ):
+        derived_l1 = list(
+            dict.fromkeys(KNOWLEDGE_L2_TO_L1[value] for value in knowledge_l2)
+        )
+        if features.get("knowledge_L1") != derived_l1:
+            previous_l1 = copy.deepcopy(features.get("knowledge_L1"))
+            features["knowledge_L1"] = derived_l1
+            log.append(
+                {
+                    "field": "knowledge_L1",
+                    "from": previous_l1,
+                    "to": copy.deepcopy(derived_l1),
+                    "reason": "由合法 knowledge_L2 的固定父级确定性派生",
+                }
+            )
     validate_feature_schema(features)
     return normalized, log
 
