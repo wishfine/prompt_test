@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from collections import Counter
 from pathlib import Path
@@ -189,10 +190,45 @@ def accuracy_scale_diagnostics(predictions: dict[str, dict[str, Any]]) -> dict[s
     }
 
 
+def mismatch_rows(labels: dict[str, dict[str, Any]], predictions: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for question_id in sorted(labels.keys() & predictions.keys()):
+        truth = label_level(labels[question_id])
+        prediction = predictions[question_id].get("final_difficulty_level")
+        if truth not in LEVEL_INDEX or prediction not in LEVEL_INDEX or truth == prediction:
+            continue
+        row = predictions[question_id]
+        rows.append({
+            "question_id": question_id,
+            "reference_level": truth,
+            "final_level": prediction,
+            "step1_level": row.get("difficulty_level_step1", ""),
+            "gap": LEVEL_INDEX[prediction] - LEVEL_INDEX[truth],
+            "reference_confidence": labels[question_id].get("confidence", ""),
+            "reference_reason": labels[question_id].get("reason", ""),
+            "pipeline_reason": (row.get("difficulty_rating_stage1") or {}).get("reason", ""),
+            "stem": row.get("stem", ""),
+        })
+    return rows
+
+
+def write_mismatches(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=[
+            "question_id", "reference_level", "final_level", "step1_level", "gap",
+            "reference_confidence", "reference_reason", "pipeline_reason", "stem",
+        ])
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--labels", required=True)
     parser.add_argument("--predictions", required=True)
+    parser.add_argument("--report", required=True)
+    parser.add_argument("--mismatches", required=True)
     args = parser.parse_args()
     labels = read_by_id(Path(args.labels))
     predictions = read_by_id(Path(args.predictions))
@@ -202,7 +238,17 @@ def main() -> None:
         "accuracy_scale_diagnostics": accuracy_scale_diagnostics(predictions),
         "review_diagnostics": review_diagnostics(predictions),
     }
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    report_path = Path(args.report)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    mismatch_path = Path(args.mismatches)
+    mismatches = mismatch_rows(labels, predictions)
+    write_mismatches(mismatch_path, mismatches)
+    final = report["final"]
+    print(
+        f"评测完成：ACC={final['exact_match_rate']}，±1档={final['within_one_level_rate']}，"
+        f"MAE={final['mae']}；报告={report_path}；错配样本={mismatch_path}"
+    )
 
 
 if __name__ == "__main__":

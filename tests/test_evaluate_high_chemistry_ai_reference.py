@@ -33,6 +33,20 @@ class HighChemistryAiReferenceEvaluationTests(unittest.TestCase):
         self.assertIn("quadratic_weighted_kappa", report)
         self.assertIn("confusion_matrix", report)
 
+    def test_mismatches_only_include_nonmatching_final_levels(self) -> None:
+        labels = {
+            "q1": {"standard_level": 1},
+            "q2": {"standard_level": 2, "reason": "常规模型", "confidence": "中"},
+        }
+        predictions = {
+            "q1": {"final_difficulty_level": "难度1档"},
+            "q2": {"final_difficulty_level": "难度3档", "difficulty_level_step1": "难度3档", "stem": "题干"},
+        }
+        rows = evaluation.mismatch_rows(labels, predictions)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["question_id"], "q2")
+        self.assertEqual(rows[0]["gap"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
