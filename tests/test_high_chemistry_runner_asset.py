@@ -1,0 +1,111 @@
+# -*- coding: utf-8 -*-
+"""高中化学两阶段 Prompt 与运行脚本静态契约。"""
+
+from __future__ import annotations
+
+import json
+import sys
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+RUNNER = ROOT / "src" / "high_chemistry_difficulty_rating_and_verify.py"
+PROMPT = ROOT / "prompts" / "高中化学难度打标提示词.txt"
+sys.path.insert(0, str(ROOT / "src"))
+
+import high_chemistry_pipeline_core as chemistry_core  # noqa: E402
+
+
+class HighChemistryAssetTests(unittest.TestCase):
+    def test_runner_exists_and_compiles(self) -> None:
+        self.assertTrue(RUNNER.exists())
+        source = RUNNER.read_text(encoding="utf-8")
+        compile(source, str(RUNNER), "exec")
+        self.assertIn("high_chemistry_two_stage_v1", source)
+        self.assertIn("ENABLE_STAGE2_AUTO_ADJUST", source)
+
+    def test_prompt_defines_both_stages_and_complete_schema(self) -> None:
+        self.assertTrue(PROMPT.exists())
+        namespace = {}
+        source = PROMPT.read_text(encoding="utf-8")
+        exec(compile(source, str(PROMPT), "exec"), namespace)
+        for name in (
+            "FEATURE_EXTRACTION_PROMPT_PREFIX",
+            "FEATURE_EXTRACTION_PROMPT_SUFFIX",
+            "VERIFICATION_PROMPT_PREFIX",
+            "VERIFICATION_PROMPT_SUFFIX",
+        ):
+            self.assertTrue(namespace.get(name), name)
+        prefix = namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
+        for field in (
+            "substance_relation",
+            "reaction_relation",
+            "competing_reaction",
+            "evidence_relation",
+            "route_design_requirement",
+            "predicted_accuracy",
+        ):
+            self.assertIn(field, prefix)
+        verification = namespace["VERIFICATION_PROMPT_PREFIX"]
+        self.assertIn("原始预测正确率", verification)
+        self.assertIn("重复计数", verification)
+        self.assertIn("相邻边界", verification)
+
+    def test_stage1_does_not_disclose_postprocess_mechanics(self) -> None:
+        namespace = {}
+        source = PROMPT.read_text(encoding="utf-8")
+        exec(compile(source, str(PROMPT), "exec"), namespace)
+        stage1 = namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
+        stage2 = namespace["VERIFICATION_PROMPT_PREFIX"]
+        for forbidden in (
+            "0.85",
+            "0.70",
+            "乘数",
+            "程序会按同一决策节点去重",
+            "固定档位边界将由程序",
+        ):
+            self.assertNotIn(forbidden, stage1)
+        self.assertIn("原始预测正确率", stage1)
+        self.assertIn("0.85", stage2)
+        self.assertIn("0.70", stage2)
+
+    def test_stage1_defines_chemistry_counting_and_conversion_boundaries(self) -> None:
+        namespace = {}
+        source = PROMPT.read_text(encoding="utf-8")
+        exec(compile(source, str(PROMPT), "exec"), namespace)
+        stage1 = namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
+        self.assertGreaterEqual(len(stage1), 8000)
+        for required in (
+            "目标考生定义",
+            "知识点计数",
+            "物质计数",
+            "反应节点计数",
+            "宏观现象、微观粒子、化学符号",
+            "字段间一致性自检",
+        ):
+            self.assertIn(required, stage1)
+
+    def test_stage1_json_example_matches_program_derived_scope(self) -> None:
+        namespace = {}
+        source = PROMPT.read_text(encoding="utf-8")
+        exec(compile(source, str(PROMPT), "exec"), namespace)
+        stage1_text = namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
+        start = stage1_text.index('{\n  "features"')
+        end = stage1_text.index('\n\n注意：JSON', start)
+        example = json.loads(stage1_text[start:end])
+        enriched = chemistry_core.enrich_stage1_rating(example)
+        self.assertEqual(
+            example["features"]["knowledge_scope"],
+            enriched["features"]["knowledge_scope"],
+        )
+
+    def test_runner_reuses_operational_capabilities_without_sending_label(self) -> None:
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("high_physics_difficulty_rating_and_verify", source)
+        self.assertIn("prepare_question", source)
+        self.assertNotIn("source_difficulty_untrusted\"]", source)
+
+
+if __name__ == "__main__":
+    unittest.main()

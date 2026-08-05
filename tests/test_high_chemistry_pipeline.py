@@ -1,0 +1,282 @@
+# -*- coding: utf-8 -*-
+"""高中化学两阶段难度 Pipeline 的核心行为测试。"""
+
+from __future__ import annotations
+
+import copy
+import sys
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+try:
+    import high_chemistry_pipeline_core as core  # noqa: E402
+except ModuleNotFoundError:
+    core = None
+
+
+def base_features(**overrides):
+    features = {
+        "knowledge_L1": ["化学基本概念"],
+        "knowledge_L2": ["物质分类与化学用语"],
+        "knowledge_points": ["物质分类"],
+        "knowledge_count": "1个",
+        "knowledge_scope": "单知识点",
+        "substance_count": "1种",
+        "substance_relation": "单一物质",
+        "reaction_count": "0-1个",
+        "reaction_relation": "无反应链",
+        "competing_reaction": "无",
+        "process_structure": "单阶段",
+        "primary_problem_structure": "概念辨析",
+        "step_count": "1-2步",
+        "subquestion_dependency": "无多问",
+        "shared_model_across_subquestions": False,
+        "model_explicitness": "模型完全显性",
+        "model_relation": "单一模型",
+        "reasoning_chain": "直接套用",
+        "representation_conversion": "无转换",
+        "evidence_relation": "直接给定",
+        "hidden_conditions": "无",
+        "critical_condition": "无临界",
+        "classification_discussion": "无",
+        "constraint_structure": "无约束",
+        "chemistry_methods": [],
+        "calculation_model": "无定量计算",
+        "equation_structure": "无方程",
+        "calculation_complexity": "直接判断",
+        "parameter_operation": "无参数",
+        "information_carrier": "纯文字",
+        "information_conversion": "无信息转换",
+        "experiment_requirement": "无",
+        "route_design_requirement": "无",
+        "context_type": "纯化学",
+        "context_load": "纯包装",
+        "error_risk": "无明显易错点",
+    }
+    features.update(overrides)
+    return features
+
+
+@unittest.skipIf(core is None, "高中化学核心模块尚未实现")
+class AccuracyAndSchemaTests(unittest.TestCase):
+    def test_continuous_accuracy_boundaries_are_fixed(self) -> None:
+        cases = [
+            (88, "难度1档"),
+            (87.999, "难度2档"),
+            (85, "难度2档"),
+            (84.999, "难度3档"),
+            (58, "难度3档"),
+            (57.999, "难度4档"),
+            (38, "难度4档"),
+            (37.999, "难度5档"),
+        ]
+        for score, expected in cases:
+            with self.subTest(score=score):
+                self.assertEqual(core.map_accuracy_to_level(score), expected)
+
+    def test_feature_schema_accepts_complete_chemistry_features(self) -> None:
+        core.validate_feature_schema(base_features())
+
+    def test_feature_schema_rejects_missing_field(self) -> None:
+        features = base_features()
+        features.pop("critical_condition")
+        with self.assertRaisesRegex(ValueError, "critical_condition"):
+            core.validate_feature_schema(features)
+
+    def test_feature_schema_rejects_inconsistent_taxonomy(self) -> None:
+        with self.assertRaisesRegex(ValueError, "knowledge_L1"):
+            core.validate_feature_schema(
+                base_features(
+                    knowledge_L1=["有机化学"],
+                    knowledge_L2=["物质分类与化学用语"],
+                )
+            )
+
+
+@unittest.skipIf(core is None, "高中化学核心模块尚未实现")
+class ChemistryHighFeatureTests(unittest.TestCase):
+    def test_many_independent_substances_are_not_high(self) -> None:
+        detected = core.detect_high_difficulty_features(
+            base_features(
+                substance_count="7种及以上",
+                substance_relation="相互独立",
+                reaction_count="4-6个",
+                reaction_relation="并列独立",
+            )
+        )
+        self.assertNotIn("多物质强耦合", detected.names)
+        self.assertNotIn("多反应或多阶段强耦合", detected.names)
+
+    def test_true_multi_substance_network_is_high(self) -> None:
+        detected = core.detect_high_difficulty_features(
+            base_features(
+                substance_count="4-6种",
+                substance_relation="组成—性质—反应网络",
+                reaction_count="4-6个",
+                reaction_relation="多路径反应网络",
+                evidence_relation="证据链相互支持",
+                model_relation="多模型耦合",
+            )
+        )
+        self.assertIn("多物质强耦合", detected.names)
+
+    def test_competition_critical_and_two_way_classification_share_one_node(self) -> None:
+        detected = core.detect_high_difficulty_features(
+            base_features(
+                competing_reaction="多反应竞争并需筛选",
+                reaction_relation="多路径反应网络",
+                evidence_relation="证据冲突需排除",
+                hidden_conditions="单个隐含条件",
+                critical_condition="需要推导过量不足边界",
+                classification_discussion="2类讨论",
+                reasoning_chain="逆向推理或临界分析",
+            )
+        )
+        overlap_node = {
+            "竞争反应与副反应判断",
+            "隐含临界或过量不足",
+            "复杂分类讨论",
+        }
+        self.assertEqual(len(overlap_node.intersection(detected.names)), 1)
+        self.assertTrue(detected.suppressed_overlaps)
+
+    def test_four_distinct_high_structures_apply_point_seven(self) -> None:
+        features = base_features(
+            substance_count="4-6种",
+            substance_relation="组成—性质—反应网络",
+            reaction_count="4-6个",
+            reaction_relation="前后反应强依赖",
+            evidence_relation="证据链相互支持",
+            process_structure="多阶段强依赖",
+            constraint_structure="多约束联合筛选",
+            model_relation="多模型耦合",
+            equation_structure="2-3个方程联立",
+            reasoning_chain="多层因果",
+        )
+        detected = core.detect_high_difficulty_features(features)
+        self.assertEqual(len(detected.names), 4)
+        output = core.enrich_stage1_rating(
+            {"features": features, "reason": "测试", "predicted_accuracy": 80}
+        )
+        self.assertEqual(output["multiplier_applied"], 0.70)
+        self.assertEqual(output["predicted_accuracy"], 56.0)
+        self.assertEqual(output["difficulty_level_step1"], "难度4档")
+
+    def test_active_count_is_not_used_as_high_count(self) -> None:
+        features = base_features(
+            knowledge_scope="同模块跨章节",
+            substance_count="2-3种",
+            substance_relation="同一反应体系",
+            reaction_count="2-3个",
+            reaction_relation="显性顺序衔接",
+            process_structure="两阶段显性流程",
+            representation_conversion="一次常规转换",
+            information_carrier="单一图表",
+            information_conversion="直接读取",
+        )
+        active = core.detect_active_features(features)
+        high = core.detect_high_difficulty_features(features)
+        self.assertGreaterEqual(len(active), 5)
+        self.assertEqual(high.names, [])
+
+
+@unittest.skipIf(core is None, "高中化学核心模块尚未实现")
+class PipelineAndInputTests(unittest.TestCase):
+    def test_multiplier_boundaries(self) -> None:
+        expected = {0: 1.0, 2: 1.0, 3: 0.85, 4: 0.70, 8: 0.70}
+        for count, multiplier in expected.items():
+            self.assertEqual(core.multiplier_for_high_count(count), multiplier)
+
+    def test_enrichment_preserves_raw_score_and_separates_counts(self) -> None:
+        features = base_features(
+            constraint_structure="多约束联合筛选",
+            critical_condition="隐含终点或有效区间",
+            hidden_conditions="多个隐含条件",
+            reasoning_chain="逆向推理或临界分析",
+            information_carrier="多载体综合",
+            information_conversion="多源信息联合转换",
+            evidence_relation="证据链相互支持",
+        )
+        output = core.enrich_stage1_rating(
+            {"features": features, "reason": "测试", "predicted_accuracy": 80}
+        )
+        self.assertEqual(output["original_predicted_accuracy"], 80.0)
+        self.assertEqual(output["high_difficulty_feature_count"], 3)
+        self.assertEqual(output["multiplier_applied"], 0.85)
+        self.assertEqual(output["predicted_accuracy"], 68.0)
+        self.assertGreater(output["active_feature_count"], 3)
+
+    def test_experiment_task_does_not_force_cross_content_module(self) -> None:
+        features = base_features(
+            knowledge_L1=["化学反应原理", "化学实验"],
+            knowledge_L2=["水溶液中的离子平衡", "实验探究与方案设计"],
+            knowledge_points=["酸碱平衡", "实验方案评价"],
+            knowledge_count="2-3个",
+            knowledge_scope="跨模块综合",
+            primary_problem_structure="实验探究",
+            experiment_requirement="方案设计或误差反演",
+        )
+        output = core.enrich_stage1_rating(
+            {"features": features, "reason": "测试", "predicted_accuracy": 70}
+        )
+        self.assertEqual(output["features"]["knowledge_scope"], "同章节综合")
+
+    def test_question_preparation_removes_labels_recursively_without_mutation(self) -> None:
+        source = {
+            "question_id": 123,
+            "difficulty": 5,
+            "stem": "如图完成实验",
+            "analysis": "",
+            "sub_questions": [
+                {"question_id": "2", "stem": "二", "analysis": "有解析", "difficulty": 4},
+                {"question_id": "1", "stem": "一", "analysis": "", "difficulty": 2},
+            ],
+        }
+        before = copy.deepcopy(source)
+        prepared = core.prepare_question(source, image_mode="off")
+        self.assertEqual(source, before)
+        self.assertNotIn("difficulty", prepared.question)
+        self.assertTrue(
+            all("difficulty" not in item for item in prepared.question["sub_questions"])
+        )
+        self.assertEqual(
+            [item["question_id"] for item in prepared.question["sub_questions"]],
+            ["1", "2"],
+        )
+        self.assertTrue(prepared.input_quality["has_analysis"])
+        self.assertEqual(prepared.input_quality["input_sufficiency"], "部分缺失")
+
+    def test_stage2_is_audit_only_by_default(self) -> None:
+        result = core.finalize_level(
+            current_level="难度3档",
+            review_action="建议升一档",
+            model_suggested_level="难度4档",
+            input_sufficiency="充分",
+        )
+        self.assertEqual(result.final_level, "难度3档")
+        self.assertFalse(result.auto_adjustment_applied)
+        self.assertIn("维持", result.adjustment_desc)
+
+    def test_even_when_enabled_final_adjustment_is_at_most_one_level(self) -> None:
+        result = core.finalize_level(
+            current_level="难度3档",
+            review_action="建议升一档",
+            model_suggested_level="难度5档",
+            input_sufficiency="充分",
+            auto_adjustment_enabled=True,
+        )
+        self.assertEqual(result.final_level, "难度4档")
+        self.assertTrue(result.needs_manual_review)
+
+
+class InitialRedStateTests(unittest.TestCase):
+    def test_high_chemistry_core_module_exists(self) -> None:
+        self.assertIsNotNone(core, "尚未实现 high_chemistry_pipeline_core")
+
+
+if __name__ == "__main__":
+    unittest.main()
