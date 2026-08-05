@@ -42,6 +42,7 @@ DEFAULT_PROMPT = PROJECT_ROOT / "prompts" / "高中化学AI盲标提示词.txt"
 DEFAULT_OUTPUT = OUTPUTS_ROOT / "model_runs" / "high_chemistry_ai_reference.jsonl"
 DEFAULT_ERRORS = OUTPUTS_ROOT / "model_runs" / "high_chemistry_ai_reference_errors.jsonl"
 LEVEL_NAMES = {1: "送分题", 2: "基础题", 3: "中等题", 4: "拔高题", 5: "压轴题"}
+DIFFICULTY_LEVELS = {level: f"难度{level}档" for level in LEVEL_NAMES}
 FILE_LOCK = asyncio.Lock()
 DIFFICULTY_METADATA_RE = re.compile(
     r"送分题|基础题|中等题|拔高题|压轴题|难度[1-5]档|"
@@ -317,6 +318,7 @@ async def process_one(
                 "question_id": question_id,
                 "standard_level": label["standard_level"],
                 "standard_level_name": LEVEL_NAMES[label["standard_level"]],
+                "reviewed_difficulty_level": DIFFICULTY_LEVELS[label["standard_level"]],
                 "reason": label["reason"],
                 "confidence": label["confidence"],
                 "input_quality": input_quality,

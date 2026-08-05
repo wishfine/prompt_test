@@ -537,6 +537,7 @@ class RunnerAssetTests(unittest.TestCase):
         self.assertNotIn('get("difficulty_level_step1")', source)
         for phrase in ("_redact_difficulty_metadata", "image_required_but_missing", "run_signature", "首次获得合法 JSON 后立即返回"):
             self.assertIn(phrase, source)
+        self.assertIn('"reviewed_difficulty_level": DIFFICULTY_LEVELS', source)
 
 
 class DatasetCompatibilityTests(unittest.TestCase):
