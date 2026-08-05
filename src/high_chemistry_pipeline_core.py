@@ -223,6 +223,28 @@ def validate_feature_schema(features: dict[str, Any]) -> None:
             raise ValueError(f"{field} 非法值 {features[field]!r}；允许值：{sorted(options)}")
 
 
+def validate_structural_revision_evidence(verification: dict[str, Any]) -> None:
+    """结构修订必须对应可审计的 feature 变化，禁止只改分析措辞。"""
+    if verification.get("has_structural_revision") is not True:
+        return
+
+    corrections = verification.get("feature_corrections")
+    has_correction = isinstance(corrections, list) and bool(corrections)
+
+    missed = verification.get("missed_features")
+    has_real_omission = isinstance(missed, list) and any(
+        isinstance(item, str)
+        and item.strip()
+        and item.strip().lower() not in {"无", "无遗漏", "none", "n/a"}
+        for item in missed
+    )
+    if not has_correction and not has_real_omission:
+        raise ValueError(
+            "has_structural_revision=true 时必须提供具体 feature 结构修订："
+            "feature_corrections 不得为空，或 missed_features 必须包含真实遗漏特征"
+        )
+
+
 def detect_active_features(features: dict[str, Any]) -> list[str]:
     """普通活跃特征只用于复核，不参与乘数选择。"""
     gates = [
@@ -282,9 +304,12 @@ def detect_high_difficulty_features(features: dict[str, Any]) -> HighDifficultyD
         evidence_by_name["多物质强耦合"] = _evidence("多物质强耦合", fields, features, "substance_network")
 
     multi_reaction = (
-        features.get("reaction_count") in {"4-6个", "7个及以上"}
-        and features.get("reaction_relation") in {"前后反应强依赖", "多路径反应网络"}
+        features.get("reaction_relation") in {"前后反应强依赖", "多路径反应网络"}
         and features.get("process_structure") in {"多阶段强依赖", "循环或回流流程"}
+        and (
+            features.get("reaction_count") in {"4-6个", "7个及以上"}
+            or features.get("step_count") in {"6-8步", "9-12步", "12步以上"}
+        )
     )
     if multi_reaction:
         fields = ["reaction_count", "reaction_relation", "process_structure"]
@@ -352,6 +377,13 @@ def detect_high_difficulty_features(features: dict[str, Any]) -> HighDifficultyD
             features.get("equation_structure") in {"2-3个方程联立", "4个以上方程或不等式组"}
             or features.get("process_structure") in {"多阶段强依赖", "循环或回流流程"}
             or features.get("reaction_relation") == "多路径反应网络"
+            or (
+                features.get("calculation_model") == "多模型定量耦合"
+                and features.get("calculation_complexity")
+                in {"多步计算", "多方程联立", "参数或范围计算"}
+                and features.get("step_count")
+                in {"6-8步", "9-12步", "12步以上"}
+            )
         )
     )
     if cross_module:

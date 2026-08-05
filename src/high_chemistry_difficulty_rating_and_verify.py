@@ -19,7 +19,7 @@ import high_physics_difficulty_rating_and_verify as shared_runner
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PIPELINE_VERSION = "high_chemistry_two_stage_v1"
+PIPELINE_VERSION = "high_chemistry_two_stage_v2"
 ENABLE_STAGE2_AUTO_ADJUST = shared_runner.ENABLE_STAGE2_AUTO_ADJUST
 _shared_validate_verification = shared_runner.validate_verification
 
@@ -57,6 +57,7 @@ def prepare_question(*args: Any, **kwargs: Any):
 def validate_verification(value: dict[str, Any]) -> dict[str, Any]:
     """在共享复核契约上增加化学的去重审计与信息充分性校验。"""
     normalized = _shared_validate_verification(value)
+    chemistry_core.validate_structural_revision_evidence(normalized)
     overlap_review = normalized.get("high_feature_overlap_review")
     if not isinstance(overlap_review, list):
         raise ValueError("high_feature_overlap_review 必须为数组")

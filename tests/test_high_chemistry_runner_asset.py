@@ -22,7 +22,7 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertTrue(RUNNER.exists())
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn("high_chemistry_two_stage_v1", source)
+        self.assertIn("high_chemistry_two_stage_v2", source)
         self.assertIn("ENABLE_STAGE2_AUTO_ADJUST", source)
 
     def test_prompt_defines_both_stages_and_complete_schema(self) -> None:
@@ -99,6 +99,38 @@ class HighChemistryAssetTests(unittest.TestCase):
             "不得填写 knowledge_L1 或 knowledge_L2 的模块名称",
         ):
             self.assertIn(required, stage1)
+
+    def test_v2_accuracy_scale_separates_easy_middle_and_hard_structures(self) -> None:
+        namespace = {}
+        source = PROMPT.read_text(encoding="utf-8")
+        exec(compile(source, str(PROMPT), "exec"), namespace)
+        stage1 = namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
+        for required in (
+            "普通高考考生总体中预计能够完整答对本题的比例",
+            "同一回答规则下的直接选项辨析",
+            "彼此独立的基础判断",
+            "6—8个有效化学决策",
+            "进入38—58比较",
+            "两个以上高阶阶段",
+            "共享同一物质流",
+            "答案依赖",
+            "模型依赖",
+        ):
+            self.assertIn(required, stage1)
+
+    def test_v2_stage2_audits_both_sides_of_middle_band(self) -> None:
+        namespace = {}
+        source = PROMPT.read_text(encoding="utf-8")
+        exec(compile(source, str(PROMPT), "exec"), namespace)
+        stage2 = namespace["VERIFICATION_PROMPT_PREFIX"]
+        for required in (
+            "第一步档位为难度3档",
+            "同时检查85边界和58边界",
+            "为什么不能达到85及以上",
+            "为什么不应低于58",
+            "不得只修改文字表述",
+        ):
+            self.assertIn(required, stage2)
 
     def test_stage1_json_example_matches_program_derived_scope(self) -> None:
         namespace = {}

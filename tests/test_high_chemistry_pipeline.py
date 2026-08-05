@@ -207,6 +207,42 @@ class ChemistryHighFeatureTests(unittest.TestCase):
         self.assertGreaterEqual(len(active), 5)
         self.assertEqual(high.names, [])
 
+    def test_strong_dependent_stages_do_not_require_four_reaction_nodes(self) -> None:
+        detected = core.detect_high_difficulty_features(
+            base_features(
+                reaction_count="2-3个",
+                reaction_relation="前后反应强依赖",
+                process_structure="多阶段强依赖",
+                step_count="6-8步",
+                reasoning_chain="多层因果",
+            )
+        )
+        self.assertIn("多反应或多阶段强耦合", detected.names)
+
+    def test_short_explicit_sequence_is_not_strong_stage_coupling(self) -> None:
+        detected = core.detect_high_difficulty_features(
+            base_features(
+                reaction_count="2-3个",
+                reaction_relation="显性顺序衔接",
+                process_structure="两阶段显性流程",
+                step_count="3-5步",
+            )
+        )
+        self.assertNotIn("多反应或多阶段强耦合", detected.names)
+
+    def test_quantitative_multi_model_dependency_is_a_high_feature(self) -> None:
+        detected = core.detect_high_difficulty_features(
+            base_features(
+                model_relation="多模型耦合",
+                calculation_model="多模型定量耦合",
+                calculation_complexity="多步计算",
+                equation_structure="单方程",
+                step_count="6-8步",
+                reasoning_chain="多层因果",
+            )
+        )
+        self.assertIn("多模型或多平衡耦合", detected.names)
+
 
 @unittest.skipIf(core is None, "高中化学核心模块尚未实现")
 class PipelineAndInputTests(unittest.TestCase):
@@ -295,6 +331,39 @@ class PipelineAndInputTests(unittest.TestCase):
         )
         self.assertEqual(result.final_level, "难度4档")
         self.assertTrue(result.needs_manual_review)
+
+    def test_structural_revision_requires_concrete_feature_evidence(self) -> None:
+        with self.assertRaisesRegex(ValueError, "结构修订"):
+            core.validate_structural_revision_evidence(
+                {
+                    "has_structural_revision": True,
+                    "feature_corrections": [],
+                    "missed_features": ["无"],
+                }
+            )
+
+    def test_structural_revision_accepts_feature_correction_or_real_omission(self) -> None:
+        core.validate_structural_revision_evidence(
+            {
+                "has_structural_revision": True,
+                "feature_corrections": [
+                    {
+                        "field": "step_count",
+                        "from": "3-5步",
+                        "to": "1-2步",
+                        "evidence": "各选项彼此独立，不构成连续链",
+                    }
+                ],
+                "missed_features": ["无"],
+            }
+        )
+        core.validate_structural_revision_evidence(
+            {
+                "has_structural_revision": True,
+                "feature_corrections": [],
+                "missed_features": ["遗漏了共享物质流依赖"],
+            }
+        )
 
 
 class InitialRedStateTests(unittest.TestCase):
