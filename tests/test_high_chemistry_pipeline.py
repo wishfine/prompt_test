@@ -487,9 +487,12 @@ class PromptAssetTests(unittest.TestCase):
 
     def test_blind_label_prompt_compiles(self):
         path = ROOT / "prompts" / "高中化学AI盲标提示词.txt"
+        source = path.read_text(encoding="utf-8")
         namespace = {}
-        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), namespace)
+        exec(compile(source, str(path), "exec"), namespace)
         self.assertTrue(namespace.get("BLIND_LABEL_PROMPT"))
+        for phrase in ("6—8个实质化学决策", "完整满足5档的全部条件", "实质化学决策", "confidence 的含义"):
+            self.assertIn(phrase, source)
 
 
 class RunnerAssetTests(unittest.TestCase):
@@ -532,6 +535,8 @@ class RunnerAssetTests(unittest.TestCase):
         self.assertIn("prepare_question(source, image_mode=image_mode)", source)
         self.assertNotIn('get("final_difficulty_level")', source)
         self.assertNotIn('get("difficulty_level_step1")', source)
+        for phrase in ("_redact_difficulty_metadata", "image_required_but_missing", "run_signature", "首次获得合法 JSON 后立即返回"):
+            self.assertIn(phrase, source)
 
 
 class DatasetCompatibilityTests(unittest.TestCase):

@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
+import hashlib
 import json
 import os
 import random
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -40,6 +43,10 @@ DEFAULT_OUTPUT = OUTPUTS_ROOT / "model_runs" / "high_chemistry_ai_reference.json
 DEFAULT_ERRORS = OUTPUTS_ROOT / "model_runs" / "high_chemistry_ai_reference_errors.jsonl"
 LEVEL_NAMES = {1: "送分题", 2: "基础题", 3: "中等题", 4: "拔高题", 5: "压轴题"}
 FILE_LOCK = asyncio.Lock()
+DIFFICULTY_METADATA_RE = re.compile(
+    r"送分题|基础题|中等题|拔高题|压轴题|难度[1-5]档|"
+    r"正确率|得分率|区分度|难度(?:较|很|偏|较为|等级|档位)"
+)
 
 
 def resolve_temperature() -> float | None:
@@ -80,14 +87,45 @@ def load_questions(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def load_processed_ids(path: Path) -> set[str]:
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def build_run_config(args: argparse.Namespace, input_path: Path, prompt_path: Path) -> dict[str, Any]:
+    return {
+        "labeler_version": "high_chemistry_blind_label_v2",
+        "input_path": str(input_path.resolve()),
+        "input_sha256": sha256_file(input_path),
+        "prompt_path": str(prompt_path.resolve()),
+        "prompt_sha256": sha256_file(prompt_path),
+        "model_name": MODEL_NAME,
+        "temperature": TEMPERATURE,
+        "image_mode": args.image_mode,
+        "timeout": args.timeout,
+        "retries_total": args.retries,
+    }
+
+
+def run_signature(config: dict[str, Any]) -> str:
+    payload = json.dumps(config, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def load_processed_ids(path: Path, signature: str) -> set[str]:
     if not path.exists():
         return set()
-    return {
-        str(row.get("question_id") or "")
-        for row in load_questions(path)
-        if str(row.get("question_id") or "")
-    }
+    rows = load_questions(path)
+    signatures = {str(row.get("run_signature") or "") for row in rows}
+    if not signatures or "" in signatures or signatures != {signature}:
+        raise ValueError(
+            "既有盲标输出的运行签名缺失或与本次不一致；"
+            "请使用新的 --output 文件，避免混合不同运行。"
+        )
+    return {str(row.get("question_id") or "") for row in rows if str(row.get("question_id") or "")}
 
 
 async def append_jsonl(path: Path, row: dict[str, Any]) -> None:
@@ -97,9 +135,63 @@ async def append_jsonl(path: Path, row: dict[str, Any]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def question_payload(source: dict[str, Any], image_mode: str) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+def _redact_difficulty_metadata(text: Any) -> tuple[str, int]:
+    value = str(text or "")
+    segments = re.split(r"(?<=[。！？!?\n])", value)
+    retained: list[str] = []
+    removed = 0
+    for segment in segments:
+        if DIFFICULTY_METADATA_RE.search(segment):
+            removed += 1
+        else:
+            retained.append(segment)
+    return "".join(retained).strip(), removed
+
+
+def _sanitize_analysis(question: dict[str, Any]) -> int:
+    removed = 0
+    if "analysis" in question:
+        question["analysis"], count = _redact_difficulty_metadata(question["analysis"])
+        removed += count
+    for subquestion in question.get("sub_questions") or []:
+        if isinstance(subquestion, dict):
+            removed += _sanitize_analysis(subquestion)
+    return removed
+
+
+def _declared_image_urls(question: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    for row in [question, *(question.get("sub_questions") or [])]:
+        if not isinstance(row, dict):
+            continue
+        for field in ("stem_image_url", "stem_pic_url", "analysis_image_url", "analysis_pic_url"):
+            url = str(row.get(field) or "").strip()
+            if url and url not in urls:
+                urls.append(url)
+    return urls
+
+
+def question_payload(source: dict[str, Any], image_mode: str) -> tuple[dict[str, Any], dict[str, Any], list[str], dict[str, Any]]:
     prepared = prepare_question(source, image_mode=image_mode)
-    return prepared.question, prepared.input_quality, prepared.selected_image_urls
+    question = copy.deepcopy(prepared.question)
+    redacted_segments = _sanitize_analysis(question)
+    declared_images = _declared_image_urls(question)
+    image_required_but_missing = (
+        prepared.input_quality["content_mode"] == "image_dependent"
+        or (
+            prepared.input_quality["image_required"]
+            and prepared.input_quality["image_available"]
+            and not prepared.selected_image_urls
+        )
+    ) and not prepared.selected_image_urls
+    image_metadata = {
+        "declared_image_count": len(declared_images),
+        "selected_image_count": len(prepared.selected_image_urls),
+        "image_required": prepared.input_quality["image_required"],
+        "image_required_but_missing": image_required_but_missing,
+        "analysis_metadata_segments_redacted": redacted_segments,
+    }
+    return question, prepared.input_quality, prepared.selected_image_urls, image_metadata
 
 
 def build_question_text(question: dict[str, Any], input_quality: dict[str, Any]) -> str:
@@ -162,6 +254,7 @@ async def call_label(
     timeout: int,
     retries: int,
 ) -> tuple[dict[str, Any], dict[str, int], float]:
+    """最多尝试 retries 次；首次获得合法 JSON 后立即返回，不重新抽样。"""
     started = time.time()
     total = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     repair = ""
@@ -208,11 +301,14 @@ async def call_label(
 async def process_one(
     source: dict[str, Any], *, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore,
     prompt: str, output: Path, errors: Path, image_mode: str, timeout: int, retries: int,
+    signature: str, config: dict[str, Any],
 ) -> None:
     async with semaphore:
-        question, input_quality, image_urls = question_payload(source, image_mode)
+        question, input_quality, image_urls, image_metadata = question_payload(source, image_mode)
         question_id = str(question.get("question_id") or "")
         try:
+            if image_metadata["image_required_but_missing"]:
+                raise ValueError("盲标所需图片未被纳入，拒绝依据残缺文本猜测")
             label, api_usage, elapsed = await call_label(
                 session, prompt=prompt, question_text=build_question_text(question, input_quality),
                 image_urls=image_urls, timeout=timeout, retries=retries,
@@ -225,7 +321,10 @@ async def process_one(
                 "confidence": label["confidence"],
                 "input_quality": input_quality,
                 "selected_image_urls": image_urls,
-                "labeler_version": "high_chemistry_blind_label_v1",
+                "image_metadata": image_metadata,
+                "run_signature": signature,
+                "run_config": config,
+                "labeler_version": config["labeler_version"],
                 "model_name": MODEL_NAME,
                 "temperature": TEMPERATURE,
                 "api_time_seconds": round(elapsed, 2),
@@ -236,6 +335,9 @@ async def process_one(
                 "question_id": question_id,
                 "error_type": type(exc).__name__, "error": str(exc),
                 "input_quality": input_quality,
+                "image_metadata": image_metadata,
+                "run_signature": signature,
+                "run_config": config,
             })
 
 
@@ -257,9 +359,16 @@ async def run(args: argparse.Namespace) -> None:
     if not input_path.exists():
         raise FileNotFoundError(f"输入文件不存在：{input_path}")
     prompt = load_prompt(args.prompt)
+    prompt_path = Path(args.prompt)
+    config = build_run_config(args, input_path, prompt_path)
+    signature = run_signature(config)
     rows = load_questions(input_path)
-    processed = load_processed_ids(output_path)
+    processed = load_processed_ids(output_path, signature)
     pending = [row for row in rows if str(row.get("question_id") or "") not in processed]
+    print(f"盲标运行签名：{signature}")
+    print(f"输入 SHA256：{config['input_sha256']}")
+    print(f"Prompt SHA256：{config['prompt_sha256']}")
+    print(f"模型：{MODEL_NAME}；temperature：{TEMPERATURE}；总尝试次数：{args.retries}")
     print(f"加载题目：{len(rows)}；已盲标：{len(processed)}；待盲标：{len(pending)}")
     if not pending:
         return
@@ -270,6 +379,7 @@ async def run(args: argparse.Namespace) -> None:
         tasks = [asyncio.create_task(process_one(
             row, session=session, semaphore=semaphore, prompt=prompt, output=output_path,
             errors=error_path, image_mode=args.image_mode, timeout=args.timeout, retries=args.retries,
+            signature=signature, config=config,
         )) for row in pending]
         for task in asyncio.as_completed(tasks):
             await task
