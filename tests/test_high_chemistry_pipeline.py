@@ -499,7 +499,7 @@ class RunnerAssetTests(unittest.TestCase):
     def test_runner_defaults_to_supplied_dataset_and_prompt(self):
         self.assertIn('"high-chemistry-sample25k.jsonl"', self.source)
         self.assertIn('"高中化学难度打标提示词.txt"', self.source)
-        self.assertTrue((ROOT / "outputs" / "relevant_doc" / "high-chemistry-sample25k.jsonl").exists())
+        self.assertTrue((ROOT / "data" / "samples" / "high-chemistry-sample25k.jsonl").exists())
 
     def test_runner_never_sends_source_labels(self):
         for field in ("difficulty", "percent_correct", "answered_count"):
@@ -510,7 +510,7 @@ class RunnerAssetTests(unittest.TestCase):
 class DatasetCompatibilityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.data_path = ROOT / "outputs" / "relevant_doc" / "high-chemistry-sample25k.jsonl"
+        cls.data_path = ROOT / "data" / "samples" / "high-chemistry-sample25k.jsonl"
 
     def test_all_25000_rows_are_type_aware_compatible(self):
         rows = 0
