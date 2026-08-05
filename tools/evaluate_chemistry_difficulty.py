@@ -22,6 +22,14 @@ LEVEL_NUMBER_TO_NAME = {
     value: key for key, value in LEVEL_NAME_TO_NUMBER.items()
 }
 LEVEL_NAMES = list(LEVEL_NAME_TO_NUMBER)
+PREDICTION_LEVEL_NAME_TO_NUMBER = {
+    **LEVEL_NAME_TO_NUMBER,
+    "难度1档": 1,
+    "难度2档": 2,
+    "难度3档": 3,
+    "难度4档": 4,
+    "难度5档": 5,
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,6 +76,30 @@ def jsonl_items(
 
 def load_labels(path: Path) -> dict[str, dict[str, Any]]:
     labels: dict[str, dict[str, Any]] = {}
+    if path.suffix.lower() == ".jsonl":
+        for line_number, row in jsonl_items(path):
+            question_id = str(row.get("question_id", "")).strip()
+            if not question_id:
+                continue
+            try:
+                level = int(row["standard_level"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"{path} 第 {line_number} 行缺少合法 standard_level"
+                ) from exc
+            if level not in LEVEL_NUMBER_TO_NAME:
+                raise ValueError(
+                    f"ID={question_id} 的标准等级非法: {level}"
+                )
+            if question_id in labels:
+                raise ValueError(f"标签中存在重复 question_id: {question_id}")
+            labels[question_id] = {
+                "standard_stars": row.get("standard_stars", ""),
+                "standard_level": level,
+                "standard_level_name": row.get("standard_level_name") or LEVEL_NUMBER_TO_NAME[level],
+                "reason": row.get("reason", ""),
+            }
+        return labels
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         for row in csv.DictReader(handle):
             question_id = str(row.get("question_id", "")).strip()
@@ -120,12 +152,18 @@ def extract_prediction(
             )
         level_name = level_name or rating.get("difficulty_level")
     if level_name is None:
-        level_name = item.get("difficulty_level")
+        if level_source == "pre-postprocess":
+            level_name = item.get("difficulty_level_step1")
+        level_name = (
+            level_name
+            or item.get("final_difficulty_level")
+            or item.get("difficulty_level")
+        )
     if level_name is not None:
         level_name = str(level_name).strip()
     return (
         level_name,
-        LEVEL_NAME_TO_NUMBER.get(level_name) if level_name else None,
+        PREDICTION_LEVEL_NAME_TO_NUMBER.get(level_name) if level_name else None,
     )
 
 

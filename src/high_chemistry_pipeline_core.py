@@ -160,7 +160,13 @@ FEATURE_VALUE_ALIASES: dict[str, dict[str, Any]] = {
         "显性临界": "显性临界或过量条件",
         "隐含临界": "隐含临界或过量条件",
     },
-    "calculation_complexity": {"直接判断": "无需计算"},
+    "calculation_complexity": {
+        "直接判断": "无需计算",
+        "参数计算": "参数或范围计算",
+    },
+    "stoichiometric_calculation": {
+        "守恒计算": "守恒差量或混合计算",
+    },
     "information_carrier": {
         "函数图像": "函数曲线",
         "流程图": "工艺流程图",

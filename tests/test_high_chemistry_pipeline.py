@@ -202,6 +202,19 @@ class Stage1Tests(unittest.TestCase):
         ])
         self.assertEqual(normalized["features"]["knowledge_L1"], ["化学基本概念与定量关系"])
 
+    def test_common_calculation_aliases_are_normalized(self):
+        rating = stage1_rating(base_features(
+            calculation_complexity="参数计算",
+            stoichiometric_calculation="守恒计算",
+        ), 80)
+        normalized, _ = core.normalize_stage1_rating(rating)
+        self.assertEqual(
+            normalized["features"]["calculation_complexity"], "参数或范围计算"
+        )
+        self.assertEqual(
+            normalized["features"]["stoichiometric_calculation"], "守恒差量或混合计算"
+        )
+
     def test_enrichment_derives_knowledge_fields(self):
         features = base_features(
             knowledge_L1=["化学基本概念与定量关系", "化学反应原理"],
@@ -472,6 +485,12 @@ class PromptAssetTests(unittest.TestCase):
         ):
             self.assertIn(phrase, text)
 
+    def test_blind_label_prompt_compiles(self):
+        path = ROOT / "prompts" / "高中化学AI盲标提示词.txt"
+        namespace = {}
+        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), namespace)
+        self.assertTrue(namespace.get("BLIND_LABEL_PROMPT"))
+
 
 class RunnerAssetTests(unittest.TestCase):
     def setUp(self):
@@ -505,6 +524,14 @@ class RunnerAssetTests(unittest.TestCase):
         for field in ("difficulty", "percent_correct", "answered_count"):
             self.assertIn(field, core.UNTRUSTED_LABEL_FIELDS)
         self.assertIn("source_difficulty_untrusted", self.source)
+
+    def test_blind_label_runner_compiles_and_avoids_pipeline_labels(self):
+        path = ROOT / "src" / "high_chemistry_blind_label.py"
+        source = path.read_text(encoding="utf-8")
+        compile(source, str(path), "exec")
+        self.assertIn("prepare_question(source, image_mode=image_mode)", source)
+        self.assertNotIn('get("final_difficulty_level")', source)
+        self.assertNotIn('get("difficulty_level_step1")', source)
 
 
 class DatasetCompatibilityTests(unittest.TestCase):
