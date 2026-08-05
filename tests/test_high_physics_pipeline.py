@@ -1274,28 +1274,49 @@ class VerificationRecalculationTests(unittest.TestCase):
 
 
 class PromptAssetTests(unittest.TestCase):
-    def test_prompt_config_contains_both_stages_and_continuous_boundaries(self) -> None:
+    def test_stage1_prompt_does_not_disclose_program_postprocessing(self) -> None:
         path = ROOT / "prompts" / "高中物理难度打标提示词.txt"
         namespace: dict[str, str] = {}
         exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), {}, namespace)
         stage1 = namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
+        stage1_suffix = namespace["FEATURE_EXTRACTION_PROMPT_SUFFIX"]
         stage2 = namespace["VERIFICATION_PROMPT_PREFIX"]
-        self.assertIn("original_predicted_accuracy", stage2)
-        self.assertIn("high_difficulty_feature_count", stage2)
-        self.assertIn("multiplier_applied", stage2)
-        self.assertIn("predicted_accuracy >= 88", stage1)
-        self.assertIn("85 <= predicted_accuracy < 88", stage1)
-        self.assertIn("58 <= predicted_accuracy < 85", stage1)
-        self.assertIn("38 <= predicted_accuracy < 58", stage1)
-        self.assertIn("predicted_accuracy < 38", stage1)
-        self.assertIn("组合乘数效应", stage1)
+        for leaked_text in (
+            "0.85",
+            "0.70",
+            "乘数",
+            "高难特征",
+            "high_difficulty_feature_count",
+            "multiplier_applied",
+            "difficulty_level_step1",
+            "程序稍后会用",
+            "难度1档",
+            "难度2档",
+            "难度3档",
+            "难度4档",
+            "难度5档",
+        ):
+            with self.subTest(leaked_text=leaked_text):
+                self.assertNotIn(leaked_text, stage1)
+                self.assertNotIn(leaked_text, stage1_suffix)
+
+        self.assertIn("88正确率边界", stage1)
+        self.assertIn("85正确率边界", stage1)
+        self.assertIn("58正确率边界", stage1)
+        self.assertIn("38正确率边界", stage1)
         self.assertIn("普通高考的全体考生", stage1)
         self.assertIn("模板分数", stage1)
         self.assertIn("局部模型熟悉度", stage1)
         self.assertIn("整题完成负担", stage1)
-        self.assertIn("task_completion_structure", stage1)
-        self.assertIn("threshold_review", stage1)
-        self.assertIn("threshold_evidence", stage1)
+
+        self.assertIn("original_predicted_accuracy", stage2)
+        self.assertIn("active_feature_count", stage2)
+        self.assertIn("high_difficulty_feature_count", stage2)
+        self.assertIn("possible_high_feature_overlaps", stage2)
+        self.assertIn("multiplier_applied", stage2)
+        self.assertIn("3个高难特征：乘数0.85", stage2)
+        self.assertIn("4个及以上高难特征：乘数0.70", stage2)
+        self.assertIn("predicted_accuracy >= 88：难度1档", stage2)
         self.assertIn("reviewed_original_predicted_accuracy", stage2)
         self.assertIn("has_structural_revision", stage2)
         self.assertIn("adjacent_boundary_review", stage2)
@@ -1305,28 +1326,18 @@ class PromptAssetTests(unittest.TestCase):
         self.assertNotIn('"accuracy_self_check"', stage1)
         self.assertIn("普通单选题或多选题整体只算一个作答任务", stage1)
         self.assertIn("error_risk 不负责决定正确率所属的大区间", stage1)
-        self.assertIn("四条边界的固定判断顺序", stage1)
         self.assertIn("accuracy_scale_audit", stage2)
         blocks = re.findall(r'\{\n  "features":.*?\n\}', stage1, re.S)
         self.assertTrue(blocks)
         example = json.loads(blocks[-1])
+        self.assertEqual(
+            set(example),
+            {"features", "reason", "predicted_accuracy"},
+        )
         core.validate_feature_schema(example["features"])
-        self.assertIn(
-            example["local_model_familiarity"],
-            core.LOCAL_MODEL_FAMILIARITY_OPTIONS,
-        )
-        self.assertIn(
-            example["whole_question_burden"],
-            core.WHOLE_QUESTION_BURDEN_OPTIONS,
-        )
-        self.assertIn(
-            example["task_completion_structure"],
-            core.TASK_COMPLETION_STRUCTURE_OPTIONS,
-        )
         enriched = core.enrich_stage1_rating(example)
-        self.assertTrue(
-            enriched["accuracy_scale_audit"]["threshold_review_consistent"]
-        )
+        self.assertEqual(enriched["original_predicted_accuracy"], 76.0)
+        self.assertIn("difficulty_level_step1", enriched)
 
 
 if __name__ == "__main__":

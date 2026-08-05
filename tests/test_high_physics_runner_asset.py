@@ -17,6 +17,36 @@ import high_physics_difficulty_rating_and_verify as runner  # noqa: E402
 
 
 class RunnerAssetTests(unittest.TestCase):
+    def test_prompt_stage_separation_validator_rejects_stage1_leak(self) -> None:
+        with self.assertRaisesRegex(ValueError, "第一阶段 Prompt 泄露后处理规则"):
+            runner._validate_prompt_stage_separation(
+                "提取 features，3个高难特征乘0.85",
+                "输出 predicted_accuracy",
+                "第二阶段复核",
+            )
+
+    def test_prompt_stage_separation_validator_accepts_isolated_stages(self) -> None:
+        runner._validate_prompt_stage_separation(
+            "提取 features 并独立估计 predicted_accuracy",
+            "只输出合法 JSON",
+            "复核 high_difficulty_feature_count 和 multiplier_applied",
+        )
+
+    def test_stage1_model_output_is_restricted_to_public_contract(self) -> None:
+        restricted = runner._restrict_stage1_model_output(
+            {
+                "features": {"step_count": "1-2步"},
+                "reason": "测试",
+                "predicted_accuracy": 90,
+                "multiplier_applied": 0.7,
+                "difficulty_level_step1": "难度5档",
+            }
+        )
+        self.assertEqual(
+            set(restricted),
+            {"features", "reason", "predicted_accuracy"},
+        )
+
     def test_runner_exists_and_compiles(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
@@ -28,7 +58,7 @@ class RunnerAssetTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("不得用“答案不复用”推出“不共享模型”", prompt)
         self.assertIn(
-            "task_completion_structure 描述答案和失分传播方式，"
+            "任务完成结构描述答案和失分传播方式，"
             "不能替代 shared_model_across_subquestions",
             prompt,
         )

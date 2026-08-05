@@ -65,6 +65,9 @@ DEFAULT_PROMPT = ROOT / "prompts" / "高中物理难度打标提示词.txt"
 DEFAULT_OUTPUT = ROOT / "outputs" / "model_runs" / "high_physics_two_stage.jsonl"
 DEFAULT_ERRORS = ROOT / "outputs" / "model_runs" / "high_physics_two_stage_errors.jsonl"
 DEFAULT_CACHE = ROOT / "outputs" / "cache" / "high_physics_stage1_prefix_cache.json"
+PIPELINE_VERSION = "high_physics_two_stage_v7_2_1"
+SUBJECT_DISPLAY_NAME = "高中物理"
+PROGRESS_DESCRIPTION = "High Physics Pipeline"
 
 CACHE_EXPIRE_SECONDS = 5 * 24 * 3600
 FILE_LOCK = asyncio.Lock()
@@ -97,6 +100,44 @@ def resolve_temperature(model_name: str, raw_value: str) -> float | None:
 TEMPERATURE = resolve_temperature(MODEL_NAME, TEMPERATURE_RAW)
 
 
+def _validate_prompt_stage_separation(
+    stage1_prefix: str,
+    stage1_suffix: str,
+    stage2_prefix: str,
+) -> None:
+    """Fail fast when program-only postprocessing rules leak into stage 1."""
+    del stage2_prefix  # Stage 2 is intentionally allowed to see program metadata.
+    stage1_prompt = f"{stage1_prefix}\n{stage1_suffix}"
+    forbidden_markers = (
+        "0.85",
+        "0.70",
+        "乘数",
+        "高难特征",
+        "high_difficulty_feature_count",
+        "multiplier_applied",
+        "difficulty_level_step1",
+        "程序稍后会用",
+        "难度1档",
+        "难度2档",
+        "难度3档",
+        "难度4档",
+        "难度5档",
+    )
+    leaked = [marker for marker in forbidden_markers if marker in stage1_prompt]
+    if leaked:
+        raise ValueError(
+            "第一阶段 Prompt 泄露后处理规则：" + "、".join(leaked)
+        )
+
+
+def _restrict_stage1_model_output(value: dict[str, Any]) -> dict[str, Any]:
+    """Keep only fields that belong to the stage-1 model contract."""
+    return {
+        key: copy.deepcopy(value.get(key))
+        for key in ("features", "reason", "predicted_accuracy")
+    }
+
+
 def load_prompt_config(path: str | Path) -> None:
     global FEATURE_EXTRACTION_PROMPT_PREFIX
     global FEATURE_EXTRACTION_PROMPT_SUFFIX
@@ -118,11 +159,16 @@ def load_prompt_config(path: str | Path) -> None:
     missing = [name for name in required if not namespace.get(name)]
     if missing:
         raise ValueError(f"Prompt 缺少变量：{', '.join(missing)}")
+    _validate_prompt_stage_separation(
+        str(namespace[required[0]]),
+        str(namespace[required[1]]),
+        str(namespace[required[2]]),
+    )
     FEATURE_EXTRACTION_PROMPT_PREFIX = str(namespace[required[0]])
     FEATURE_EXTRACTION_PROMPT_SUFFIX = str(namespace[required[1]])
     VERIFICATION_PROMPT_PREFIX = str(namespace[required[2]])
     VERIFICATION_PROMPT_SUFFIX = str(namespace[required[3]])
-    print("成功加载高中物理两阶段 Prompt")
+    print(f"成功加载{SUBJECT_DISPLAY_NAME}两阶段 Prompt")
 
 
 def _prefix_hash() -> str:
@@ -432,7 +478,7 @@ def build_pipeline_error(
     """构造可续跑的错误记录；第二阶段失败时保留已付费的第一阶段结果。"""
     record = {
         **copy.deepcopy(output_base),
-        "pipeline_version": "high_physics_two_stage_v7_2_1",
+        "pipeline_version": PIPELINE_VERSION,
         "model_name": MODEL_NAME,
         "failed_stage": "stage2" if stage1 is not None else "stage1",
         "rating_error": str(error),
@@ -469,7 +515,7 @@ def build_stage2_fallback_result(
     )
     return {
         **copy.deepcopy(output_base),
-        "pipeline_version": "high_physics_two_stage_v7_2_1",
+        "pipeline_version": PIPELINE_VERSION,
         "model_name": MODEL_NAME,
         "temperature": TEMPERATURE,
         "stage2_auto_adjustment_enabled": ENABLE_STAGE2_AUTO_ADJUST,
@@ -529,8 +575,8 @@ async def call_stage1(
                 + dynamic_text
                 + "\n\n【格式修复要求】\n"
                 + repair_feedback
-                + "\n请重新输出完整合法 JSON。不得省略任何 features、"
-                "V7 正确率标尺字段或 predicted_accuracy。"
+                + "\n请重新输出完整合法 JSON。不得省略任何必需 "
+                "features 或 predicted_accuracy。"
             )
         else:
             prompt_text = (
@@ -559,7 +605,9 @@ async def call_stage1(
                 current_usage = _usage(body)
                 for key in total_usage:
                     total_usage[key] += current_usage[key]
-                parsed = _parse_json_object(_extract_output_text(body))
+                parsed = _restrict_stage1_model_output(
+                    _parse_json_object(_extract_output_text(body))
+                )
                 try:
                     raw_features = copy.deepcopy(parsed.get("features"))
                     normalized, normalization_log = normalize_stage1_rating(
@@ -786,7 +834,7 @@ async def process_question(
             }
             result = {
                 **output_base,
-                "pipeline_version": "high_physics_two_stage_v7_2_1",
+                "pipeline_version": PIPELINE_VERSION,
                 "model_name": MODEL_NAME,
                 "temperature": TEMPERATURE,
                 "stage2_auto_adjustment_enabled": (
@@ -878,7 +926,7 @@ def sample_questions_per_level(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="高中物理两阶段难度评级")
+    parser = argparse.ArgumentParser(description=f"{SUBJECT_DISPLAY_NAME}两阶段难度评级")
     parser.add_argument("-i", "--input", default=str(DEFAULT_INPUT))
     parser.add_argument("-o", "--output", default=str(DEFAULT_OUTPUT))
     parser.add_argument("-e", "--errors", default=str(DEFAULT_ERRORS))
@@ -965,7 +1013,7 @@ async def run(args: argparse.Namespace) -> None:
                 raise RuntimeError("第一阶段前缀缓存初始化失败")
             cache_state = PrefixCacheState(cache_id, cache_path)
         batch_size = max(args.concurrency, args.task_batch_size)
-        progress = tqdm(total=len(pending), desc="High Physics Pipeline", unit="item")
+        progress = tqdm(total=len(pending), desc=PROGRESS_DESCRIPTION, unit="item")
         for batch_start in range(0, len(pending), batch_size):
             batch = pending[batch_start : batch_start + batch_size]
             tasks = [
