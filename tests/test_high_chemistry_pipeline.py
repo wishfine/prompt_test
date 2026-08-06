@@ -628,6 +628,15 @@ class PromptAssetTests(unittest.TestCase):
         ):
             self.assertIn(phrase, text)
 
+    def test_prompt_defines_nontrivial_standard_model_joint_checks(self):
+        text = (ROOT / "prompts" / "高中化学难度打标提示词.txt").read_text(encoding="utf-8")
+        for phrase in (
+            "两个及以上相互独立的化学条件、关系或规范",
+            "单一教材事实或单一显性规则",
+            "多个彼此独立的一步教材事实判断",
+        ):
+            self.assertIn(phrase, text)
+
 class RunnerAssetTests(unittest.TestCase):
     def setUp(self):
         self.path = ROOT / "src" / "high_chemistry_difficulty_rating_and_verify.py"
@@ -635,8 +644,10 @@ class RunnerAssetTests(unittest.TestCase):
 
     def test_runner_compiles(self):
         compile(self.source, str(self.path), "exec")
-        self.assertIn('"high_chemistry_two_stage_v6"', self.source)
+        self.assertIn('"high_chemistry_two_stage_v7"', self.source)
         self.assertIn("_stage1_repair_feedback", self.source)
+        self.assertIn("_is_retriable_image_download_timeout", self.source)
+        self.assertIn("timeout while downloading url", self.source)
 
     def test_runner_has_required_controls(self):
         for flag in (

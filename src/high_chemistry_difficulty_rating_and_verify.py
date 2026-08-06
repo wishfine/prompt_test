@@ -195,6 +195,11 @@ async def _post_response(
             return response.status, None, text
 
 
+def _is_retriable_image_download_timeout(status: int, error: str) -> bool:
+    """Recognize the API's transient remote-image fetch timeout."""
+    return status == 400 and "timeout while downloading url" in error.lower()
+
+
 async def create_prefix_cache(
     session: aiohttp.ClientSession,
     cache_path: Path,
@@ -441,7 +446,7 @@ async def call_stage1(
                     cache_state.response_id = refreshed
                     cache_id = refreshed
                 continue
-            if status != 429 and status < 500:
+            if status != 429 and status < 500 and not _is_retriable_image_download_timeout(status, error):
                 break
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
             last_error = str(exc)
@@ -566,7 +571,7 @@ def build_stage2_fallback(
 ) -> dict[str, Any]:
     return {
         **output_base,
-        "pipeline_version": "high_chemistry_two_stage_v6",
+        "pipeline_version": "high_chemistry_two_stage_v7",
         "model_name": MODEL_NAME,
         "difficulty_rating_stage1": stage1,
         "difficulty_level_step1": stage1["difficulty_level_step1"],
@@ -637,7 +642,7 @@ async def process_question(
             total_usage = {key: usage1[key] + usage2[key] for key in usage1}
             await append_jsonl(output_path, {
                 **output_base,
-                "pipeline_version": "high_chemistry_two_stage_v6",
+                "pipeline_version": "high_chemistry_two_stage_v7",
                 "model_name": MODEL_NAME,
                 "temperature": TEMPERATURE,
                 "stage2_auto_adjustment_enabled": ENABLE_STAGE2_AUTO_ADJUST,
