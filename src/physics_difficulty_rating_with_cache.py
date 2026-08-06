@@ -90,6 +90,46 @@ ENABLE_TEACHER_FEEDBACK_GUARDS = (
     not in {"0", "false", "no", "off"}
 )
 
+# 首轮图片输入默认关闭，保证当前生产冻结版行为不变。auto 仅用于条件传图
+# A/B：图片只补充文字无法可靠表达的拓扑、几何、曲线或装置关系。
+PHYSICS_IMAGE_MODE = os.getenv("PHYSICS_IMAGE_MODE", "off").strip().lower() or "off"
+if PHYSICS_IMAGE_MODE not in {"off", "auto", "all"}:
+    raise ValueError(
+        f"不支持的 PHYSICS_IMAGE_MODE={PHYSICS_IMAGE_MODE!r}；"
+        "可选值：off, auto, all"
+    )
+PHYSICS_MAX_IMAGES = max(1, int(os.getenv("PHYSICS_MAX_IMAGES", "6")))
+
+IMAGE_URL_RE = re.compile(r"https?://[^\s,，;；\"']+")
+VISUAL_PLACEHOLDER_RE = re.compile(
+    r"(<img\b|<image\b|\[image\]|\[图片\]|【图片】|图片缺失)",
+    re.IGNORECASE,
+)
+VISUAL_GRAPH_RE = re.compile(
+    r"(?:s|v|u|i|r|f)[-－—–]?(?:t|u|i|f)\s*图|"
+    r"曲线|图线|波形|波纹|坐标轴|斜率|交点|轨迹|函数关系|"
+    r"图像反推|图象反推",
+    re.IGNORECASE,
+)
+VISUAL_CIRCUIT_RE = re.compile(
+    r"电路|实物图|滑动变阻器|电流表|电压表|热敏|湿敏|压敏|"
+    r"光敏|继电器|电磁铁|多挡|高温挡|低温挡|保温挡|加热挡"
+)
+VISUAL_SPATIAL_RE = re.compile(
+    r"滑轮|力臂|弹簧|浮沉|漂浮|悬浮|沉底|液面|影子|光路|"
+    r"折射|反射|像的位置|圆弧|圆周运动|作用点|运动路径|"
+    r"作图|画出|标出|绕线|磁感线"
+)
+VISUAL_APPARATUS_RE = re.compile(
+    r"实验装置|装置图|连接电路|连接实物|控制电路|工作原理图|"
+    r"结构示意图|机械装置|测量仪|传感器"
+)
+MATERIAL_NEW_RELATION_RE = re.compile(
+    r"查阅资料|资料表明|资料中|给出.*(?:公式|关系式)|新概念|"
+    r"向心力|向心加速度|陌生装置",
+    re.S,
+)
+
 
 def resolve_temperature(model_name: str, raw_value: str) -> Optional[float]:
     """Lite 服务端固定使用 temperature=1，其他模型保留环境变量配置。"""
@@ -2578,6 +2618,157 @@ def construct_question_content(data: Dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+def extract_image_urls(value: Any) -> List[str]:
+    """兼容单 URL、逗号拼接 URL 和列表，保持原顺序并去重。"""
+    if isinstance(value, (list, tuple)):
+        candidates: List[str] = []
+        for item in value:
+            candidates.extend(IMAGE_URL_RE.findall(str(item or "")))
+    else:
+        candidates = IMAGE_URL_RE.findall(str(value or ""))
+    urls: List[str] = []
+    for candidate in candidates:
+        url = candidate.rstrip(")]}>。")
+        if url not in urls:
+            urls.append(url)
+    return urls
+
+
+def _prefer_raw_question_images(urls: List[str]) -> List[str]:
+    """文字已单独发送时优先原始题图，避免整页截图重复消耗视觉 token。"""
+    raw_urls = [url for url in urls if "/image/externalized/" not in url]
+    return raw_urls or urls
+
+
+def _question_visual_text(data: Dict[str, Any]) -> str:
+    values: List[str] = []
+    for key in ("stem", "options", "analysis"):
+        values.append(str(data.get(key, "") or ""))
+    for item in data.get("sub_questions") or []:
+        if isinstance(item, dict):
+            values.extend(str(item.get(key, "") or "") for key in ("stem", "options", "analysis"))
+        else:
+            values.append(str(item or ""))
+    return "\n".join(values)
+
+
+def select_rating_images(
+    data: Dict[str, Any],
+    image_mode: Optional[str] = None,
+) -> Dict[str, Any]:
+    """为首轮评级选择必要题图；只根据题面结构路由，不使用预测等级。"""
+    mode = str(image_mode or PHYSICS_IMAGE_MODE).strip().lower()
+    if mode not in {"off", "auto", "all"}:
+        raise ValueError(f"非法图片模式: {mode}")
+
+    all_stem_urls = extract_image_urls(data.get("stem_pic_url"))
+    all_analysis_urls = extract_image_urls(data.get("analysis_pic_url"))
+    stem_urls = _prefer_raw_question_images(all_stem_urls)
+    analysis_urls = _prefer_raw_question_images(all_analysis_urls)
+    available_urls = list(dict.fromkeys(all_stem_urls + all_analysis_urls))
+    text = _question_visual_text(data)
+    stem_and_options = "\n".join(
+        [str(data.get("stem", "") or ""), str(data.get("options", "") or "")]
+    )
+    reasons: List[str] = []
+
+    if mode == "all" and available_urls:
+        reasons.append("all模式：发送全部可用题干图和解析图")
+    elif mode == "auto" and available_urls:
+        image_placeholders = len(VISUAL_PLACEHOLDER_RE.findall(stem_and_options))
+        multi_panel = bool(
+            re.search(
+                r"图甲.*图乙|甲图.*乙图|图[甲乙丙丁].*图[甲乙丙丁]|"
+                r"两幅图|三幅图|多图|分别如图",
+                text,
+                re.S,
+            )
+        )
+        graph_relation = bool(VISUAL_GRAPH_RE.search(text))
+        circuit_topology = bool(VISUAL_CIRCUIT_RE.search(text))
+        spatial_relation = bool(VISUAL_SPATIAL_RE.search(text))
+        apparatus_relation = bool(VISUAL_APPARATUS_RE.search(text))
+        material_new_relation = bool(MATERIAL_NEW_RELATION_RE.search(text))
+        visual_options = image_placeholders >= 2
+        long_visual_chain = bool(
+            len(stem_and_options) >= 450
+            and image_placeholders >= 1
+            and (
+                len(re.findall(r"[（(]\s*\d+\s*[)）]", text)) >= 2
+                or len(stem_urls) >= 2
+            )
+        )
+
+        if multi_panel:
+            reasons.append("多图或多面板之间存在对应关系")
+        if graph_relation:
+            reasons.append("曲线、波形、轨迹或坐标关系影响有效决策数")
+        if circuit_topology:
+            reasons.append("电路拓扑或敏感元件连接关系需要题图")
+        if spatial_relation:
+            reasons.append("几何、光路、受力、滑轮或弹簧关系需要题图")
+        if apparatus_relation:
+            reasons.append("装置结构或连接方式影响模型建立")
+        if material_new_relation:
+            reasons.append("材料新关系需要与题图中的状态或路径联合建模")
+        if visual_options:
+            reasons.append("多个选项以图片承载，文字解析不能替代题面比较")
+        if long_visual_chain:
+            reasons.append("长综合题的多个任务共同依赖题图")
+
+    selected_urls: List[str] = []
+    if reasons and mode != "off":
+        if mode == "all":
+            selected_urls = available_urls
+        elif stem_urls:
+            selected_urls = stem_urls
+        else:
+            selected_urls = analysis_urls
+    selected_urls = selected_urls[:PHYSICS_MAX_IMAGES]
+    return {
+        "mode": mode,
+        "image_available": bool(available_urls),
+        "available_url_count": len(available_urls),
+        "image_included": bool(selected_urls),
+        "selected_url_count": len(selected_urls),
+        "selected_urls": selected_urls,
+        "reasons": reasons if selected_urls else (
+            ["图片模式关闭"] if mode == "off" else
+            (["无可用图片URL"] if not available_urls else ["结构化文字足以支持定档"])
+        ),
+    }
+
+
+def build_model_user_content(
+    question_content: str,
+    response_id: Optional[str],
+    image_urls: Optional[List[str]] = None,
+) -> Any:
+    """构建 Responses API 用户内容；无图时保持历史字符串格式不变。"""
+    dynamic_text = question_content + DIFFICULTY_RATING_PROMPT_SUFFIX
+    full_text = (
+        dynamic_text
+        if response_id
+        else DIFFICULTY_RATING_PROMPT_PREFIX + "\n\n" + dynamic_text
+    )
+    urls = list(image_urls or [])
+    if not urls:
+        return full_text
+    content: List[Dict[str, str]] = [
+        {
+            "type": "input_text",
+            "text": (
+                full_text
+                + "\n\n【图片使用约束】下列图片只用于补充文字无法完整表达的"
+                "装置连接、几何位置、曲线阶段或多图对应关系。不得因为存在图片、"
+                "图片数量多或题面较长而升档，仍须按真实有效物理决策定级。"
+            ),
+        }
+    ]
+    content.extend({"type": "input_image", "image_url": url} for url in urls)
+    return content
+
+
 def parse_model_response(text: str) -> Dict[str, Any]:
     if not text:
         return {}
@@ -2597,11 +2788,16 @@ def parse_model_response(text: str) -> Dict[str, Any]:
     return {}
 
 
-async def call_model_with_cache(question_content: str, session: aiohttp.ClientSession, retries: int, timeout_sec: int) -> Tuple[Dict[str, Any], float, int, int, int]:
+async def call_model_with_cache(
+    question_content: str,
+    session: aiohttp.ClientSession,
+    retries: int,
+    timeout_sec: int,
+    image_urls: Optional[List[str]] = None,
+) -> Tuple[Dict[str, Any], float, int, int, int]:
     response_id = await get_or_create_cache(session, retries, timeout_sec) if USE_CACHE else None
     if USE_CACHE and not response_id:
         return {}, 0.0, 0, 0, 0
-    dynamic_content = question_content + DIFFICULTY_RATING_PROMPT_SUFFIX
     request_started = time.time()
     accumulated_prompt_tokens = 0
     accumulated_completion_tokens = 0
@@ -2610,7 +2806,14 @@ async def call_model_with_cache(question_content: str, session: aiohttp.ClientSe
     for retry in range(retries):
         payload: Dict[str, Any] = {
             "model": MODEL_NAME,
-            "input": [{"role": "user", "content": dynamic_content if response_id else DIFFICULTY_RATING_PROMPT_PREFIX + "\n\n" + dynamic_content}],
+            "input": [{
+                "role": "user",
+                "content": build_model_user_content(
+                    question_content,
+                    response_id,
+                    image_urls=image_urls,
+                ),
+            }],
             "thinking": {"type": "disabled"},
         }
         if response_id:
@@ -2679,8 +2882,15 @@ async def append_jsonl(path: str, data: Dict[str, Any]) -> None:
 async def process_single_question(data: Dict[str, Any], session: aiohttp.ClientSession, semaphore: Semaphore, output_path: str, error_path: str, retries: int, timeout_sec: int) -> None:
     async with semaphore:
         safe_data = sanitize_question_data(data)
+        image_route = select_rating_images(safe_data)
         try:
-            result, elapsed, prompt_tokens, completion_tokens, total_tokens = await call_model_with_cache(construct_question_content(safe_data), session, retries, timeout_sec)
+            result, elapsed, prompt_tokens, completion_tokens, total_tokens = await call_model_with_cache(
+                construct_question_content(safe_data),
+                session,
+                retries,
+                timeout_sec,
+                image_urls=image_route["selected_urls"],
+            )
             raw_result = copy.deepcopy(result)
             raw_level = extract_raw_difficulty_level(raw_result)
             postprocess_input = copy.deepcopy(result)
@@ -2708,6 +2918,12 @@ async def process_single_question(data: Dict[str, Any], session: aiohttp.ClientS
                 "teacher_feedback_guards_enabled": (
                     RATING_PROFILE == "gpt56_hybrid" and ENABLE_TEACHER_FEEDBACK_GUARDS
                 ),
+                "physics_image_mode": PHYSICS_IMAGE_MODE,
+                "image_input_used": image_route["image_included"],
+                "image_input_selected_url_count": image_route["selected_url_count"],
+                "image_input_available_url_count": image_route["available_url_count"],
+                "image_input_route_reasons": image_route["reasons"],
+                "image_input_selected_urls": image_route["selected_urls"],
                 "difficulty_rating_raw": raw_result,
                 "difficulty_level_raw": raw_level,
                 "postprocess_actions": result.get("postprocess_actions", []) if isinstance(result, dict) else [],
@@ -2744,7 +2960,7 @@ def get_processed_question_ids(output_path: str) -> set:
 
 
 async def main_batch_run() -> None:
-    global USE_CACHE
+    global USE_CACHE, PHYSICS_IMAGE_MODE
     parser = argparse.ArgumentParser(description="初中物理难度评级批量打标")
     parser.add_argument("-p", "--prompt", default=DEFAULT_PROMPT_PATH)
     parser.add_argument("-i", "--input", default="../data/physics_sampled_5000_per_difficulty.jsonl")
@@ -2756,11 +2972,19 @@ async def main_batch_run() -> None:
     parser.add_argument("-n", "--num", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--no-cache", action="store_true")
+    parser.add_argument(
+        "--image-mode",
+        choices=("off", "auto", "all"),
+        default=PHYSICS_IMAGE_MODE,
+        help="首轮图片输入模式；默认 off 保持生产冻结版行为不变",
+    )
     args = parser.parse_args()
     USE_CACHE = not args.no_cache
+    PHYSICS_IMAGE_MODE = args.image_mode
     print(f"评级配置: {RATING_PROFILE}")
     print(f"递进边界链后处理: {'启用' if ENABLE_PROGRESSIVE_FINAL_CHAIN else '禁用'}")
     print(f"低结构概念题保护: {'启用' if ENABLE_LOW_STRUCTURE_CONCEPT_GUARD else '禁用'}")
+    print(f"首轮图片输入: {PHYSICS_IMAGE_MODE}（最多 {PHYSICS_MAX_IMAGES} 张/题）")
     if args.seed is not None:
         random.seed(args.seed)
         print(f"固定随机种子: {args.seed}")
