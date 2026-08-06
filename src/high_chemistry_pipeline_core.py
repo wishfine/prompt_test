@@ -158,7 +158,14 @@ FEATURE_VALUE_ALIASES: dict[str, dict[str, Any]] = {
     },
     "critical_condition": {
         "显性临界": "显性临界或过量条件",
+        "显性临界过量条件": "显性临界或过量条件",
         "隐含临界": "隐含临界或过量条件",
+    },
+    "state_count": {
+        "2-3种": "2个",
+    },
+    "numerical_complexity": {
+        "常规小数": "常规小数或科学记数",
     },
     "calculation_complexity": {
         "直接判断": "无需计算",
@@ -183,6 +190,7 @@ FEATURE_VALUE_ALIASES: dict[str, dict[str, Any]] = {
     },
     "context_type": {
         "工业生产": "工业流程",
+        "实验制备": "实验探究",
     },
     "synthesis_route": {
         "单步合成": "补全单步反应",

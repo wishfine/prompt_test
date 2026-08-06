@@ -224,6 +224,19 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(normalized["features"]["experiment_requirement"], "多步操作组合")
         self.assertEqual(normalized["features"]["context_type"], "工业流程")
 
+    def test_recent_stage1_enum_aliases_are_normalized(self):
+        rating = stage1_rating(base_features(
+            numerical_complexity="常规小数",
+            context_type="实验制备",
+            critical_condition="显性临界过量条件",
+            state_count="2-3种",
+        ), 80)
+        normalized, _ = core.normalize_stage1_rating(rating)
+        self.assertEqual(normalized["features"]["numerical_complexity"], "常规小数或科学记数")
+        self.assertEqual(normalized["features"]["context_type"], "实验探究")
+        self.assertEqual(normalized["features"]["critical_condition"], "显性临界或过量条件")
+        self.assertEqual(normalized["features"]["state_count"], "2个")
+
     def test_enrichment_derives_knowledge_fields(self):
         features = base_features(
             knowledge_L1=["化学基本概念与定量关系", "化学反应原理"],
