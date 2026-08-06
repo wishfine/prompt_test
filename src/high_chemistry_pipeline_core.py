@@ -15,6 +15,7 @@ from typing import Any
 
 LEVEL_ORDER = ["难度1档", "难度2档", "难度3档", "难度4档", "难度5档"]
 LEVEL_INDEX = {level: index for index, level in enumerate(LEVEL_ORDER)}
+STRUCTURAL_BASE_LEVELS = frozenset(LEVEL_ORDER[:3])
 
 KNOWLEDGE_L1 = {
     "化学基本概念与定量关系",
@@ -300,6 +301,14 @@ def map_accuracy_to_level(predicted_accuracy: Any) -> str:
     if accuracy >= 38:
         return "难度4档"
     return "难度5档"
+
+
+def resolve_structural_base_level(base_level: str, adjusted_accuracy: Any) -> str:
+    """以任务结构确定 1--3 档；仅保留既有正确率映射对 4--5 档的裁定。"""
+    if base_level not in STRUCTURAL_BASE_LEVELS:
+        raise ValueError(f"base_difficulty_level 非法：{base_level!r}")
+    accuracy_level = map_accuracy_to_level(adjusted_accuracy)
+    return accuracy_level if LEVEL_INDEX[accuracy_level] >= LEVEL_INDEX["难度4档"] else base_level
 
 
 def multiplier_for_high_count(high_count: int) -> float:
@@ -703,6 +712,15 @@ def _validate_stage1_metadata(rating: dict[str, Any], accuracy: float) -> None:
         raise ValueError("whole_question_burden 非法")
     if rating.get("task_completion_structure") not in TASK_COMPLETION_STRUCTURE_OPTIONS:
         raise ValueError("task_completion_structure 非法")
+    if rating.get("base_difficulty_level") not in STRUCTURAL_BASE_LEVELS:
+        raise ValueError("base_difficulty_level 必须为难度1档、难度2档或难度3档")
+    level_evidence = rating.get("level_evidence")
+    if (
+        not isinstance(level_evidence, list)
+        or not level_evidence
+        or any(not isinstance(value, str) or not value.strip() for value in level_evidence)
+    ):
+        raise ValueError("level_evidence 必须为非空字符串列表")
     review = rating.get("threshold_review")
     if not isinstance(review, dict) or any(type(review.get(key)) is not bool for key in THRESHOLD_REVIEW_KEYS):
         raise ValueError("threshold_review 必须包含四个布尔值")
@@ -859,7 +877,9 @@ def enrich_stage1_rating(
     rating["high_difficulty_feature_count"] = len(detection.names)
     rating["multiplier_applied"] = multiplier
     rating["predicted_accuracy"] = adjusted_accuracy
-    rating["difficulty_level_step1"] = map_accuracy_to_level(adjusted_accuracy)
+    rating["difficulty_level_step1"] = resolve_structural_base_level(
+        rating["base_difficulty_level"], adjusted_accuracy
+    )
     return rating
 
 
@@ -941,7 +961,9 @@ def recalculate_verification(
         }
     multiplier = multiplier_for_high_count(len(model_names))
     adjusted = round(reviewed_accuracy * multiplier, 1)
-    reviewed_level = map_accuracy_to_level(adjusted)
+    reviewed_level = resolve_structural_base_level(
+        stage1["base_difficulty_level"], adjusted
+    )
     current_level = stage1["difficulty_level_step1"]
     current_index = LEVEL_INDEX[current_level]
     reviewed_index = LEVEL_INDEX[reviewed_level]

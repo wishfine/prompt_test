@@ -6,7 +6,7 @@ FEATURE_EXTRACTION_PROMPT_PREFIX = r"""
 
 你的任务是阅读题干、选项、子题、解析和必要图片，完成两件事：
 1. 按指定枚举如实提取结构化 features；
-2. 预测目标学生群体完成整道题的原始正确率 predicted_accuracy（0—100）。
+2. 先按实质任务结构直接判定 base_difficulty_level（仅难度1档、难度2档或难度3档），再预测目标学生群体完成整道题的原始正确率 predicted_accuracy（0—100）。
 
 这里的 predicted_accuracy 是任何程序乘数处理之前的原始预测正确率。你不得自行应用 0.85 或 0.70 乘数，也不得根据乘数反向修改 features。
 
@@ -27,6 +27,15 @@ FEATURE_EXTRACTION_PROMPT_PREFIX = r"""
 11. 化学实验既可能构成 knowledge_L1=化学实验与探究，也必须在 experiment_requirement 中描述任务强度。前者表示知识归属，后者表示本题要求完成的实验认知任务，二者不能互相替代。
 12. 图片缺失且文本不足时，按现有证据提取，并在 reason 中明确指出信息缺口。文字题干为空但有题干图片时必须读取图片；复合题母题文本为空但子题完整时仍要检查母题图片是否包含共享装置、流程或反应网络。
 13. options 必须按题型解释：单选题和多选题缺少 options 属于输入异常；填空、主观和复合题可以没有 options，不能据此判定题目缺失或降低正确率。
+
+### 1—3档的结构定档硬规则
+
+base_difficulty_level 是 1—3 档的唯一主判定字段，predicted_accuracy 只用于解释、诊断和高难结构进入4/5档时的程序处理，不能把 base_difficulty_level 在1—3档之间反向覆盖。
+
+- 难度1档：必须同时满足“只有一个实质任务”“直接调用一个教材结论”“不需要逐项核验多个选项、对象或结论”“没有模型转换”“没有连续计算”。只有一个最终答案、单选题或基础知识点都不能单独支持难度1档。
+- 难度2档：多个基础独立任务，或熟悉标准模型下少量标准步骤。分别核验两个及以上选项、对象或结论，但各判断都基础且无连续依赖时，应判难度2档。
+- 难度3档：必须有实质模型转换、前后连续依赖、多步非平凡计算、多个异质任务形成明显整题负担、多对象×多维度分类的明显执行负担、隐藏条件或边界条件之一。
+- 禁止仅因选项多、小问多、知识点多或文本长判难度3档；也禁止因单选、一个最终答案或知识基础而自动判难度1档。
 
 有效化学步骤只统计新的化学决策：
 - 识别一个新的必要物质或关键性质；
@@ -223,10 +232,7 @@ error_risk 不负责决定正确率所属的大区间，只负责在已经确定
 - 若存在三个及以上关联状态或四个及以上强依赖反应，却仍给出58以上，必须在 boundary_58 中说明它们为什么不构成高完成负担。
 - 若使用课内标准模型但存在长链、多状态、多问依赖、共享复杂流程或联合约束，必须依据整题完成负担估分，不能以“反应常规”作为高分理由。
 
-程序稍后会用乘数后的 predicted_accuracy 映射档位：
-- predicted_accuracy >= 88：难度1档
-- 85 <= predicted_accuracy < 88：难度2档
-- 58 <= predicted_accuracy < 85：难度3档
+程序会以 base_difficulty_level 直接确定难度1—3档。仅当高难结构乘数后的 predicted_accuracy 进入难度4或难度5区间时，程序才保留难度4/5档判断：
 - 38 <= predicted_accuracy < 58：难度4档
 - predicted_accuracy < 38：难度5档
 
@@ -284,6 +290,8 @@ error_risk 不负责决定正确率所属的大区间，只负责在已经确定
   "local_model_familiarity": "熟悉标准模型",
   "whole_question_burden": "较高",
   "task_completion_structure": "单一评分任务",
+  "base_difficulty_level": "难度3档",
+  "level_evidence": ["需要完成一次表征转换", "存在多个异质但独立的选项判断", "不存在前后连续依赖"],
   "threshold_review": {
     "can_reach_88": false,
     "can_reach_85": false,
@@ -306,7 +314,7 @@ error_risk 不负责决定正确率所属的大区间，只负责在已经确定
 
 FEATURE_EXTRACTION_PROMPT_SUFFIX = r"""
 
-请按唯一枚举如实提取 features，先判断选项或多问的真实任务结构，再依次判断 local_model_familiarity、whole_question_burden、task_completion_structure 和四条 threshold_review 边界，最后输出乘数处理前的连续原始 predicted_accuracy。只输出合法 JSON。
+请按唯一枚举如实提取 features，先判断实质任务及其关系并输出 base_difficulty_level 与 level_evidence，再判断 local_model_familiarity、whole_question_burden、task_completion_structure 和四条 threshold_review 边界，最后输出乘数处理前的连续原始 predicted_accuracy。只输出合法 JSON。
 """
 
 

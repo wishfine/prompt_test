@@ -68,12 +68,15 @@ def base_features(**overrides):
 
 
 def stage1_rating(features=None, accuracy=90.0):
+    base_level = "难度1档" if accuracy >= 88 else ("难度2档" if accuracy >= 85 else "难度3档")
     return {
         "features": copy.deepcopy(features or base_features()),
         "reason": "教材直接概念辨析，只有一个评分任务。",
         "local_model_familiarity": "教材直接结论",
         "whole_question_burden": "低",
         "task_completion_structure": "单一评分任务",
+        "base_difficulty_level": base_level,
+        "level_evidence": ["一个明确的结构定档证据"],
         "threshold_review": {
             "can_reach_88": accuracy >= 88,
             "can_reach_85": accuracy >= 85,
@@ -101,6 +104,12 @@ class AccuracyAndSchemaTests(unittest.TestCase):
         for value, expected in cases:
             with self.subTest(value=value):
                 self.assertEqual(core.map_accuracy_to_level(value), expected)
+
+    def test_structural_base_level_prevents_two_level_collapse(self):
+        self.assertEqual(core.resolve_structural_base_level("难度2档", 89), "难度2档")
+        self.assertEqual(core.resolve_structural_base_level("难度2档", 82), "难度2档")
+        self.assertEqual(core.resolve_structural_base_level("难度3档", 89), "难度3档")
+        self.assertEqual(core.resolve_structural_base_level("难度2档", 52), "难度4档")
 
     def test_l1_must_match_l2(self):
         features = base_features(
@@ -514,7 +523,7 @@ class RunnerAssetTests(unittest.TestCase):
 
     def test_runner_compiles(self):
         compile(self.source, str(self.path), "exec")
-        self.assertIn('"high_chemistry_two_stage_v2"', self.source)
+        self.assertIn('"high_chemistry_two_stage_v3"', self.source)
 
     def test_runner_has_required_controls(self):
         for flag in (
