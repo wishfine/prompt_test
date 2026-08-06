@@ -343,11 +343,18 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(normalized["features"]["experiment_requirement"], "标准数据处理")
 
     def test_experiment_feasibility_alias_is_normalized(self):
-        rating = stage1_rating(base_features(experiment_requirement="方案可行性评价"), 80)
+        for value in ("方案可行性评价", "实验探究与方案评价"):
+            with self.subTest(value=value):
+                rating = stage1_rating(base_features(experiment_requirement=value), 80)
+                normalized, _ = core.normalize_stage1_rating(rating)
+                self.assertEqual(
+                    normalized["features"]["experiment_requirement"], "方案设计或可行性评价"
+                )
+
+    def test_model_explicitness_alias_is_normalized(self):
+        rating = stage1_rating(base_features(model_explicitness="完全显性"), 80)
         normalized, _ = core.normalize_stage1_rating(rating)
-        self.assertEqual(
-            normalized["features"]["experiment_requirement"], "方案设计或可行性评价"
-        )
+        self.assertEqual(normalized["features"]["model_explicitness"], "模型完全显性")
 
     def test_enrichment_derives_knowledge_fields(self):
         features = base_features(
@@ -628,7 +635,8 @@ class RunnerAssetTests(unittest.TestCase):
 
     def test_runner_compiles(self):
         compile(self.source, str(self.path), "exec")
-        self.assertIn('"high_chemistry_two_stage_v5"', self.source)
+        self.assertIn('"high_chemistry_two_stage_v6"', self.source)
+        self.assertIn("_stage1_repair_feedback", self.source)
 
     def test_runner_has_required_controls(self):
         for flag in (

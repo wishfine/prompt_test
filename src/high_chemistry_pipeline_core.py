@@ -138,6 +138,7 @@ FEATURE_VALUE_ALIASES: dict[str, dict[str, Any]] = {
         "定量实验": "定量实验与数据处理",
     },
     "knowledge_depth": {"深层模型": "深层课内模型"},
+    "model_explicitness": {"完全显性": "模型完全显性"},
     "reaction_relation": {
         "无": "无反应关系",
         "单一反应": "单一直接反应",
@@ -194,6 +195,7 @@ FEATURE_VALUE_ALIASES: dict[str, dict[str, Any]] = {
         "方案设计": "方案设计或可行性评价",
         "方案设计或可行性验证": "方案设计或可行性评价",
         "方案可行性评价": "方案设计或可行性评价",
+        "实验探究与方案评价": "方案设计或可行性评价",
     },
     "context_type": {
         "工业生产": "工业流程",

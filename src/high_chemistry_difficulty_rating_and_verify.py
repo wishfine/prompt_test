@@ -249,6 +249,34 @@ def _json_block(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
+def _stage1_repair_feedback(error: ValueError, parsed: dict[str, Any]) -> str:
+    """为字段串位和一致性冲突补充定向修复说明，不改写模型结论。"""
+    message = str(error)
+    if "experiment_requirement 非法值" in message:
+        hint = (
+            "experiment_requirement 只描述本题要求完成的实验任务强度，"
+            "不能填写 knowledge_L2 名称（如‘检验、鉴别与分离提纯’）。"
+        )
+    elif "primary_problem_structure 非法值" in message:
+        hint = (
+            "primary_problem_structure 只描述题目主结构，"
+            "不能填写 knowledge_L2 名称（如‘定量实验与数据处理’）。"
+        )
+    elif "model_explicitness 非法值" in message:
+        hint = "model_explicitness 必须使用完整枚举值，例如‘模型完全显性’。"
+    elif "graph_structure 表明存在信息转换" in message:
+        hint = (
+            "请按题干重新核对这两个字段：若保留关系转换/反推类 graph_structure，"
+            "model_conversion_required 必须为 true；若无需转换，应改为与题意一致的图表结构。"
+        )
+    else:
+        hint = "请仅修复报错字段，保留其余已正确的题目判断。"
+    return (
+        f"上一次校验失败：{message}\n{hint}\n"
+        f"上一次输出：\n{_json_block(parsed)}"
+    )
+
+
 def construct_question_text(question: dict[str, Any], input_quality: dict[str, Any]) -> str:
     return (
         "【输入质量】\n" + _json_block(input_quality)
@@ -398,8 +426,8 @@ async def call_stage1(
                         normalization_log=log,
                     )
                 except ValueError as exc:
-                    if repair_feedback is None and attempt < retries - 1:
-                        repair_feedback = f"上一次校验失败：{exc}\n上一次输出：\n{_json_block(parsed)}"
+                    if attempt < retries - 1:
+                        repair_feedback = _stage1_repair_feedback(exc, parsed)
                         last_error = str(exc)
                         continue
                     raise
@@ -538,7 +566,7 @@ def build_stage2_fallback(
 ) -> dict[str, Any]:
     return {
         **output_base,
-        "pipeline_version": "high_chemistry_two_stage_v5",
+        "pipeline_version": "high_chemistry_two_stage_v6",
         "model_name": MODEL_NAME,
         "difficulty_rating_stage1": stage1,
         "difficulty_level_step1": stage1["difficulty_level_step1"],
@@ -609,7 +637,7 @@ async def process_question(
             total_usage = {key: usage1[key] + usage2[key] for key in usage1}
             await append_jsonl(output_path, {
                 **output_base,
-                "pipeline_version": "high_chemistry_two_stage_v5",
+                "pipeline_version": "high_chemistry_two_stage_v6",
                 "model_name": MODEL_NAME,
                 "temperature": TEMPERATURE,
                 "stage2_auto_adjustment_enabled": ENABLE_STAGE2_AUTO_ADJUST,
