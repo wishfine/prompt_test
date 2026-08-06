@@ -13,6 +13,7 @@ import html
 import random
 import argparse
 from collections import defaultdict
+from pathlib import Path
 from typing import Dict, Any, List, Tuple
 
 # 抽样配比计划
@@ -59,6 +60,14 @@ LEVEL_NAMES = {
     3: "难度3 — 中等题",
     4: "难度4 — 拔高题",
     5: "难度5 — 压轴题",
+}
+
+LEVEL_FILE_SLUGS = {
+    1: "difficulty1_easy",
+    2: "difficulty2_basic",
+    3: "difficulty3_medium",
+    4: "difficulty4_hard",
+    5: "difficulty5_final",
 }
 
 def escape(text: str) -> str:
@@ -858,12 +867,12 @@ __QUESTION_CARDS_PLACEHOLDER__
 
     function loadAnnotations() {
         try {
-            return JSON.parse(localStorage.getItem('physics_difficulty_annotations___REVIEW_COUNT__') || '{}');
+            return JSON.parse(localStorage.getItem('physics_difficulty_annotations___REVIEW_SCOPE__') || '{}');
         } catch { return {}; }
     }
 
     function saveAnnotations(annotations) {
-        localStorage.setItem('physics_difficulty_annotations___REVIEW_COUNT__', JSON.stringify(annotations));
+        localStorage.setItem('physics_difficulty_annotations___REVIEW_SCOPE__', JSON.stringify(annotations));
         updateStats();
     }
 
@@ -1013,7 +1022,7 @@ __QUESTION_CARDS_PLACEHOLDER__
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'physics_difficulty_human_annotations___REVIEW_COUNT__.jsonl';
+        a.download = 'physics_difficulty_human_annotations___REVIEW_SCOPE__.jsonl';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -1054,7 +1063,7 @@ __QUESTION_CARDS_PLACEHOLDER__
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'physics_difficulty_review_report___REVIEW_COUNT__.txt';
+        a.download = 'physics_difficulty_review_report___REVIEW_SCOPE__.txt';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -1083,7 +1092,11 @@ __QUESTION_CARDS_PLACEHOLDER__
 </html>
 """
 
-def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: str):
+def generate_html_file(
+    samples: Dict[int, List[Dict[str, Any]]],
+    output_path: str,
+    review_scope: str | None = None,
+):
     # 1. 构造导航栏
     nav_html = ""
     for level in sorted(samples.keys()):
@@ -1271,10 +1284,40 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
         "__REVIEW_COUNT__",
         str(len(all_questions_list)),
     )
+    html_content = html_content.replace(
+        "__REVIEW_SCOPE__",
+        review_scope or str(len(all_questions_list)),
+    )
 
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
     print(f"✨ 成功渲染生成纯图片交互可视化网页: {os.path.abspath(output_path)}")
+
+
+def build_level_html_paths(output_path: Path) -> Dict[int, Path]:
+    """根据一个 HTML 基准路径生成五档独立页面的稳定文件名。"""
+    suffix = output_path.suffix or ".html"
+    stem = output_path.stem if output_path.suffix else output_path.name
+    return {
+        level: output_path.with_name(f"{stem}_{slug}{suffix}")
+        for level, slug in LEVEL_FILE_SLUGS.items()
+    }
+
+
+def generate_split_level_html_files(
+    samples: Dict[int, List[Dict[str, Any]]],
+    output_path: Path,
+) -> Dict[int, Path]:
+    """每个难度档单独生成一个 HTML，即使某档为空也保留页面。"""
+    paths = build_level_html_paths(output_path)
+    for level, level_path in paths.items():
+        level_path.parent.mkdir(parents=True, exist_ok=True)
+        generate_html_file(
+            {level: list(samples.get(level, []))},
+            str(level_path),
+            review_scope=LEVEL_FILE_SLUGS[level],
+        )
+    return paths
 
 
 def main():
@@ -1293,6 +1336,11 @@ def main():
                         help="按档抽样时使用的固定随机种子")
     parser.add_argument("--sample-size", type=int, default=500,
                         help="按模型档位抽样的总题数，默认 500；--all-results 时忽略")
+    parser.add_argument(
+        "--split-html-by-level",
+        action="store_true",
+        help="按五个模型难度档分别输出 5 个 HTML，不再生成合并页",
+    )
 
     args = parser.parse_args()
 
@@ -1442,8 +1490,18 @@ def main():
     print(f"👉 成功写入 {len(sampled_data)} 条抽样数据。")
 
     # 7. 渲染纯图片 HTML
-    print(f"正在渲染纯图片可视化验收网页至: {args.output_html} ...")
-    generate_html_file(sampled_for_html, args.output_html)
+    if args.split_html_by_level:
+        print(f"正在按五档分别渲染可视化页面，基准路径: {args.output_html} ...")
+        generated_paths = generate_split_level_html_files(
+            sampled_for_html,
+            Path(args.output_html),
+        )
+        print("已生成五档独立 HTML：")
+        for level, generated_path in generated_paths.items():
+            print(f"  {LEVEL_NAMES[level]}: {generated_path}")
+    else:
+        print(f"正在渲染纯图片可视化验收网页至: {args.output_html} ...")
+        generate_html_file(sampled_for_html, args.output_html)
     print("✨ 纯图片可视化优化网页生成已顺利完成！")
 
 if __name__ == "__main__":

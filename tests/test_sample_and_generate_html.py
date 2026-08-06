@@ -29,7 +29,7 @@ class SampleAndGenerateHtmlTests(unittest.TestCase):
     def test_review_count_uses_dynamic_placeholder(self) -> None:
         template = MODULE.HTML_TEMPLATE
         self.assertIn("__REVIEW_COUNT__题", template)
-        self.assertIn("annotations___REVIEW_COUNT__", template)
+        self.assertIn("annotations___REVIEW_SCOPE__", template)
 
     def test_unmarked_questions_default_to_model_accepted(self) -> None:
         template = MODULE.HTML_TEMPLATE
@@ -205,6 +205,78 @@ class SampleAndGenerateHtmlTests(unittest.TestCase):
         self.assertLess(primary_index, supporting_index)
         self.assertIn("完整截图优先，原始题图可展开", rendered)
         self.assertIn('<details class="supporting-images">', rendered)
+
+    def test_build_level_html_paths_creates_one_stable_path_per_level(self) -> None:
+        paths = MODULE.build_level_html_paths(
+            Path("outputs/visualizations/recent3years_review1000.html")
+        )
+
+        self.assertEqual(
+            paths,
+            {
+                1: Path(
+                    "outputs/visualizations/"
+                    "recent3years_review1000_difficulty1_easy.html"
+                ),
+                2: Path(
+                    "outputs/visualizations/"
+                    "recent3years_review1000_difficulty2_basic.html"
+                ),
+                3: Path(
+                    "outputs/visualizations/"
+                    "recent3years_review1000_difficulty3_medium.html"
+                ),
+                4: Path(
+                    "outputs/visualizations/"
+                    "recent3years_review1000_difficulty4_hard.html"
+                ),
+                5: Path(
+                    "outputs/visualizations/"
+                    "recent3years_review1000_difficulty5_final.html"
+                ),
+            },
+        )
+
+    def test_generate_split_level_html_files_writes_five_independent_pages(
+        self,
+    ) -> None:
+        samples = {
+            level: [
+                {
+                    "question_id": f"q-{level}",
+                    "difficulty_rating": {
+                        "difficulty_level": level_name,
+                        "features": {},
+                        "reasoning": {},
+                    },
+                }
+            ]
+            for level, level_name in enumerate(
+                ["送分题", "基础题", "中等题", "拔高题", "压轴题"],
+                1,
+            )
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir) / "review1000.html"
+            outputs = MODULE.generate_split_level_html_files(samples, base)
+
+            self.assertEqual(len(outputs), 5)
+            for level, output in outputs.items():
+                rendered = output.read_text(encoding="utf-8")
+                self.assertIn(f"q-{level}", rendered)
+                expected_scope = MODULE.LEVEL_FILE_SLUGS[level]
+                self.assertIn(
+                    f"physics_difficulty_annotations_{expected_scope}",
+                    rendered,
+                )
+                self.assertIn(
+                    f"physics_difficulty_human_annotations_{expected_scope}.jsonl",
+                    rendered,
+                )
+                for other_level in range(1, 6):
+                    if other_level != level:
+                        self.assertNotIn(f"q-{other_level}", rendered)
 
 
 if __name__ == "__main__":
