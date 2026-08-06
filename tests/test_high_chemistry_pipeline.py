@@ -77,7 +77,8 @@ def stage1_rating(features=None, accuracy=90.0):
         "task_completion_structure": "单一评分任务",
         "base_difficulty_level": base_level,
         "level_evidence": ["一个明确的结构定档证据"],
-        "essential_task_count": 1,
+        "task_units": [{"task": "直接调用一个教材结论", "complexity": "直接基础"}],
+        "task_units_relation": "同质",
         "option_by_option_verification": False,
         "substantive_step_count": 1,
         "model_conversion_required": False,
@@ -120,7 +121,13 @@ class AccuracyAndSchemaTests(unittest.TestCase):
     def test_structural_audit_blocks_invalid_level_one(self):
         rating = stage1_rating(accuracy=90)
         rating.update({
-            "essential_task_count": 4,
+            "task_units": [
+                {"task": "核验选项A", "complexity": "直接基础"},
+                {"task": "核验选项B", "complexity": "直接基础"},
+                {"task": "核验选项C", "complexity": "直接基础"},
+                {"task": "核验选项D", "complexity": "直接基础"},
+            ],
+            "task_units_relation": "异质",
             "option_by_option_verification": True,
             "substantive_step_count": 4,
         })
@@ -134,6 +141,69 @@ class AccuracyAndSchemaTests(unittest.TestCase):
         enriched = core.enrich_stage1_rating(rating)
         self.assertEqual(enriched["base_difficulty_level"], "难度3档")
         self.assertIn("model_conversion_required", enriched["structural_level_audit"]["triggers"])
+
+    def test_multiple_basic_heterogeneous_task_units_stay_level_two(self):
+        rating = stage1_rating(accuracy=86)
+        rating.update({
+            "task_units": [
+                {"task": "核验选项A", "complexity": "直接基础"},
+                {"task": "核验选项B", "complexity": "直接基础"},
+                {"task": "核验选项C", "complexity": "直接基础"},
+                {"task": "核验选项D", "complexity": "直接基础"},
+            ],
+            "task_units_relation": "异质",
+            "option_by_option_verification": True,
+            "substantive_step_count": 4,
+            "whole_question_burden": "中",
+        })
+        enriched = core.enrich_stage1_rating(rating)
+        self.assertEqual(enriched["base_difficulty_level"], "难度2档")
+        self.assertNotIn(
+            "multiple_nontrivial_heterogeneous_tasks",
+            enriched["structural_level_audit"]["triggers"],
+        )
+
+    def test_multiple_nontrivial_heterogeneous_task_units_raise_level_two(self):
+        rating = stage1_rating(accuracy=86)
+        rating.update({
+            "task_units": [
+                {"task": "核验选项A", "complexity": "直接基础"},
+                {"task": "按条件筛选选项B", "complexity": "非平凡"},
+                {"task": "计算选项C的数量关系", "complexity": "非平凡"},
+            ],
+            "task_units_relation": "异质",
+            "option_by_option_verification": True,
+            "substantive_step_count": 3,
+            "whole_question_burden": "中",
+        })
+        enriched = core.enrich_stage1_rating(rating)
+        self.assertEqual(enriched["base_difficulty_level"], "难度3档")
+        self.assertIn(
+            "multiple_nontrivial_heterogeneous_tasks",
+            enriched["structural_level_audit"]["triggers"],
+        )
+
+    def test_task_unit_consistency_rejects_unmergeable_option_check_with_one_unit(self):
+        rating = stage1_rating(accuracy=86)
+        rating["option_by_option_verification"] = True
+        with self.assertRaisesRegex(ValueError, "逐项核验"):
+            core.enrich_stage1_rating(rating)
+
+    def test_parallel_same_rule_option_check_allows_one_homogeneous_unit(self):
+        rating = stage1_rating(accuracy=86)
+        rating.update({
+            "task_units": [{"task": "用同一周期律核验各选项", "complexity": "直接基础"}],
+            "task_units_relation": "同质",
+            "option_by_option_verification": False,
+        })
+        enriched = core.enrich_stage1_rating(rating)
+        self.assertEqual(enriched["essential_task_count"], 1)
+        self.assertEqual(enriched["nontrivial_task_count"], 0)
+
+    def test_graph_conversion_conflict_requires_repair(self):
+        rating = stage1_rating(base_features(graph_structure="单图关系转换"), 86)
+        with self.assertRaisesRegex(ValueError, "model_conversion_required=false"):
+            core.enrich_stage1_rating(rating)
 
     def test_l1_must_match_l2(self):
         features = base_features(
@@ -271,6 +341,13 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(normalized["features"]["critical_condition"], "显性临界或过量条件")
         self.assertEqual(normalized["features"]["state_count"], "2个")
         self.assertEqual(normalized["features"]["experiment_requirement"], "标准数据处理")
+
+    def test_experiment_feasibility_alias_is_normalized(self):
+        rating = stage1_rating(base_features(experiment_requirement="方案可行性评价"), 80)
+        normalized, _ = core.normalize_stage1_rating(rating)
+        self.assertEqual(
+            normalized["features"]["experiment_requirement"], "方案设计或可行性评价"
+        )
 
     def test_enrichment_derives_knowledge_fields(self):
         features = base_features(
@@ -521,6 +598,8 @@ class PromptAssetTests(unittest.TestCase):
         text = (ROOT / "prompts" / "高中化学难度打标提示词.txt").read_text(encoding="utf-8")
         for field in core.REQUIRED_FEATURE_FIELDS:
             self.assertIn(field, text)
+        self.assertIn("task_units", text)
+        self.assertIn("task_units_relation", text)
 
     def test_prompt_defines_type_aware_empty_options(self):
         text = (ROOT / "prompts" / "高中化学难度打标提示词.txt").read_text(encoding="utf-8")
@@ -549,7 +628,7 @@ class RunnerAssetTests(unittest.TestCase):
 
     def test_runner_compiles(self):
         compile(self.source, str(self.path), "exec")
-        self.assertIn('"high_chemistry_two_stage_v4"', self.source)
+        self.assertIn('"high_chemistry_two_stage_v5"', self.source)
 
     def test_runner_has_required_controls(self):
         for flag in (

@@ -16,6 +16,8 @@ from typing import Any
 LEVEL_ORDER = ["难度1档", "难度2档", "难度3档", "难度4档", "难度5档"]
 LEVEL_INDEX = {level: index for index, level in enumerate(LEVEL_ORDER)}
 STRUCTURAL_BASE_LEVELS = frozenset(LEVEL_ORDER[:3])
+TASK_UNIT_COMPLEXITIES = frozenset({"直接基础", "非平凡"})
+TASK_UNITS_RELATIONS = frozenset({"同质", "异质"})
 
 KNOWLEDGE_L1 = {
     "化学基本概念与定量关系",
@@ -191,6 +193,7 @@ FEATURE_VALUE_ALIASES: dict[str, dict[str, Any]] = {
         "数据处理": "标准数据处理",
         "方案设计": "方案设计或可行性评价",
         "方案设计或可行性验证": "方案设计或可行性评价",
+        "方案可行性评价": "方案设计或可行性评价",
     },
     "context_type": {
         "工业生产": "工业流程",
@@ -728,6 +731,11 @@ def _validate_stage1_metadata(rating: dict[str, Any], accuracy: float) -> None:
         value = rating.get(field)
         if type(value) is not int or not 1 <= value <= 12:
             raise ValueError(f"{field} 必须为1到12的整数")
+    nontrivial_task_count = rating.get("nontrivial_task_count")
+    if type(nontrivial_task_count) is not int or not 0 <= nontrivial_task_count <= 12:
+        raise ValueError("nontrivial_task_count 必须为0到12的整数")
+    if rating["nontrivial_task_count"] > rating["essential_task_count"]:
+        raise ValueError("nontrivial_task_count 不能大于 essential_task_count")
     for field in (
         "option_by_option_verification", "model_conversion_required",
         "intermediate_result_reuse", "multi_object_multi_dimension",
@@ -746,12 +754,41 @@ def _validate_stage1_metadata(rating: dict[str, Any], accuracy: float) -> None:
         raise ValueError("reason 不得为空")
 
 
+def _derive_task_metadata(rating: dict[str, Any], features: dict[str, Any]) -> None:
+    """校验任务单元并生成唯一的任务数量事实源。"""
+    task_units = rating.get("task_units")
+    if not isinstance(task_units, list) or not 1 <= len(task_units) <= 12:
+        raise ValueError("task_units 必须为包含1到12项的列表")
+    for index, unit in enumerate(task_units, start=1):
+        if not isinstance(unit, dict):
+            raise ValueError(f"task_units 第{index}项必须为对象")
+        if not str(unit.get("task", "")).strip():
+            raise ValueError(f"task_units 第{index}项 task 不得为空")
+        if unit.get("complexity") not in TASK_UNIT_COMPLEXITIES:
+            raise ValueError(f"task_units 第{index}项 complexity 非法")
+    if rating.get("task_units_relation") not in TASK_UNITS_RELATIONS:
+        raise ValueError("task_units_relation 必须为同质或异质")
+
+    rating["essential_task_count"] = len(task_units)
+    rating["nontrivial_task_count"] = sum(
+        unit["complexity"] == "非平凡" for unit in task_units
+    )
+    if rating.get("option_by_option_verification") is True and len(task_units) < 2:
+        raise ValueError("逐项核验要求至少两个不可合并的任务单元")
+    if (
+        features.get("graph_structure") in {"单图关系转换", "单图反推隐藏量", "多图联合转换"}
+        and rating.get("model_conversion_required") is False
+    ):
+        raise ValueError("graph_structure 表明存在信息转换，但 model_conversion_required=false")
+
+
 def audit_structural_base_level(rating: dict[str, Any]) -> dict[str, Any]:
     """仅拦截不满足1/2档结构准入的结果，且最多上调一档。"""
     original = rating["base_difficulty_level"]
     adjusted = original
     triggers: list[str] = []
     essential_tasks = rating["essential_task_count"]
+    nontrivial_tasks = rating["nontrivial_task_count"]
     substantive_steps = rating["substantive_step_count"]
     option_check = rating["option_by_option_verification"]
     conversion = rating["model_conversion_required"]
@@ -759,6 +796,7 @@ def audit_structural_base_level(rating: dict[str, Any]) -> dict[str, Any]:
     multi_dimension = rating["multi_object_multi_dimension"]
     burden = rating["whole_question_burden"]
     task_structure = rating["task_completion_structure"]
+    task_units_relation = rating["task_units_relation"]
 
     if original == "难度1档":
         if essential_tasks != 1:
@@ -792,8 +830,8 @@ def audit_structural_base_level(rating: dict[str, Any]) -> dict[str, Any]:
             triggers.append("whole_question_burden_at_least_high")
         if (
             essential_tasks >= 3
-            and substantive_steps >= 3
-            and task_structure == "多个异质独立任务"
+            and nontrivial_tasks >= 2
+            and task_units_relation == "异质"
         ):
             triggers.append("multiple_nontrivial_heterogeneous_tasks")
         if triggers:
@@ -913,6 +951,7 @@ def enrich_stage1_rating(
     rating = copy.deepcopy(stage1_rating)
     features = rating.get("features")
     validate_feature_schema(features)
+    _derive_task_metadata(rating, features)
 
     rating["features_model_raw"] = copy.deepcopy(features if features_model_raw is None else features_model_raw)
     rating["enum_normalization_log"] = copy.deepcopy(normalization_log or [])
