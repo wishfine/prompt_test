@@ -215,6 +215,15 @@ class Stage1Tests(unittest.TestCase):
             normalized["features"]["stoichiometric_calculation"], "守恒差量或混合计算"
         )
 
+    def test_operation_and_industry_aliases_are_normalized(self):
+        rating = stage1_rating(base_features(
+            experiment_requirement="多步实验操作",
+            context_type="工业生产",
+        ), 80)
+        normalized, _ = core.normalize_stage1_rating(rating)
+        self.assertEqual(normalized["features"]["experiment_requirement"], "多步操作组合")
+        self.assertEqual(normalized["features"]["context_type"], "工业流程")
+
     def test_enrichment_derives_knowledge_fields(self):
         features = base_features(
             knowledge_L1=["化学基本概念与定量关系", "化学反应原理"],

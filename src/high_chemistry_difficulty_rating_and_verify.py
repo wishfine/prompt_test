@@ -283,6 +283,8 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
     corrections = result.get("feature_corrections")
     if not isinstance(corrections, list):
         raise ValueError("feature_corrections 必须为列表")
+    valid_corrections = []
+    ignored_corrections = []
     for correction in corrections:
         if not isinstance(correction, dict):
             raise ValueError("feature_corrections 每项必须为对象")
@@ -291,12 +293,19 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
         } - correction.keys()
         if correction_missing:
             raise ValueError(f"feature_corrections 缺少字段：{sorted(correction_missing)}")
-        if correction.get("field") not in REQUIRED_FEATURE_FIELDS:
-            raise ValueError(f"feature_corrections 含非法字段：{correction.get('field')!r}")
         if "reviewed_value" not in correction:
             raise ValueError("feature_corrections 缺少 reviewed_value")
         if not str(correction.get("evidence", "")).strip():
             raise ValueError("feature_corrections.evidence 不得为空")
+        if correction.get("field") == "high_difficulty_features":
+            ignored_corrections.append(correction)
+            continue
+        if correction.get("field") not in REQUIRED_FEATURE_FIELDS:
+            raise ValueError(f"feature_corrections 含非法字段：{correction.get('field')!r}")
+        valid_corrections.append(correction)
+    result["feature_corrections"] = valid_corrections
+    if ignored_corrections:
+        result["ignored_feature_corrections"] = ignored_corrections
     names = result.get("reviewed_high_difficulty_features")
     if not isinstance(names, list):
         raise ValueError("reviewed_high_difficulty_features 必须为列表")

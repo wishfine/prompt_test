@@ -100,7 +100,7 @@ numerical_complexity：无数值计算 / 简单整数 / 常规小数或科学记
 
 information_carrier：纯文字 / 单一示意图 / 表格 / 函数曲线 / 实验装置 / 工艺流程图 / 光谱或图谱 / 多载体综合。
 graph_structure：无图表 / 直接读数 / 单图关系转换 / 单图反推隐藏量 / 多图独立 / 多图联合转换。
-experiment_requirement：无 / 基础操作或现象判断 / 标准数据处理 / 控制变量或故障分析 / 误差分析 / 方案设计或可行性评价。
+experiment_requirement：无 / 基础操作或现象判断 / 标准数据处理 / 控制变量或故障分析 / 误差分析 / 多步操作组合 / 方案设计或可行性评价。
 synthesis_route：无 / 补全单步反应 / 常规多步路线 / 自主设计或路线评价。
 separation_purification：无 / 直接选择操作 / 多步操作组合 / 自主设计或方案评价。
 context_type：纯化学 / 生活生产 / 工业流程 / 实验探究 / 科技前沿。
