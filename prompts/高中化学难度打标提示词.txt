@@ -37,6 +37,17 @@ base_difficulty_level 是 1—3 档的唯一主判定字段，predicted_accuracy
 - 难度3档：必须有实质模型转换、前后连续依赖、多步非平凡计算、多个异质任务形成明显整题负担、多对象×多维度分类的明显执行负担、隐藏条件或边界条件之一。
 - 禁止仅因选项多、小问多、知识点多或文本长判难度3档；也禁止因单选、一个最终答案或知识基础而自动判难度1档。
 
+以下六个结构字段必须如实输出，并与 base_difficulty_level 保持一致：
+
+- essential_task_count：必须完成的实质判断、计算、推断或分类数量；不能按答案数或选项字母数计数。
+- option_by_option_verification：得到答案是否必须分别核验两个及以上选项、对象或结论。
+- substantive_step_count：具有认知意义的判断、建模、信息转换、排除或非直接推断步骤；不计抄写和机械代入。
+- model_conversion_required：是否需要把图表、现象、结构、方程式或文字条件转换为新的化学关系。
+- intermediate_result_reuse：前一步结果是否必须用于后续步骤。
+- multi_object_multi_dimension：是否需将多个对象按多个维度分类或比较。
+
+程序会审计：难度1档若任一字段不满足“一项直接任务”的条件，将上调为难度2档；难度2档若存在模型转换、中间结果复用、多对象多维分类、五项及以上实质任务、较高及以上负担，或至少三个非平凡异质任务，将上调为难度3档。审计不会改动难度4/5档。
+
 有效化学步骤只统计新的化学决策：
 - 识别一个新的必要物质或关键性质；
 - 确定一个新的反应、反应条件、产物方向或竞争关系；
@@ -292,6 +303,12 @@ error_risk 不负责决定正确率所属的大区间，只负责在已经确定
   "task_completion_structure": "单一评分任务",
   "base_difficulty_level": "难度3档",
   "level_evidence": ["需要完成一次表征转换", "存在多个异质但独立的选项判断", "不存在前后连续依赖"],
+  "essential_task_count": 4,
+  "option_by_option_verification": true,
+  "substantive_step_count": 4,
+  "model_conversion_required": true,
+  "intermediate_result_reuse": false,
+  "multi_object_multi_dimension": false,
   "threshold_review": {
     "can_reach_88": false,
     "can_reach_85": false,
@@ -314,7 +331,7 @@ error_risk 不负责决定正确率所属的大区间，只负责在已经确定
 
 FEATURE_EXTRACTION_PROMPT_SUFFIX = r"""
 
-请按唯一枚举如实提取 features，先判断实质任务及其关系并输出 base_difficulty_level 与 level_evidence，再判断 local_model_familiarity、whole_question_burden、task_completion_structure 和四条 threshold_review 边界，最后输出乘数处理前的连续原始 predicted_accuracy。只输出合法 JSON。
+请按唯一枚举如实提取 features，先判断六个任务结构字段并输出 base_difficulty_level 与 level_evidence，再判断 local_model_familiarity、whole_question_burden、task_completion_structure 和四条 threshold_review 边界，最后输出乘数处理前的连续原始 predicted_accuracy。只输出合法 JSON。
 """
 
 

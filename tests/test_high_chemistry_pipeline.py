@@ -77,6 +77,12 @@ def stage1_rating(features=None, accuracy=90.0):
         "task_completion_structure": "单一评分任务",
         "base_difficulty_level": base_level,
         "level_evidence": ["一个明确的结构定档证据"],
+        "essential_task_count": 1,
+        "option_by_option_verification": False,
+        "substantive_step_count": 1,
+        "model_conversion_required": False,
+        "intermediate_result_reuse": False,
+        "multi_object_multi_dimension": False,
         "threshold_review": {
             "can_reach_88": accuracy >= 88,
             "can_reach_85": accuracy >= 85,
@@ -110,6 +116,24 @@ class AccuracyAndSchemaTests(unittest.TestCase):
         self.assertEqual(core.resolve_structural_base_level("难度2档", 82), "难度2档")
         self.assertEqual(core.resolve_structural_base_level("难度3档", 89), "难度3档")
         self.assertEqual(core.resolve_structural_base_level("难度2档", 52), "难度4档")
+
+    def test_structural_audit_blocks_invalid_level_one(self):
+        rating = stage1_rating(accuracy=90)
+        rating.update({
+            "essential_task_count": 4,
+            "option_by_option_verification": True,
+            "substantive_step_count": 4,
+        })
+        enriched = core.enrich_stage1_rating(rating)
+        self.assertEqual(enriched["base_difficulty_level"], "难度2档")
+        self.assertTrue(enriched["structural_level_audit"]["adjusted_by_structural_audit"])
+
+    def test_structural_audit_blocks_invalid_level_two(self):
+        rating = stage1_rating(accuracy=86)
+        rating["model_conversion_required"] = True
+        enriched = core.enrich_stage1_rating(rating)
+        self.assertEqual(enriched["base_difficulty_level"], "难度3档")
+        self.assertIn("model_conversion_required", enriched["structural_level_audit"]["triggers"])
 
     def test_l1_must_match_l2(self):
         features = base_features(
@@ -239,12 +263,14 @@ class Stage1Tests(unittest.TestCase):
             context_type="实验制备",
             critical_condition="显性临界过量条件",
             state_count="2-3种",
+            experiment_requirement="定量实验与数据处理",
         ), 80)
         normalized, _ = core.normalize_stage1_rating(rating)
         self.assertEqual(normalized["features"]["numerical_complexity"], "常规小数或科学记数")
         self.assertEqual(normalized["features"]["context_type"], "实验探究")
         self.assertEqual(normalized["features"]["critical_condition"], "显性临界或过量条件")
         self.assertEqual(normalized["features"]["state_count"], "2个")
+        self.assertEqual(normalized["features"]["experiment_requirement"], "标准数据处理")
 
     def test_enrichment_derives_knowledge_fields(self):
         features = base_features(
@@ -523,7 +549,7 @@ class RunnerAssetTests(unittest.TestCase):
 
     def test_runner_compiles(self):
         compile(self.source, str(self.path), "exec")
-        self.assertIn('"high_chemistry_two_stage_v3"', self.source)
+        self.assertIn('"high_chemistry_two_stage_v4"', self.source)
 
     def test_runner_has_required_controls(self):
         for flag in (

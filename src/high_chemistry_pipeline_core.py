@@ -186,6 +186,9 @@ FEATURE_VALUE_ALIASES: dict[str, dict[str, Any]] = {
         "控制变量或现象分析": "控制变量或故障分析",
         "误差反演": "误差分析",
         "多步实验操作": "多步操作组合",
+        "定量实验与数据处理": "标准数据处理",
+        "定量实验": "标准数据处理",
+        "数据处理": "标准数据处理",
         "方案设计": "方案设计或可行性评价",
         "方案设计或可行性验证": "方案设计或可行性评价",
     },
@@ -721,6 +724,16 @@ def _validate_stage1_metadata(rating: dict[str, Any], accuracy: float) -> None:
         or any(not isinstance(value, str) or not value.strip() for value in level_evidence)
     ):
         raise ValueError("level_evidence 必须为非空字符串列表")
+    for field in ("essential_task_count", "substantive_step_count"):
+        value = rating.get(field)
+        if type(value) is not int or not 1 <= value <= 12:
+            raise ValueError(f"{field} 必须为1到12的整数")
+    for field in (
+        "option_by_option_verification", "model_conversion_required",
+        "intermediate_result_reuse", "multi_object_multi_dimension",
+    ):
+        if type(rating.get(field)) is not bool:
+            raise ValueError(f"{field} 必须为布尔值")
     review = rating.get("threshold_review")
     if not isinstance(review, dict) or any(type(review.get(key)) is not bool for key in THRESHOLD_REVIEW_KEYS):
         raise ValueError("threshold_review 必须包含四个布尔值")
@@ -731,6 +744,66 @@ def _validate_stage1_metadata(rating: dict[str, Any], accuracy: float) -> None:
         raise ValueError("threshold_evidence 四项均须为非空字符串")
     if not str(rating.get("reason", "")).strip():
         raise ValueError("reason 不得为空")
+
+
+def audit_structural_base_level(rating: dict[str, Any]) -> dict[str, Any]:
+    """仅拦截不满足1/2档结构准入的结果，且最多上调一档。"""
+    original = rating["base_difficulty_level"]
+    adjusted = original
+    triggers: list[str] = []
+    essential_tasks = rating["essential_task_count"]
+    substantive_steps = rating["substantive_step_count"]
+    option_check = rating["option_by_option_verification"]
+    conversion = rating["model_conversion_required"]
+    reuse = rating["intermediate_result_reuse"]
+    multi_dimension = rating["multi_object_multi_dimension"]
+    burden = rating["whole_question_burden"]
+    task_structure = rating["task_completion_structure"]
+
+    if original == "难度1档":
+        if essential_tasks != 1:
+            triggers.append("essential_task_count_not_one")
+        if substantive_steps > 1:
+            triggers.append("substantive_step_count_exceeds_one")
+        if option_check:
+            triggers.append("option_by_option_verification")
+        if conversion:
+            triggers.append("model_conversion_required")
+        if reuse:
+            triggers.append("intermediate_result_reuse")
+        if multi_dimension:
+            triggers.append("multi_object_multi_dimension")
+        if burden != "低":
+            triggers.append("whole_question_burden_not_low")
+        if task_structure != "单一评分任务":
+            triggers.append("task_completion_structure_not_single")
+        if triggers:
+            adjusted = "难度2档"
+    elif original == "难度2档":
+        if conversion:
+            triggers.append("model_conversion_required")
+        if reuse:
+            triggers.append("intermediate_result_reuse")
+        if multi_dimension:
+            triggers.append("multi_object_multi_dimension")
+        if essential_tasks >= 5:
+            triggers.append("essential_task_count_at_least_five")
+        if burden in {"较高", "高", "极高"}:
+            triggers.append("whole_question_burden_at_least_high")
+        if (
+            essential_tasks >= 3
+            and substantive_steps >= 3
+            and task_structure == "多个异质独立任务"
+        ):
+            triggers.append("multiple_nontrivial_heterogeneous_tasks")
+        if triggers:
+            adjusted = "难度3档"
+    return {
+        "model_base_difficulty_level": original,
+        "effective_base_difficulty_level": adjusted,
+        "adjusted_by_structural_audit": adjusted != original,
+        "triggers": triggers,
+    }
 
 
 def _accuracy_scale_audit(
@@ -860,6 +933,10 @@ def enrich_stage1_rating(
     if not 0 <= original_accuracy <= 100:
         raise ValueError("predicted_accuracy 必须位于 0 到 100")
     _validate_stage1_metadata(rating, original_accuracy)
+    structural_audit = audit_structural_base_level(rating)
+    rating["base_difficulty_level_model_raw"] = rating["base_difficulty_level"]
+    rating["base_difficulty_level"] = structural_audit["effective_base_difficulty_level"]
+    rating["structural_level_audit"] = structural_audit
 
     active_features = detect_active_features(features)
     detection = detect_high_difficulty_features(features)
