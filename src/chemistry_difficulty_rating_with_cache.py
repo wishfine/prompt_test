@@ -143,13 +143,14 @@ if CHEMISTRY_IMAGE_MODE not in {"off", "auto", "all"}:
     )
 MAX_SCHEMA_RETRIES = int(os.getenv("CHEMISTRY_SCHEMA_RETRIES", "2"))
 
-UNTRUSTED_LABEL_FIELDS = {
-    "difficulty",
-    "teacher_label",
-    "teacher_difficulty",
-    "label",
-    "难度",
-}
+QUESTION_INPUT_FIELDS = (
+    "parent_id", "question_id", "stem", "options", "analysis",
+    "sub_questions", "stem_pic_url", "analysis_pic_url",
+)
+SUBQUESTION_INPUT_FIELDS = (
+    "parent_id", "question_id", "stem", "options", "analysis",
+    "stem_pic_url", "analysis_pic_url",
+)
 VISUAL_REFERENCE_RE = re.compile(
     r"(如图|图中|下图|图示|示意图|装置图|实验装置|流程图|"
     r"曲线|坐标图|关系图|图像|图象|表格|微观示意|粒子图|"
@@ -3050,40 +3051,25 @@ def infer_level_from_features(features: Dict[str, Any], data: Dict[str, Any]) ->
     return "基础题"
 
 # -------------------------- 5. 构建题目输入与模型调用 --------------------------
-def sanitize_question_data(data: Dict[str, Any]) -> Dict[str, Any]:
-    """递归隔离来源难度标签，模型输入和后处理均不得读取。"""
-    def clean(value: Any) -> Any:
-        if isinstance(value, dict):
-            return {
-                key: clean(item)
-                for key, item in value.items()
-                if key not in UNTRUSTED_LABEL_FIELDS
-            }
-        if isinstance(value, list):
-            return [clean(item) for item in value]
-        return copy.deepcopy(value)
-
-    return clean(data)
-
-
 def make_output_base(data: Dict[str, Any]) -> Dict[str, Any]:
-    """保留来源审计，但不继续用可信字段名保存原difficulty。"""
-    def rename(value: Any) -> Any:
-        if isinstance(value, dict):
-            output: Dict[str, Any] = {}
-            for key, item in value.items():
-                target = (
-                    f"source_{key}_untrusted"
-                    if key in UNTRUSTED_LABEL_FIELDS
-                    else key
-                )
-                output[target] = rename(item)
-            return output
-        if isinstance(value, list):
-            return [rename(item) for item in value]
-        return copy.deepcopy(value)
-
-    return rename(data)
+    """构造预测记录允许保存和发送的题目输入字段。"""
+    output = {
+        field: copy.deepcopy(data[field])
+        for field in QUESTION_INPUT_FIELDS
+        if field in data
+    }
+    sub_questions = data.get("sub_questions")
+    if isinstance(sub_questions, list):
+        output["sub_questions"] = [
+            {
+                field: copy.deepcopy(item[field])
+                for field in SUBQUESTION_INPUT_FIELDS
+                if field in item
+            }
+            for item in sub_questions
+            if isinstance(item, dict)
+        ]
+    return output
 
 
 def construct_question_content(data: Dict[str, Any]) -> str:
@@ -3445,7 +3431,7 @@ async def process_single_question(
 ) -> None:
     async with semaphore:
         question_id = data.get("question_id", "unknown")
-        safe_data = sanitize_question_data(data)
+        question_input = make_output_base(data)
         total_time = 0.0
         total_prompt_tokens = 0
         total_completion_tokens = 0
@@ -3468,7 +3454,7 @@ async def process_single_question(
                     call_tokens,
                     image_status,
                 ) = await call_model_with_cache(
-                    safe_data,
+                    question_input,
                     session,
                     retries,
                     timeout_sec,
@@ -3485,7 +3471,7 @@ async def process_single_question(
                         raise ChemistrySchemaError("模型返回空对象或JSON解析失败")
                     rating_result = postprocess_chemistry_difficulty(
                         candidate,
-                        safe_data,
+                        question_input,
                     )
                 except ChemistrySchemaError as exc:
                     schema_errors.append(str(exc))
@@ -3497,7 +3483,7 @@ async def process_single_question(
                     repair_feedback = f"上次输出未通过Core-12 schema：{exc}"
                     continue
 
-                output_data = make_output_base(data)
+                output_data = copy.deepcopy(question_input)
                 output_data["rating_profile"] = RATING_PROFILE
                 output_data["model_name"] = MODEL_NAME
                 output_data["temperature"] = TEMPERATURE
@@ -3522,7 +3508,6 @@ async def process_single_question(
                 output_data["schema_retry_count"] = schema_retry_count
                 output_data["schema_validation_errors"] = schema_errors
                 output_data["model_input_audit"] = {
-                    "source_difficulty_sent": False,
                     "structured_text_primary": True,
                     "image_mode": CHEMISTRY_IMAGE_MODE,
                     "selected_image_fields": image_status.get(

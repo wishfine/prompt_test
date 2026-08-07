@@ -453,7 +453,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             font-size: 12px;
             font-weight: 500;
         }
-        .tag-raw { background: #eceff1; color: #37474f; }
         .tag-time { background: #E3F2FD; color: #1565C0; }
         .tag-tokens { background: #F3E5F5; color: #6A1B9A; }
 
@@ -1074,7 +1073,7 @@ __QUESTION_CARDS_PLACEHOLDER__
             if (ann && ann.verdict === 'wrong') {
                 wrongCount++;
                 details += `题目ID: ${q.question_id}\\n`;
-                details += `模型定位: ${q.difficulty_level} (来源难度，仅审计: ${q.raw_difficulty})\\n`;
+                details += `模型定位: ${q.difficulty_level}\\n`;
                 details += `评议结论: 【判定有误】\\n`;
                 if (ann.corrected_level) details += `建议正确档位: ${ann.corrected_level}\\n`;
                 if (ann.reason) details += `评审备注: ${ann.reason}\\n`;
@@ -1154,11 +1153,6 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
             parent_id = item.get('parent_id', question_id)
             api_time = item.get('api_time_use', 0)
             api_tokens = item.get('api_total_tokens', 0)
-            raw_diff = item.get(
-                'source_difficulty_untrusted',
-                item.get('difficulty', '无'),
-            )
-
             stem_url = item.get('stem_pic_url', '')
             analysis_url = item.get('analysis_pic_url', '')
 
@@ -1173,8 +1167,7 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
                 'stem_url': stem_url,
                 'analysis_url': analysis_url,
                 'api_time': api_time,
-                'api_tokens': api_tokens,
-                'raw_difficulty': raw_diff
+                'api_tokens': api_tokens
             })
 
             cards_html += f"""
@@ -1182,7 +1175,6 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
             <div class="question-header">
                 <span class="question-id">#{idx} | ID: {question_id}</span>
                 <div class="question-tags">
-                    <span class="tag tag-raw">来源难度（不可信）: {escape(raw_diff)}</span>
                     <span class="tag tag-time">消耗: {api_time}s</span>
                     <span class="tag tag-tokens">{api_tokens} tokens</span>
                 </div>

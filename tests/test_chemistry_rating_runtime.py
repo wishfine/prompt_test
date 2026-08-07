@@ -233,7 +233,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
                 "expected",
             )
 
-    def test_source_label_is_not_sent_and_is_renamed_in_output(self) -> None:
+    def test_question_output_excludes_non_input_metadata(self) -> None:
         row = {
             "question_id": 1234567890123456789,
             "stem": "题干",
@@ -243,21 +243,10 @@ class ChemistryRuntimeTests(unittest.TestCase):
                 {"stem": "小题", "difficulty": 2},
             ],
         }
-        safe = chemistry.sanitize_question_data(row)
-        self.assertNotIn("difficulty", safe)
-        self.assertNotIn("teacher_label", safe)
-        self.assertNotIn("difficulty", safe["sub_questions"][0])
         output = chemistry.make_output_base(row)
         self.assertNotIn("difficulty", output)
-        self.assertEqual(output["source_difficulty_untrusted"], 4)
-        self.assertEqual(
-            output["source_teacher_label_untrusted"],
-            "较难",
-        )
-        self.assertEqual(
-            output["sub_questions"][0]["source_difficulty_untrusted"],
-            2,
-        )
+        self.assertNotIn("teacher_label", output)
+        self.assertNotIn("difficulty", output["sub_questions"][0])
 
     def test_auto_image_mode_uses_visual_reference_only(self) -> None:
         chemistry.CHEMISTRY_IMAGE_MODE = "auto"

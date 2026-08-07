@@ -21,7 +21,6 @@ SPEC.loader.exec_module(MODULE)
 def rated_item(question_id: str, level: str) -> dict:
     return {
         "question_id": question_id,
-        "source_difficulty_untrusted": 3,
         "difficulty_rating": {
             "difficulty_level": level,
             "features": {
@@ -229,7 +228,7 @@ class ChemistryVisualizationTests(unittest.TestCase):
             self.assertIn("仅标错，暂不指定档位", rendered)
             self.assertNotIn("✓ 模型判定合理</button>", rendered)
             self.assertNotIn("— 清除状态", rendered)
-            self.assertIn("来源难度（不可信）", rendered)
+            self.assertNotIn("来源难度（不可信）", rendered)
 
 
 if __name__ == "__main__":
