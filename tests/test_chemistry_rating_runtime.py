@@ -1765,7 +1765,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "不能看到题目要求“判断”就自动解释为一步应用",
             prefix,
         )
-        self.assertIn("用纵向深度 D 确定基准档", prefix)
+        self.assertIn("知识点及考查方式 K、局部最高难度 H", prefix)
         self.assertIn(
             "独立任务不增加纵向深度D，但会增加整题任务广度B",
             prefix,
@@ -1805,7 +1805,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
             prefix,
         )
         self.assertIn(
-            "先由 D 确定基准档，再由 B/W 做至多一个相邻档校准",
+            "先以 K 判断知识点本身及考查方式",
             prefix,
         )
         self.assertIn(
