@@ -22,6 +22,15 @@ LEVEL_NUMBER_TO_NAME = {
     value: key for key, value in LEVEL_NAME_TO_NUMBER.items()
 }
 LEVEL_NAMES = list(LEVEL_NAME_TO_NUMBER)
+LEVEL_SOURCES = {
+    "boundary-v4-guard-candidate",
+    "combined-guard-candidate",
+    "final",
+    "pre-postprocess",
+    "postprocess-candidate",
+    "final-boundary-guard-candidate",
+    "teacher-distribution-guard-candidate",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,15 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--errors")
     parser.add_argument(
         "--level-source",
-        choices=[
-            "final",
-            "pre-postprocess",
-            "postprocess-candidate",
-            "final-boundary-guard-candidate",
-            "teacher-distribution-guard-candidate",
-            "boundary-v4-guard-candidate",
-            "combined-guard-candidate",
-        ],
+        choices=sorted(LEVEL_SOURCES),
         default="final",
     )
     parser.add_argument("--report", required=True)
@@ -140,6 +141,8 @@ def extract_prediction(
     item: dict[str, Any],
     level_source: str,
 ) -> tuple[str | None, int | None]:
+    if level_source not in LEVEL_SOURCES:
+        raise ValueError(f"不支持的level_source: {level_source!r}")
     rating = item.get("difficulty_rating")
     level_name = None
     if isinstance(rating, dict):
@@ -197,18 +200,16 @@ def load_predictions(
             selected_action = rating.get(
                 "teacher_distribution_guard_candidate_action"
             )
+        elif level_source == "final-boundary-guard-candidate":
+            selected_action = rating.get(
+                "final_boundary_guard_candidate_action"
+            )
         elif level_source == "boundary-v4-guard-candidate":
             selected_action = rating.get(
                 "boundary_v4_guard_candidate_action"
             )
         elif level_source == "combined-guard-candidate":
-            selected_action = rating.get(
-                "combined_guard_candidate_action"
-            )
-        elif level_source == "final-boundary-guard-candidate":
-            selected_action = rating.get(
-                "final_boundary_guard_candidate_action"
-            )
+            selected_action = rating.get("combined_guard_candidate_action")
         elif level_source == "postprocess-candidate":
             actions = rating.get("postprocess_candidate_actions", [])
             if isinstance(actions, list) and actions:

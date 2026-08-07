@@ -50,16 +50,6 @@ def valid_rating(level: str = "中等题") -> dict:
     }[level]
     return {
         "features": features,
-        "boundary_features": {
-            "task_count_W": "1",
-            "rule_family_count_B": "1",
-            "retrieval_pattern": "单一可复用规则",
-            "curriculum_refs": ["U2"],
-            "response_requirement": "选择或短填",
-            "trap_complexity": "无明显陷阱",
-            "quantitative_path": "无定量",
-            "curriculum_scope": "初中课内",
-        },
         "coarse_difficulty": coarse,
         "reasoning": {
             "core_basis": (
@@ -104,16 +94,6 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK",
             False,
         )
-        self.old_boundary_v4_guard = getattr(
-            chemistry,
-            "CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS",
-            False,
-        )
-        self.old_boundary_v4_guard_writeback = getattr(
-            chemistry,
-            "CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS_WRITEBACK",
-            False,
-        )
         chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = True
         chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD = False
         chemistry.CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK = False
@@ -121,8 +101,6 @@ class ChemistryRuntimeTests(unittest.TestCase):
         chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = (
             False
         )
-        chemistry.CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS = False
-        chemistry.CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS_WRITEBACK = False
 
     def tearDown(self) -> None:
         chemistry.CHEMISTRY_IMAGE_MODE = self.old_image_mode
@@ -141,22 +119,12 @@ class ChemistryRuntimeTests(unittest.TestCase):
         chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = (
             self.old_teacher_distribution_guard_writeback
         )
-        chemistry.CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS = (
-            self.old_boundary_v4_guard
-        )
-        chemistry.CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS_WRITEBACK = (
-            self.old_boundary_v4_guard_writeback
-        )
 
-    def test_verified_teacher_guard_stays_on_and_v4_is_audit_only(
+    def test_stable_profile_defaults_teacher_guard_writeback_on(
         self,
     ) -> None:
         self.assertTrue(self.old_teacher_distribution_guard)
         self.assertTrue(self.old_teacher_distribution_guard_writeback)
-        self.assertTrue(self.old_boundary_v4_guard)
-        self.assertFalse(
-            self.old_boundary_v4_guard_writeback
-        )
 
     def test_lite_temperature_matches_physics_runtime(self) -> None:
         self.assertEqual(
@@ -221,35 +189,6 @@ class ChemistryRuntimeTests(unittest.TestCase):
                 num=None,
             )
             chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
-            config_on = chemistry.build_run_config(
-                input_path,
-                prompt_path,
-                seed=42,
-                num=None,
-            )
-
-        self.assertNotEqual(
-            chemistry.build_run_signature(config_off),
-            chemistry.build_run_signature(config_on),
-        )
-
-    def test_run_signature_changes_with_boundary_v4_writeback(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            input_path = root / "input.jsonl"
-            prompt_path = root / "prompt.txt"
-            input_path.write_text('{"question_id":"q1"}\n', encoding="utf-8")
-            prompt_path.write_text("prompt", encoding="utf-8")
-            chemistry.CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS_WRITEBACK = False
-            config_off = chemistry.build_run_config(
-                input_path,
-                prompt_path,
-                seed=42,
-                num=None,
-            )
-            chemistry.CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS_WRITEBACK = True
             config_on = chemistry.build_run_config(
                 input_path,
                 prompt_path,
@@ -1799,7 +1738,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             result["postprocess_profile"],
-            "chemistry_core12_boundary8_curriculum_v4_1_candidate",
+            "chemistry_core12_teacher_distribution_v3_severe_zero_production",
         )
 
     def test_prompt_example_is_valid_and_uses_core12_enums(self) -> None:
@@ -1830,7 +1769,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "三个选项之一",
         ):
             self.assertNotIn(placeholder, prefix)
-        self.assertIn("分别冻结Core-12和Boundary-8", suffix)
+        self.assertIn("冻结Core-12特征", suffix)
         self.assertNotIn("冻结18维特征", suffix)
         self.assertGreaterEqual(prefix.count("教师等级："), 17)
         self.assertIn(
@@ -1885,7 +1824,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
             prefix,
         )
         self.assertIn(
-            "`core_basis`必须说明D、B、W、主要课程坐标和至少一条真实任务边",
+            "`core_basis`必须说明D、B、W和至少一条真实任务边",
             prefix,
         )
         self.assertNotIn("B/W 只通过三类受控结构校准", prefix)

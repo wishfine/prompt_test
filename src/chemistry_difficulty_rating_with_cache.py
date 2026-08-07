@@ -2,8 +2,8 @@
 """初中化学难度批量评级。
 
 运行与审计方式对齐当前物理正式流程：OpenAI-compatible Responses API、
-可选前缀缓存、并发、重试、断点续跑、JSONL 输入输出、严格
-Core-12 + Boundary-8 schema、原始/最终结果分离，以及可审计的窄后处理。常规校准每次最多
+可选前缀缓存、并发、重试、断点续跑、JSONL 输入输出、严格 Core-12
+schema、原始/最终结果分离，以及可审计的窄后处理。常规校准每次最多
 调整一个相邻档；只有基于题干客观结构的严重低估安全底线，才允许将
 明显的连续反应核验从送分题直接托底到中等题。
 
@@ -121,24 +121,6 @@ CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = os.getenv(
     "yes",
     "on",
 }
-CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS = os.getenv(
-    "CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS",
-    "1",
-).strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS_WRITEBACK = os.getenv(
-    "CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS_WRITEBACK",
-    "0",
-).strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
 if (
     CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
     and (
@@ -149,17 +131,6 @@ if (
     raise ValueError(
         "教师分布窄校准写回不能与通用写回或压轴边界写回同时开启；"
         "请只选择一种写回策略"
-    )
-if (
-    CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS_WRITEBACK
-    and (
-        CHEMISTRY_ENABLE_LEVEL_WRITEBACK
-        or CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK
-    )
-):
-    raise ValueError(
-        "Boundary V4专用写回不能与通用写回或旧压轴边界写回"
-        "同时开启；已验证教师窄校准可与其并存并优先"
     )
 CHEMISTRY_IMAGE_MODE = os.getenv(
     "CHEMISTRY_IMAGE_MODE",
@@ -303,12 +274,6 @@ def build_run_config(
         ),
         "teacher_distribution_guards_writeback_enabled": (
             CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
-        ),
-        "boundary_v4_guards_enabled": (
-            CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS
-        ),
-        "boundary_v4_guards_writeback_enabled": (
-            CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS_WRITEBACK
         ),
     }
 
@@ -505,140 +470,6 @@ ALLOWED_FEATURE_VALUES = {
     "unfamiliar_information_transfer": {"课内直接原型", "给定新信息直接应用", "迁移后建立关系", "完全陌生模型现场建立"},
     "subquestion_dependency": {"无多问", "多问相互独立", "多问共享模型但无答案依赖", "多问存在结果或任务链依赖"},
 }
-
-# Boundary-8 只记录相邻档位边界负担，不替代 Core-12。课程目录在这里
-# 作为知识坐标使用；单元名称本身绝不直接决定难度。
-BOUNDARY_SCALAR_ALLOWED_VALUES = {
-    "task_count_W": {"1", "2", "3", "4", "5及以上"},
-    "rule_family_count_B": {"1", "2", "3及以上"},
-    "retrieval_pattern": {
-        "单一可复用规则",
-        "同主题独立事实束",
-        "多规则混合任务",
-    },
-    "response_requirement": {
-        "选择或短填",
-        "自主化学用语或方程式书写",
-        "规范原因或现象表达",
-        "方案设计或多步解释",
-    },
-    "trap_complexity": {
-        "无明显陷阱",
-        "轻微字面干扰",
-        "隐藏条件或易错规范",
-        "多重条件或分情况",
-    },
-    "quantitative_path": {
-        "无定量",
-        "直接比例或口算",
-        "标准两步计算",
-        "多步计算或单一特殊方法",
-        "特殊方法或综合定量",
-    },
-    "curriculum_scope": {
-        "初中课内",
-        "初中拓展",
-        "跨学科",
-        "高中内容",
-    },
-}
-BOUNDARY_FIELDS = {
-    *BOUNDARY_SCALAR_ALLOWED_VALUES,
-    "curriculum_refs",
-}
-CURRICULUM_REF_ALLOWED_VALUES = {
-    *(f"U{i}" for i in range(1, 12)),
-    "GENERAL",
-    "HS",
-}
-BOUNDARY_W_ORDER = {"1": 1, "2": 2, "3": 3, "4": 4, "5及以上": 5}
-BOUNDARY_B_ORDER = {"1": 1, "2": 2, "3及以上": 3}
-BOUNDARY_RESPONSE_ORDER = {
-    "选择或短填": 0,
-    "自主化学用语或方程式书写": 2,
-    "规范原因或现象表达": 3,
-    "方案设计或多步解释": 4,
-}
-BOUNDARY_TRAP_ORDER = {
-    "无明显陷阱": 0,
-    "轻微字面干扰": 1,
-    "隐藏条件或易错规范": 2,
-    "多重条件或分情况": 3,
-}
-BOUNDARY_QUANT_ORDER = {
-    "无定量": 0,
-    "直接比例或口算": 1,
-    "标准两步计算": 2,
-    "多步计算或单一特殊方法": 3,
-    "特殊方法或综合定量": 4,
-}
-BOUNDARY_SPAN_ORDER = {
-    "无法可靠定位": 0,
-    "单单元": 1,
-    "跨2个单元": 2,
-    "跨3个及以上单元": 3,
-}
-
-
-def validate_boundary_contract(boundary: Any) -> Dict[str, Any]:
-    """严格校验 Boundary-8，并保持课程单元引用可审计。"""
-    if not isinstance(boundary, dict):
-        raise ChemistrySchemaError("boundary_features必须是JSON对象")
-    actual = {str(key).strip() for key in boundary}
-    missing = sorted(BOUNDARY_FIELDS - actual)
-    extra = sorted(actual - BOUNDARY_FIELDS)
-    if missing or extra:
-        raise ChemistrySchemaError(
-            f"boundary_features字段不完整: missing={missing}, extra={extra}"
-        )
-
-    validated: Dict[str, Any] = {}
-    for field, allowed in BOUNDARY_SCALAR_ALLOWED_VALUES.items():
-        value = str(boundary[field]).strip()
-        if value not in allowed:
-            raise ChemistrySchemaError(
-                f"boundary_features.{field}非法值{value!r}；"
-                f"允许值={sorted(allowed)}"
-            )
-        validated[field] = value
-
-    refs = boundary.get("curriculum_refs")
-    if not isinstance(refs, list) or not 1 <= len(refs) <= 6:
-        raise ChemistrySchemaError(
-            "boundary_features.curriculum_refs必须是1至6项数组"
-        )
-    clean_refs = [str(value).strip() for value in refs]
-    if len(set(clean_refs)) != len(clean_refs):
-        raise ChemistrySchemaError("curriculum_refs不得包含重复单元")
-    invalid_refs = sorted(set(clean_refs) - CURRICULUM_REF_ALLOWED_VALUES)
-    if invalid_refs:
-        raise ChemistrySchemaError(
-            f"curriculum_refs包含非法值: {invalid_refs}"
-        )
-    if ("HS" in clean_refs) != (
-        validated["curriculum_scope"] == "高中内容"
-    ):
-        raise ChemistrySchemaError(
-            "curriculum_scope=高中内容时必须且只能使用HS标记高中知识"
-        )
-    validated["curriculum_refs"] = clean_refs
-    return validated
-
-
-def derive_curriculum_span(boundary: Dict[str, Any]) -> str:
-    """由课程坐标确定性派生跨度，GENERAL/HS不伪造初中单元数。"""
-    refs = {
-        value
-        for value in boundary.get("curriculum_refs", [])
-        if re.fullmatch(r"U(?:[1-9]|1[01])", str(value))
-    }
-    if not refs:
-        return "无法可靠定位"
-    if len(refs) == 1:
-        return "单单元"
-    if len(refs) == 2:
-        return "跨2个单元"
-    return "跨3个及以上单元"
 
 ENUM_NORMALIZE = {
     "representation_conversion": {
@@ -981,7 +812,6 @@ def validate_rating_contract(rating_result: Any) -> Dict[str, Any]:
         raise ChemistrySchemaError("模型输出必须是JSON对象")
     required = {
         "features",
-        "boundary_features",
         "coarse_difficulty",
         "reasoning",
         "difficulty_level",
@@ -1030,12 +860,6 @@ def validate_rating_contract(rating_result: Any) -> Dict[str, Any]:
 
     prepared = copy.deepcopy(rating_result)
     prepared["features"] = validate_feature_contract(prepared["features"])
-    prepared["boundary_features"] = validate_boundary_contract(
-        prepared["boundary_features"]
-    )
-    prepared["curriculum_span"] = derive_curriculum_span(
-        prepared["boundary_features"]
-    )
     return prepared
 
 # -------------------------- 4. 后处理纠偏规则 --------------------------
@@ -2662,229 +2486,12 @@ def add_feature_audit_flags(
     rating_result["feature_audit_flags"] = list(dict.fromkeys(flags))
 
 
-HIGH_SCHOOL_SOLVE_SIGNAL_RE = re.compile(
-    r"(物质的量|摩尔质量|摩尔体积|\bmol\b|电子转移(?:数|守恒)?|"
-    r"氧化数|氧化还原电子守恒|化学平衡|平衡常数|"
-    r"过氧化钠|Na2O2|量气法气体摩尔体积)",
-    re.IGNORECASE,
-)
-
-
-def confirmed_high_school_scope_signal(
-    boundary: Dict[str, Any],
-    data: Dict[str, Any],
-) -> bool:
-    """高中内容只能由题干/解析中的实际求解信号确认。
-
-    这避免模型仅凭陌生物质名称或自报 curriculum_scope 就直接升压轴。
-    """
-    return bool(
-        boundary.get("curriculum_scope") == "高中内容"
-        and "HS" in boundary.get("curriculum_refs", [])
-        and HIGH_SCHOOL_SOLVE_SIGNAL_RE.search(
-            visible_text(data, include_analysis=True)
-        )
-    )
-
-
-def boundary_easy_to_medium_evidence(
-    boundary: Dict[str, Any],
-) -> List[str]:
-    """送分题严重低估托底：必须同时具备高W、高B和第三类负担。"""
-    w = BOUNDARY_W_ORDER[boundary["task_count_W"]]
-    b = BOUNDARY_B_ORDER[boundary["rule_family_count_B"]]
-    trap = BOUNDARY_TRAP_ORDER[boundary["trap_complexity"]]
-    response = BOUNDARY_RESPONSE_ORDER[boundary["response_requirement"]]
-    span_name = derive_curriculum_span(boundary)
-    span = BOUNDARY_SPAN_ORDER[span_name]
-    if w >= 4 and b >= 3 and (
-        span >= 2 or trap >= 2 or response >= 3
-    ):
-        return [
-            f"W={boundary['task_count_W']}",
-            f"B={boundary['rule_family_count_B']}",
-            f"课程跨度={span_name}",
-            f"表达要求={boundary['response_requirement']}",
-            f"陷阱={boundary['trap_complexity']}",
-        ]
-    return []
-
-
-def boundary_easy_to_basic_evidence(
-    boundary: Dict[str, Any],
-) -> List[str]:
-    """送分/基础边界：识别真正的规则切换或应用，不按空格数升档。"""
-    w = BOUNDARY_W_ORDER[boundary["task_count_W"]]
-    b = BOUNDARY_B_ORDER[boundary["rule_family_count_B"]]
-    trap = BOUNDARY_TRAP_ORDER[boundary["trap_complexity"]]
-    response = BOUNDARY_RESPONSE_ORDER[boundary["response_requirement"]]
-    retrieval = boundary["retrieval_pattern"]
-    if (
-        (retrieval != "单一可复用规则" and w >= 2)
-        or b >= 2
-        or (response >= 2 and w >= 2)
-        or trap >= 2
-    ):
-        return [
-            f"W={boundary['task_count_W']}",
-            f"B={boundary['rule_family_count_B']}",
-            f"检索结构={retrieval}",
-            f"表达要求={boundary['response_requirement']}",
-            f"陷阱={boundary['trap_complexity']}",
-        ]
-    return []
-
-
-def boundary_basic_to_medium_evidence(
-    boundary: Dict[str, Any],
-) -> List[str]:
-    """基础/中等边界。
-
-    两个书写任务、一个直接任务加一个原因任务都不能仅凭数量升中等。
-    """
-    w = BOUNDARY_W_ORDER[boundary["task_count_W"]]
-    b = BOUNDARY_B_ORDER[boundary["rule_family_count_B"]]
-    trap = BOUNDARY_TRAP_ORDER[boundary["trap_complexity"]]
-    response = BOUNDARY_RESPONSE_ORDER[boundary["response_requirement"]]
-    quant = BOUNDARY_QUANT_ORDER[boundary["quantitative_path"]]
-    span_name = derive_curriculum_span(boundary)
-    span = BOUNDARY_SPAN_ORDER[span_name]
-    signals: List[str] = []
-    if w >= 4 and b >= 2:
-        signals.append("四项以上有效任务且至少两类规则")
-    if response >= 3 and w >= 3 and (
-        b >= 2 or trap >= 2 or span >= 2
-    ):
-        signals.append("三项以上任务包含规范解释且有第二类结构负担")
-    if response == 2 and w >= 3 and b >= 2:
-        signals.append("三项以上自主书写任务需要至少两类生成规则")
-    if trap >= 2 and w >= 2 and b >= 2:
-        signals.append("隐藏条件/易错规范与多规则任务组合")
-    if quant >= 2:
-        signals.append(f"定量路径={boundary['quantitative_path']}")
-    if span >= 2 and w >= 3 and b >= 2:
-        signals.append(f"课程跨度={span_name}")
-    if not signals:
-        return []
-    return [
-        *signals[:3],
-        f"W={boundary['task_count_W']}",
-        f"B={boundary['rule_family_count_B']}",
-    ]
-
-
-def boundary_medium_to_hard_evidence(
-    features: Dict[str, str],
-    boundary: Dict[str, Any],
-) -> List[str]:
-    w = BOUNDARY_W_ORDER[boundary["task_count_W"]]
-    b = BOUNDARY_B_ORDER[boundary["rule_family_count_B"]]
-    quant = BOUNDARY_QUANT_ORDER[boundary["quantitative_path"]]
-    response = BOUNDARY_RESPONSE_ORDER[boundary["response_requirement"]]
-    signals: List[str] = []
-    if quant >= 3:
-        signals.append(f"定量路径={boundary['quantitative_path']}")
-    if response >= 4 and (
-        features["experiment_requirement"]
-        in {"方案设计、评价或补充实验", "多阶段探究与定量误差"}
-        or (w >= 4 and b >= 2)
-    ):
-        signals.append("方案/多步解释形成决定性实验卡点")
-    if (
-        features["graph_table_requirement"]
-        in {"拐点、平台或分段反推", "多图表耦合建模"}
-        and quant >= 2
-    ):
-        signals.append("分段图像参与定量模型")
-    if w >= 5 and b >= 3 and (
-        features["experiment_requirement"] != "无"
-        or features["graph_table_requirement"] != "无"
-        or quant >= 2
-    ):
-        signals.append("高任务广度与实验/图表/定量共同出现")
-    return signals
-
-
-def boundary_final_ceiling_reason(
-    features: Dict[str, str],
-    boundary: Dict[str, Any],
-    data: Dict[str, Any],
-) -> str:
-    """挡住高枚举但仍是单一线性方法的拔高->压轴误升。"""
-    if confirmed_high_school_scope_signal(boundary, data):
-        return ""
-    quant = BOUNDARY_QUANT_ORDER[boundary["quantitative_path"]]
-    has_graph = features["graph_table_requirement"] in {
-        "拐点、平台或分段反推",
-        "多图表耦合建模",
-    }
-    has_experiment = features["experiment_requirement"] in {
-        "方案设计、评价或补充实验",
-        "多阶段探究与定量误差",
-    }
-    has_transfer = features["unfamiliar_information_transfer"] in {
-        "迁移后建立关系",
-        "完全陌生模型现场建立",
-    }
-    has_chain = (
-        features["subquestion_dependency"]
-        == "多问存在结果或任务链依赖"
-    )
-    if quant <= 3 and not any(
-        (has_graph, has_experiment, has_transfer, has_chain)
-    ):
-        return "单一课内特殊方法或线性计算未与图表、实验、迁移或任务链耦合"
-    return ""
-
-
-def boundary_hard_to_final_evidence(
-    features: Dict[str, str],
-    boundary: Dict[str, Any],
-    data: Dict[str, Any],
-) -> List[str]:
-    if confirmed_high_school_scope_signal(boundary, data):
-        return ["题干/解析确认高中知识实际参与求解"]
-    quant = BOUNDARY_QUANT_ORDER[boundary["quantitative_path"]]
-    evidence: List[str] = []
-    if quant >= 4:
-        evidence.append(f"定量路径={boundary['quantitative_path']}")
-    if features["graph_table_requirement"] in {
-        "拐点、平台或分段反推",
-        "多图表耦合建模",
-    }:
-        evidence.append(f"图表={features['graph_table_requirement']}")
-    if features["experiment_requirement"] in {
-        "方案设计、评价或补充实验",
-        "多阶段探究与定量误差",
-    }:
-        evidence.append(f"实验={features['experiment_requirement']}")
-    if features["reaction_relation"] in {
-        "多反应连续转化",
-        "先后、竞争或过量不足",
-        "需要分情况判断的反应模型",
-    }:
-        evidence.append(f"反应={features['reaction_relation']}")
-    if (
-        features["subquestion_dependency"]
-        == "多问存在结果或任务链依赖"
-    ):
-        evidence.append("存在结果或任务链依赖")
-    if features["unfamiliar_information_transfer"] in {
-        "迁移后建立关系",
-        "完全陌生模型现场建立",
-    }:
-        evidence.append(
-            f"迁移={features['unfamiliar_information_transfer']}"
-        )
-    return evidence if len(evidence) >= 2 else []
-
-
 def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
     """化学后处理校准与审计主流程。
 
-    已验证的教师窄校准保持生产写回；V4 Boundary 新规则默认
-    只产出独立候选供审计，验证净收益后才显式开启专用写回。
-    通用 Core-12 候选仍只在 CHEMISTRY_ENABLE_LEVEL_WRITEBACK=1 时写回。
+    chemistry_stable 默认启用教师分布结构校准并写回最终等级；做 A/B
+    消融时可显式关闭 CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK。
+    通用历史规则仍只在 CHEMISTRY_ENABLE_LEVEL_WRITEBACK=1 时写回。
     """
     if not rating_result:
         return rating_result
@@ -2898,13 +2505,12 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["postprocess_trace"] = []
     rating_result["postprocess_actions"] = []
     rating_result["postprocess_profile"] = (
-        "chemistry_core12_boundary8_curriculum_v4_1_candidate"
+        "chemistry_core12_teacher_distribution_v3_severe_zero_production"
     )
     rating_result["postprocess_writeback_enabled"] = (
         CHEMISTRY_ENABLE_LEVEL_WRITEBACK
         or CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK
         or CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
-        or CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS_WRITEBACK
     )
     rating_result["general_level_writeback_enabled"] = (
         CHEMISTRY_ENABLE_LEVEL_WRITEBACK
@@ -2921,19 +2527,9 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["teacher_distribution_guard_writeback_enabled"] = (
         CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
     )
-    rating_result["boundary_v4_guard_enabled"] = (
-        CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS
-    )
-    rating_result["boundary_v4_guard_writeback_enabled"] = (
-        CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS_WRITEBACK
-    )
-    rating_result["feature_schema_version"] = (
-        "chemistry_core12_boundary8_curriculum_v4_1"
-    )
+    rating_result["feature_schema_version"] = "chemistry_core12_strict_v1"
     rating_result["schema_validation_passed"] = True
     features = rating_result["features"]
-    boundary = rating_result["boundary_features"]
-    rating_result["curriculum_span"] = derive_curriculum_span(boundary)
     medium_evidence = core12_medium_evidence(features)
     basic_evidence = core12_basic_application_evidence(features)
     complete_model_evidence = core12_complete_model_evidence(features)
@@ -2973,7 +2569,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             == "宏观-微观-符号-定量多重转换"
         )
     )
-    core12_final_ceiling_reason = (
+    final_ceiling_reason = (
         final_promotion_ceiling_reason(features, data)
         if (
             raw_level == "拔高题"
@@ -2984,14 +2580,6 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         )
         else ""
     )
-    boundary_ceiling_reason = (
-        boundary_final_ceiling_reason(features, boundary, data)
-        if raw_level == "拔高题"
-        else ""
-    )
-    # 已验证的旧规则继续只受旧 Core-12 上限约束；Boundary 上限只限制
-    # 本轮新增候选，确保默认审计实验不改变历史候选规则的作用面。
-    final_ceiling_reason = core12_final_ceiling_reason
     rating_result["final_promotion_ceiling_reason"] = (
         final_ceiling_reason
     )
@@ -3114,8 +2702,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     # 教师分布校准只使用可复核的结构特征，并且每题最多提出一次调整。
     # 常规动作只移动一个相邻档；唯一的两档托底是“送分→中等”的多选项
     # 连续反应核验，它依赖题干中的多个反应箭头和条件核验，不依赖模型
-    # 自报 depth。规则不按题库配额切档；这组已验证旧规则保持
-    # 生产写回，与下方默认仅审计的 Boundary V4 候选分开。
+    # 自报 depth。规则不按题库配额切档；生产默认写回，A/B 时可关闭。
     teacher_guard_active = bool(
         CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS
         or CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
@@ -3350,99 +2937,6 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         else raw_level
     )
 
-    # Boundary-8 与已验证教师窄校准分开计算。默认只记录
-    # 独立候选，不会因为旧规则正在生产写回而被连带写回。
-    boundary_guard_active = bool(
-        CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS
-        or CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS_WRITEBACK
-    )
-    boundary_candidate_result = copy.deepcopy(rating_result)
-    if boundary_guard_active:
-        if raw_level == "送分题":
-            severe_boundary = boundary_easy_to_medium_evidence(boundary)
-            basic_boundary = boundary_easy_to_basic_evidence(boundary)
-            if severe_boundary:
-                set_level_with_reason(
-                    boundary_candidate_result,
-                    "中等题",
-                    "Boundary-8严重低估候选：高任务覆盖、高规则广度与第三类负担共同出现",
-                    rule="boundary_v4_easy_to_medium_high_load_floor",
-                    evidence=severe_boundary,
-                    max_level_distance=2,
-                )
-            elif basic_boundary:
-                set_level_with_reason(
-                    boundary_candidate_result,
-                    "基础题",
-                    "Boundary-8相邻候选：存在真实规则切换或基础应用负担",
-                    rule="boundary_v4_easy_to_basic_application_floor",
-                    evidence=basic_boundary,
-                )
-        elif raw_level == "基础题":
-            boundary_evidence = boundary_basic_to_medium_evidence(boundary)
-            if boundary_evidence:
-                set_level_with_reason(
-                    boundary_candidate_result,
-                    "中等题",
-                    "Boundary-8相邻候选：任务广度、表达或定量路径达到完整常规负担",
-                    rule="boundary_v4_basic_to_medium_load_floor",
-                    evidence=boundary_evidence,
-                )
-        elif raw_level == "中等题":
-            boundary_evidence = boundary_medium_to_hard_evidence(
-                features,
-                boundary,
-            )
-            if boundary_evidence:
-                set_level_with_reason(
-                    boundary_candidate_result,
-                    "拔高题",
-                    "Boundary-8相邻候选：决定性定量、图表或方案结构形成卡点",
-                    rule="boundary_v4_medium_to_hard_structural_floor",
-                    evidence=boundary_evidence,
-                )
-        elif raw_level == "拔高题" and not (
-            final_ceiling_reason or boundary_ceiling_reason
-        ):
-            boundary_evidence = boundary_hard_to_final_evidence(
-                features,
-                boundary,
-                data,
-            )
-            if boundary_evidence:
-                set_level_with_reason(
-                    boundary_candidate_result,
-                    "压轴题",
-                    "Boundary-8相邻候选：至少两类高阶结构在同一模型中形成任务边",
-                    rule="boundary_v4_hard_to_final_coupled_model",
-                    evidence=boundary_evidence,
-                )
-
-    boundary_candidate_actions = copy.deepcopy(
-        boundary_candidate_result.get("postprocess_trace", [])
-    )
-    if len(boundary_candidate_actions) > 1:
-        raise RuntimeError("Boundary V4窄校准违反每题单次调整约束")
-    boundary_guard_action = (
-        boundary_candidate_actions[0]
-        if boundary_candidate_actions
-        else None
-    )
-    boundary_guard_candidate_level = (
-        boundary_candidate_result.get("difficulty_level", raw_level)
-        if boundary_guard_action
-        else raw_level
-    )
-
-    # 生产组合候选中，已验证旧规则优先；只有旧规则未命中
-    # 时才考察 Boundary-8，从而保持每题最多一次改档。
-    combined_guard_action = teacher_guard_action or boundary_guard_action
-    combined_guard_candidate_level = (
-        teacher_guard_candidate_level
-        if teacher_guard_action
-        else boundary_guard_candidate_level
-    )
-
     rating_result["postprocess_candidate_actions"] = candidate_actions
     rating_result["postprocess_candidate_level"] = candidate_result.get(
         "difficulty_level",
@@ -3459,24 +2953,17 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
         and teacher_guard_action
     )
-    boundary_guard_writeback_applied = bool(
-        CHEMISTRY_ENABLE_BOUNDARY_V4_GUARDS_WRITEBACK
-        and boundary_guard_action
-        and not teacher_guard_action
-    )
     writeback_applied = bool(
         general_writeback_applied
         or final_guard_writeback_applied
         or teacher_guard_writeback_applied
-        or boundary_guard_writeback_applied
     )
     if writeback_applied:
-        if teacher_guard_writeback_applied:
-            rating_result = teacher_candidate_result
-        elif boundary_guard_writeback_applied:
-            rating_result = boundary_candidate_result
-        else:
-            rating_result = candidate_result
+        rating_result = (
+            teacher_candidate_result
+            if teacher_guard_writeback_applied
+            else candidate_result
+        )
         rating_result["postprocess_writeback_enabled"] = True
         rating_result["postprocess_candidate_actions"] = (
             candidate_actions
@@ -3511,30 +2998,8 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["teacher_distribution_guard_writeback_applied"] = (
         teacher_guard_writeback_applied
     )
-    rating_result["boundary_v4_guard_candidate_level"] = (
-        boundary_guard_candidate_level
-    )
-    rating_result["boundary_v4_guard_candidate_action"] = (
-        copy.deepcopy(boundary_guard_action)
-        if boundary_guard_action
-        else None
-    )
-    rating_result["boundary_v4_guard_writeback_applied"] = (
-        boundary_guard_writeback_applied
-    )
-    rating_result["combined_guard_candidate_level"] = (
-        combined_guard_candidate_level
-    )
-    rating_result["combined_guard_candidate_action"] = (
-        copy.deepcopy(combined_guard_action)
-        if combined_guard_action
-        else None
-    )
     rating_result["final_promotion_ceiling_reason"] = (
         final_ceiling_reason
-    )
-    rating_result["boundary_final_ceiling_reason"] = (
-        boundary_ceiling_reason
     )
     sync_reasoning_after_postprocess(rating_result)
     rating_result["postprocess_actions"] = copy.deepcopy(
@@ -3559,22 +3024,12 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         )
     if teacher_guard_action and not teacher_guard_writeback_applied:
         rating_result["feature_audit_flags"].append(
-            "存在结构边界窄校准候选，但当前专用写回已关闭；"
+            "存在结构边界窄校准候选，但专用写回默认关闭；"
             "仅记录teacher_distribution_guard_candidate_action"
-        )
-    if boundary_guard_action and not boundary_guard_writeback_applied:
-        rating_result["feature_audit_flags"].append(
-            "存在Boundary V4候选校准，但新规则专用写回默认关闭；"
-            "仅记录boundary_v4_guard_candidate_action"
         )
     if final_ceiling_reason:
         rating_result["feature_audit_flags"].append(
             "压轴升档被客观低密度上限阻止：" + final_ceiling_reason
-        )
-    if boundary_ceiling_reason:
-        rating_result["feature_audit_flags"].append(
-            "Boundary压轴候选被线性模型上限阻止："
-            + boundary_ceiling_reason
         )
     return rating_result
 
@@ -4039,10 +3494,7 @@ async def process_single_question(
                             f"schema校验重试耗尽({MAX_SCHEMA_RETRIES}): {exc}"
                         ) from exc
                     schema_retry_count += 1
-                    repair_feedback = (
-                        "上次输出未通过Core-12/Boundary-8 schema："
-                        f"{exc}"
-                    )
+                    repair_feedback = f"上次输出未通过Core-12 schema：{exc}"
                     continue
 
                 output_data = make_output_base(data)

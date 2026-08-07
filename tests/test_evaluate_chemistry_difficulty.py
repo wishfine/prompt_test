@@ -117,22 +117,6 @@ class ChemistryEvaluationTests(unittest.TestCase):
 
         level_name, level_number = evaluation.extract_prediction(
             item,
-            "boundary-v4-guard-candidate",
-        )
-
-        self.assertEqual(level_name, "基础题")
-        self.assertEqual(level_number, 2)
-
-        level_name, level_number = evaluation.extract_prediction(
-            item,
-            "combined-guard-candidate",
-        )
-
-        self.assertEqual(level_name, "压轴题")
-        self.assertEqual(level_number, 5)
-
-        level_name, level_number = evaluation.extract_prediction(
-            item,
             "teacher-distribution-guard-candidate",
         )
 
@@ -142,6 +126,22 @@ class ChemistryEvaluationTests(unittest.TestCase):
         level_name, level_number = evaluation.extract_prediction(
             item,
             "final-boundary-guard-candidate",
+        )
+
+        self.assertEqual(level_name, "压轴题")
+        self.assertEqual(level_number, 5)
+
+        level_name, level_number = evaluation.extract_prediction(
+            item,
+            "boundary-v4-guard-candidate",
+        )
+
+        self.assertEqual(level_name, "基础题")
+        self.assertEqual(level_number, 2)
+
+        level_name, level_number = evaluation.extract_prediction(
+            item,
+            "combined-guard-candidate",
         )
 
         self.assertEqual(level_name, "压轴题")
