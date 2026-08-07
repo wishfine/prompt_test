@@ -23,6 +23,33 @@ def load_module():
 
 
 class ChemistryEvaluationTests(unittest.TestCase):
+    def test_human_review_jsonl_is_supported_as_label_source(self) -> None:
+        evaluation = load_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "human.jsonl"
+            rows = [
+                {
+                    "question_id": "q1",
+                    "human_difficulty_level": "基础题",
+                    "human_notes": "需要一次规则应用",
+                },
+                {
+                    "question_id": "q2",
+                    "human_difficulty_level": "",
+                    "human_notes": "未给最终档",
+                },
+            ]
+            path.write_text(
+                "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+                encoding="utf-8",
+            )
+
+            labels = evaluation.load_labels(path)
+
+        self.assertEqual(set(labels), {"q1"})
+        self.assertEqual(labels["q1"]["standard_level"], 2)
+        self.assertEqual(labels["q1"]["reason"], "需要一次规则应用")
+
     def test_report_includes_distribution_recall_and_collapse_warning(
         self,
     ) -> None:
@@ -75,12 +102,30 @@ class ChemistryEvaluationTests(unittest.TestCase):
                 "postprocess_candidate_level": "压轴题",
                 "final_boundary_guard_candidate_level": "压轴题",
                 "teacher_distribution_guard_candidate_level": "中等题",
+                "boundary_v4_guard_candidate_level": "基础题",
+                "combined_guard_candidate_level": "压轴题",
             },
         }
 
         level_name, level_number = evaluation.extract_prediction(
             item,
             "postprocess-candidate",
+        )
+
+        self.assertEqual(level_name, "压轴题")
+        self.assertEqual(level_number, 5)
+
+        level_name, level_number = evaluation.extract_prediction(
+            item,
+            "boundary-v4-guard-candidate",
+        )
+
+        self.assertEqual(level_name, "基础题")
+        self.assertEqual(level_number, 2)
+
+        level_name, level_number = evaluation.extract_prediction(
+            item,
+            "combined-guard-candidate",
         )
 
         self.assertEqual(level_name, "压轴题")
@@ -101,6 +146,53 @@ class ChemistryEvaluationTests(unittest.TestCase):
 
         self.assertEqual(level_name, "压轴题")
         self.assertEqual(level_number, 5)
+
+    def test_rule_attribution_reports_helped_hurt_and_net(self) -> None:
+        evaluation = load_module()
+        labels = {
+            "q1": {"standard_level": 2, "standard_level_name": "基础题"},
+            "q2": {"standard_level": 1, "standard_level_name": "送分题"},
+            "q3": {"standard_level": 3, "standard_level_name": "中等题"},
+        }
+        predictions = {
+            "q1": {
+                "predicted_level": 2,
+                "predicted_level_name": "基础题",
+                "postprocess_original_level": "送分题",
+                "selected_action": {"rule": "boundary_rule"},
+            },
+            "q2": {
+                "predicted_level": 2,
+                "predicted_level_name": "基础题",
+                "postprocess_original_level": "送分题",
+                "selected_action": {"rule": "boundary_rule"},
+            },
+            "q3": {
+                "predicted_level": 3,
+                "predicted_level_name": "中等题",
+                "postprocess_original_level": "中等题",
+                "selected_action": None,
+            },
+        }
+
+        report, _ = evaluation.evaluate_predictions(
+            labels,
+            predictions,
+            error_ids=set(),
+            error_messages={},
+        )
+
+        self.assertEqual(
+            report["postprocess_rule_attribution"]["boundary_rule"],
+            {
+                "triggered": 2,
+                "helped": 1,
+                "hurt": 1,
+                "unchanged": 0,
+                "net": 0,
+            },
+        )
+        self.assertEqual(report["postprocess_net_improvement"], 0)
 
     def test_mixed_run_signatures_are_rejected(self) -> None:
         evaluation = load_module()

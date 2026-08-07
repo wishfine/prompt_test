@@ -39,6 +39,8 @@ def parse_args() -> argparse.Namespace:
             "postprocess-candidate",
             "final-boundary-guard-candidate",
             "teacher-distribution-guard-candidate",
+            "boundary-v4-guard-candidate",
+            "combined-guard-candidate",
         ],
         default="final",
     )
@@ -67,6 +69,9 @@ def jsonl_items(
 
 
 def load_labels(path: Path) -> dict[str, dict[str, Any]]:
+    if path.suffix.lower() in {".jsonl", ".json"}:
+        return load_human_jsonl_labels(path)
+
     labels: dict[str, dict[str, Any]] = {}
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         for row in csv.DictReader(handle):
@@ -99,6 +104,38 @@ def load_labels(path: Path) -> dict[str, dict[str, Any]]:
     return labels
 
 
+def load_human_jsonl_labels(path: Path) -> dict[str, dict[str, Any]]:
+    """读取可视化人工复核结果；没有明确人工档位的记录不臆造标签。"""
+    labels: dict[str, dict[str, Any]] = {}
+    for line_number, row in jsonl_items(path):
+        question_id = str(row.get("question_id", "")).strip()
+        if not question_id:
+            continue
+        level_name = str(
+            row.get("human_difficulty_level", "") or ""
+        ).strip()
+        if not level_name:
+            continue
+        level = LEVEL_NAME_TO_NUMBER.get(level_name)
+        if level is None:
+            raise ValueError(
+                f"{path} 第{line_number}行人工等级非法: {level_name!r}"
+            )
+        if question_id in labels:
+            raise ValueError(
+                f"标签中存在重复 question_id: {question_id}"
+            )
+        labels[question_id] = {
+            "standard_stars": "",
+            "standard_level": level,
+            "standard_level_name": level_name,
+            "reason": str(row.get("human_notes", "") or ""),
+            "verdict": str(row.get("verdict", "") or ""),
+            "human_reviewed": row.get("human_reviewed"),
+        }
+    return labels
+
+
 def extract_prediction(
     item: dict[str, Any],
     level_source: str,
@@ -118,6 +155,10 @@ def extract_prediction(
             level_name = rating.get(
                 "teacher_distribution_guard_candidate_level"
             )
+        elif level_source == "boundary-v4-guard-candidate":
+            level_name = rating.get("boundary_v4_guard_candidate_level")
+        elif level_source == "combined-guard-candidate":
+            level_name = rating.get("combined_guard_candidate_level")
         level_name = level_name or rating.get("difficulty_level")
     if level_name is None:
         level_name = item.get("difficulty_level")
@@ -151,6 +192,31 @@ def load_predictions(
         rating = item.get("difficulty_rating")
         if not isinstance(rating, dict):
             rating = {}
+        selected_action = None
+        if level_source == "teacher-distribution-guard-candidate":
+            selected_action = rating.get(
+                "teacher_distribution_guard_candidate_action"
+            )
+        elif level_source == "boundary-v4-guard-candidate":
+            selected_action = rating.get(
+                "boundary_v4_guard_candidate_action"
+            )
+        elif level_source == "combined-guard-candidate":
+            selected_action = rating.get(
+                "combined_guard_candidate_action"
+            )
+        elif level_source == "final-boundary-guard-candidate":
+            selected_action = rating.get(
+                "final_boundary_guard_candidate_action"
+            )
+        elif level_source == "postprocess-candidate":
+            actions = rating.get("postprocess_candidate_actions", [])
+            if isinstance(actions, list) and actions:
+                selected_action = actions[0]
+        else:
+            actions = rating.get("postprocess_trace", [])
+            if isinstance(actions, list) and actions:
+                selected_action = actions[0]
         predictions[question_id] = {
             "predicted_level_name": level_name,
             "predicted_level": level_number,
@@ -167,11 +233,20 @@ def load_predictions(
             "teacher_distribution_guard_candidate_level": rating.get(
                 "teacher_distribution_guard_candidate_level"
             ),
+            "boundary_v4_guard_candidate_level": rating.get(
+                "boundary_v4_guard_candidate_level"
+            ),
+            "combined_guard_candidate_level": rating.get(
+                "combined_guard_candidate_level"
+            ),
             "postprocess_trace": rating.get("postprocess_trace", []),
             "postprocess_candidate_actions": rating.get(
                 "postprocess_candidate_actions",
                 [],
             ),
+            "selected_action": selected_action,
+            "boundary_features": rating.get("boundary_features", {}),
+            "curriculum_span": rating.get("curriculum_span", ""),
         }
     return predictions, sorted(set(duplicates))
 
@@ -188,6 +263,8 @@ def validate_prediction_run_consistency(
         "final_boundary_guard_writeback_enabled": set(),
         "teacher_distribution_guard_enabled": set(),
         "teacher_distribution_guard_writeback_enabled": set(),
+        "boundary_v4_guard_enabled": set(),
+        "boundary_v4_guard_writeback_enabled": set(),
     }
     row_count = 0
     for line_number, item in jsonl_items(path):
@@ -298,6 +375,7 @@ def evaluate_predictions(
     severe = 0
     absolute_error_sum = 0
     mismatch_rows: list[dict[str, Any]] = []
+    rule_attribution: dict[str, dict[str, int]] = {}
 
     for question_id in evaluable_ids:
         label = labels[question_id]
@@ -316,6 +394,36 @@ def evaluate_predictions(
             within_one += difference <= 1
             severe += difference >= 2
             status = "correct" if difference == 0 else "mismatch"
+            action = prediction.get("selected_action")
+            if isinstance(action, dict) and action.get("rule"):
+                rule = str(action["rule"])
+                stats = rule_attribution.setdefault(
+                    rule,
+                    {
+                        "triggered": 0,
+                        "helped": 0,
+                        "hurt": 0,
+                        "unchanged": 0,
+                        "net": 0,
+                    },
+                )
+                stats["triggered"] += 1
+                original = LEVEL_NAME_TO_NUMBER.get(
+                    str(
+                        prediction.get(
+                            "postprocess_original_level",
+                            "",
+                        )
+                        or ""
+                    )
+                )
+                if original != actual and predicted == actual:
+                    stats["helped"] += 1
+                elif original == actual and predicted != actual:
+                    stats["hurt"] += 1
+                else:
+                    stats["unchanged"] += 1
+                stats["net"] = stats["helped"] - stats["hurt"]
         else:
             difference = None
             status = (
@@ -361,6 +469,14 @@ def evaluate_predictions(
                         )
                         or ""
                     ),
+                    "boundary_v4_guard_candidate_level": (
+                        prediction.get("boundary_v4_guard_candidate_level")
+                        or ""
+                    ),
+                    "combined_guard_candidate_level": (
+                        prediction.get("combined_guard_candidate_level")
+                        or ""
+                    ),
                     "postprocess_trace": json.dumps(
                         prediction.get("postprocess_trace", []),
                         ensure_ascii=False,
@@ -370,6 +486,25 @@ def evaluate_predictions(
                             "postprocess_candidate_actions",
                             [],
                         ),
+                        ensure_ascii=False,
+                    ),
+                    "selected_rule": (
+                        prediction.get("selected_action", {}).get(
+                            "rule",
+                            "",
+                        )
+                        if isinstance(
+                            prediction.get("selected_action"),
+                            dict,
+                        )
+                        else ""
+                    ),
+                    "curriculum_span": prediction.get(
+                        "curriculum_span",
+                        "",
+                    ),
+                    "boundary_features": json.dumps(
+                        prediction.get("boundary_features", {}),
                         ensure_ascii=False,
                     ),
                     "rating_error": error_messages.get(
@@ -489,6 +624,12 @@ def evaluate_predictions(
             for actual in range(1, 6)
         },
         "mismatch_count": len(mismatch_rows),
+        "postprocess_rule_attribution": dict(
+            sorted(rule_attribution.items())
+        ),
+        "postprocess_net_improvement": sum(
+            stats["net"] for stats in rule_attribution.values()
+        ),
     }
     return report, mismatch_rows
 
@@ -512,8 +653,13 @@ def write_csv(
         "postprocess_original_level",
         "postprocess_candidate_level",
         "teacher_distribution_guard_candidate_level",
+        "boundary_v4_guard_candidate_level",
+        "combined_guard_candidate_level",
         "postprocess_trace",
         "postprocess_candidate_actions",
+        "selected_rule",
+        "curriculum_span",
+        "boundary_features",
         "rating_error",
     ]
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
@@ -612,6 +758,14 @@ def main() -> None:
             "分布报警: "
             + json.dumps(
                 report["distribution_warnings"],
+                ensure_ascii=False,
+            )
+        )
+    if report["postprocess_rule_attribution"]:
+        print(
+            "后处理规则净收益: "
+            + json.dumps(
+                report["postprocess_rule_attribution"],
                 ensure_ascii=False,
             )
         )
