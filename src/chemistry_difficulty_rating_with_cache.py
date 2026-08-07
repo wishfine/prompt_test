@@ -1050,6 +1050,46 @@ def parallel_application_floor_signal(
     return None
 
 
+def reported_four_fact_bundle_floor_signal(
+    rating_result: Dict[str, Any],
+    data: Dict[str, Any],
+) -> Optional[str]:
+    """用模型已写明的 W=4 事实束建立基础题下限。
+
+    该信号只用于阻止“至少四个非重复事实核验”落入送分题，且必须有
+    四个显式选项作为题面佐证。它不抬高 reasoning_depth，也不支持继续
+    升到中等题。
+    """
+    if count_choice_options(data) < 4:
+        return None
+    reasoning = rating_result.get("reasoning") or {}
+    core_basis = str(reasoning.get("core_basis", "") or "")
+    if re.search(
+        r"(?:有效覆盖\s*W|W)\s*(?:为|=|：|:)\s*(?:4|四)"
+        r"(?:个|项)?(?:非重复|同类|独立|事实|直接|核验|任务)*",
+        core_basis,
+    ):
+        return "模型理由已明确报告四项非重复事实核验，建立基础题下限"
+    return None
+
+
+def measuring_cylinder_error_chain_signal(
+    data: Dict[str, Any],
+) -> Optional[str]:
+    """识别量筒俯仰视导致体积或配制误差的连续关系链。"""
+    text = visible_text(data, include_analysis=True)
+    if "量筒" not in text or not re.search(r"俯视|仰视", text):
+        return None
+    if not re.search(
+        r"实际体积|实际取出|取液体积|配制结果|浓度|"
+        r"示数.{0,8}(?:偏大|偏小|大于|小于)|"
+        r"(?:偏大|偏小|大于|小于).{0,8}(?:示数|实际)|误差",
+        text,
+    ):
+        return None
+    return "量筒俯仰视需连续判断示数、实际体积及误差方向"
+
+
 def reaction_validation_floor_signal(
     data: Dict[str, Any],
 ) -> Optional[str]:
@@ -2505,7 +2545,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["postprocess_trace"] = []
     rating_result["postprocess_actions"] = []
     rating_result["postprocess_profile"] = (
-        "chemistry_core12_teacher_distribution_v3_severe_zero_production"
+        "chemistry_core12_teacher_distribution_v4_targeted_production"
     )
     rating_result["postprocess_writeback_enabled"] = (
         CHEMISTRY_ENABLE_LEVEL_WRITEBACK
@@ -2709,6 +2749,13 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     )
     teacher_candidate_result = copy.deepcopy(rating_result)
     parallel_floor = parallel_application_floor_signal(data)
+    reported_four_fact_floor = reported_four_fact_bundle_floor_signal(
+        rating_result,
+        data,
+    )
+    measuring_cylinder_error_chain = (
+        measuring_cylinder_error_chain_signal(data)
+    )
     reaction_floor = reaction_validation_floor_signal(data)
     if teacher_guard_active:
         if (
@@ -2736,6 +2783,17 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             )
         elif (
             raw_level == "送分题"
+            and reported_four_fact_floor
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "基础题",
+                "严重低估安全底线：四项非重复事实核验不能压缩为单点直接检索",
+                rule="teacher_easy_to_basic_reported_four_fact_floor",
+                evidence=[reported_four_fact_floor],
+            )
+        elif (
+            raw_level == "送分题"
             and features["experiment_requirement"] == "基础操作或读数"
         ):
             set_level_with_reason(
@@ -2746,6 +2804,17 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 evidence=[
                     f"实验要求={features['experiment_requirement']}",
                 ],
+            )
+        elif (
+            raw_level == "基础题"
+            and measuring_cylinder_error_chain
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "中等题",
+                "结构边界窄校准：量筒俯仰视需完成示数—实际体积—误差方向连续推导",
+                rule="teacher_basic_to_medium_measuring_cylinder_error_chain",
+                evidence=[measuring_cylinder_error_chain],
             )
         elif (
             raw_level == "基础题"
@@ -2905,22 +2974,6 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 rule="core12_hard_to_final_4_5_coupled_guard",
                 evidence=final_evidence[:6],
             )
-        elif (
-            raw_level == "拔高题"
-            and not final_ceiling_reason
-            and complex_final_guard_signal
-        ):
-            set_level_with_reason(
-                teacher_candidate_result,
-                "压轴题",
-                "结构边界窄校准：4—5层复杂主模型由多重定量或四重表征转换闭合",
-                rule="teacher_hard_to_final_complex_model",
-                evidence=[
-                    f"推理深度={features['reasoning_depth']}",
-                    *final_evidence[:6],
-                ],
-            )
-
     teacher_candidate_actions = copy.deepcopy(
         teacher_candidate_result.get("postprocess_trace", [])
     )

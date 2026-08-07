@@ -43,12 +43,9 @@ class ChemistryStableContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("Core-12", prompt)
-        self.assertIn(
-            "初中化学课程知识坐标（仅用于定位，不要求输出）",
-            prompt,
-        )
-        self.assertIn("教材中成对记忆的固定结论", prompt)
-        self.assertIn("同主题下的多个不同事实输出", prompt)
+        self.assertNotIn("初中化学课程知识坐标", prompt)
+        self.assertNotIn("同主题下的多个不同事实输出", prompt)
+        self.assertIn("量筒误差方向边界（窄规则）", prompt)
         self.assertIn("量筒俯仰视读数误差的关系推导", prompt)
         self.assertIn("不得因为出现“量筒”二字自动判为中等题", prompt)
         self.assertNotIn('"boundary_features"', prompt)

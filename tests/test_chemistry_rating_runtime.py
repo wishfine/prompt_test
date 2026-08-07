@@ -884,6 +884,87 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "teacher_easy_to_basic_experiment_application",
         )
 
+    def test_teacher_guard_promotes_reported_four_fact_bundle_to_basic(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("送分题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["reasoning"]["core_basis"] = (
+            "纵向深度D为0层；任务广度B覆盖四种不同实验现象，"
+            "有效覆盖W为四个同类直接核验任务。"
+        )
+        data = {
+            "stem": "下列有关实验现象的描述正确的是（ ）",
+            "options": (
+                "A. 红磷燃烧产生烟雾\n"
+                "B. 硫燃烧产生蓝紫色火焰\n"
+                "C. 木炭燃烧生成二氧化碳\n"
+                "D. 铁丝燃烧生成黑色固体"
+            ),
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "基础题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_easy_to_basic_reported_four_fact_floor",
+        )
+
+    def test_teacher_guard_promotes_measuring_cylinder_error_chain(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("基础题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["features"]["reasoning_depth"] = "1层"
+        data = {
+            "stem": "量取液体时俯视读数为15mL，实际体积如何变化？",
+            "options": "",
+            "analysis": "俯视量筒读数时，示数大于实际体积，造成误差。",
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "中等题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_basic_to_medium_measuring_cylinder_error_chain",
+        )
+
+    def test_teacher_guard_keeps_direct_measuring_cylinder_reading_basic(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        rating = valid_rating("基础题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["features"]["reasoning_depth"] = "1层"
+        data = {
+            "stem": "读取量筒示数时，视线应与凹液面最低处保持水平。",
+            "options": "",
+            "analysis": "按规范直接读数。",
+        }
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, data)
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "基础题",
+        )
+        self.assertIsNone(
+            result["teacher_distribution_guard_candidate_action"],
+        )
+
     def test_teacher_guard_audits_linked_basic_as_medium(
         self,
     ) -> None:
@@ -1476,7 +1557,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
             result["teacher_distribution_guard_candidate_action"],
         )
 
-    def test_teacher_guard_audits_complex_model_hard_as_final(
+    def test_teacher_guard_keeps_broad_complex_model_at_hard(
         self,
     ) -> None:
         chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
@@ -1504,11 +1585,10 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "拔高题")
         self.assertEqual(
             result["teacher_distribution_guard_candidate_level"],
-            "压轴题",
+            "拔高题",
         )
-        self.assertEqual(
-            result["teacher_distribution_guard_candidate_action"]["rule"],
-            "teacher_hard_to_final_complex_model",
+        self.assertIsNone(
+            result["teacher_distribution_guard_candidate_action"],
         )
 
     def test_final_guard_respects_low_quantitative_experiment_ceiling(
@@ -1738,7 +1818,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             result["postprocess_profile"],
-            "chemistry_core12_teacher_distribution_v3_severe_zero_production",
+            "chemistry_core12_teacher_distribution_v4_targeted_production",
         )
 
     def test_prompt_example_is_valid_and_uses_core12_enums(self) -> None:
