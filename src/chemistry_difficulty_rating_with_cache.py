@@ -7,7 +7,7 @@
 调整一个相邻档；只有基于题干客观结构的严重低估安全底线，才允许将
 明显的连续反应核验从送分题直接托底到中等题。
 
-化学正式输出使用12个可从题目核验的任务与操作特征；历史Core-12
+化学正式输出使用19个可从题目核验的任务与操作特征；历史Core-12
 只保留兼容读取和确定性内部投影，不再要求模型直接填写抽象难度摘要。
 """
 
@@ -40,6 +40,7 @@ from dotenv import load_dotenv
 try:
     from chemistry_observable_features import (
         OBSERVABLE_FEATURE_FIELDS,
+        OBSERVABLE_V3_FEATURE_FIELDS,
         OBSERVABLE_V2_FEATURE_FIELDS,
         derive_observable_metrics,
         validate_observable_features,
@@ -47,6 +48,7 @@ try:
 except ModuleNotFoundError:
     from src.chemistry_observable_features import (
         OBSERVABLE_FEATURE_FIELDS,
+        OBSERVABLE_V3_FEATURE_FIELDS,
         OBSERVABLE_V2_FEATURE_FIELDS,
         derive_observable_metrics,
         validate_observable_features,
@@ -780,6 +782,7 @@ def is_observable_feature_contract(features: Any) -> bool:
         and frozenset(features)
         in {
             frozenset(OBSERVABLE_FEATURE_FIELDS),
+            frozenset(OBSERVABLE_V3_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V2_FEATURE_FIELDS),
         }
     )
@@ -787,6 +790,8 @@ def is_observable_feature_contract(features: Any) -> bool:
 
 def observable_feature_schema_version(features: Dict[str, Any]) -> str:
     if set(features) == set(OBSERVABLE_FEATURE_FIELDS):
+        return "chemistry_observable_v4"
+    if set(features) == set(OBSERVABLE_V3_FEATURE_FIELDS):
         return "chemistry_observable_v3"
     if set(features) == set(OBSERVABLE_V2_FEATURE_FIELDS):
         return "chemistry_observable_v2"
@@ -794,9 +799,9 @@ def observable_feature_schema_version(features: Dict[str, Any]) -> str:
 
 
 def validate_feature_contract(features: Any) -> Dict[str, Any]:
-    """校验正式可观测 V3/V2 或历史 Core-12 字段。
+    """校验正式可观测 V4/V3/V2 或历史 Core-12 字段。
 
-    新请求只由正式 Prompt 产生可观测 V3；保留 V2/Core-12
+    新请求只由正式 Prompt 产生可观测 V4；保留 V3/V2/Core-12
     读取能力是为了历史 JSONL 回放和回归测试，不会把旧字段
     重新暴露给模型。
     """
@@ -1092,11 +1097,34 @@ def observable_deep_quantitative_final_signal(
     多反应定量、联立或范围分类中的至少一项。题干长、工业背景、
     多图或多小问都不在触发条件中。
     """
-    # 只对V3新输出生效：V2历史文件缺少新增的
+    # V4优先使用题目可观察的主模型拓扑；V3仍按历史语义回放。V2
+    # 缺少新增的并列任务、视觉和误差事实，不在回放时改变其语义。
+    feature_keys = (
+        frozenset(features)
+        if isinstance(features, dict)
+        else frozenset()
+    )
+    if feature_keys == frozenset(OBSERVABLE_FEATURE_FIELDS):
+        validated = validate_observable_features(features)
+        return bool(
+            len(validated["longest_solution_chain"]) >= 5
+            and validated["solution_topology"]
+            in {
+                "条件分支或范围筛选",
+                "未知组成或量反推",
+                "双来源交叉验证",
+                "多阶段反应网络",
+            }
+            and bool(
+                set(validated["calculation_operations"])
+                & {"差量", "多反应定量关系", "联立", "范围或分类计算"}
+            )
+        )
+    # 只对V3历史输出生效：V2历史文件缺少新增的
     # 并列任务、视觉和误差事实，不在回放时改变其语义。
     if (
         not isinstance(features, dict)
-        or frozenset(features) != frozenset(OBSERVABLE_FEATURE_FIELDS)
+        or feature_keys != frozenset(OBSERVABLE_V3_FEATURE_FIELDS)
     ):
         return False
     validated = validate_observable_features(features)
@@ -1394,6 +1422,24 @@ def observable_multi_rule_breadth_signal(
     if not is_observable_feature_contract(model_features):
         return None
     metrics = derive_observable_metrics(model_features)
+    is_v4 = frozenset(model_features) == frozenset(
+        OBSERVABLE_FEATURE_FIELDS
+    )
+    if is_v4:
+        if not (
+            metrics["effective_task_count"] >= 4
+            and metrics["rule_application_task_count"] >= 2
+            and metrics["direct_retrieval_task_count"]
+            <= metrics["effective_task_count"] - 2
+            and metrics["rule_family_count"] >= 2
+            and model_features.get("parallel_task_relation")
+            == "不同规则的独立任务"
+        ):
+            return None
+        return (
+            "至少两项任务实际需要规则、条件、符号或计算应用，"
+            "其余并非纯直接检索，属于横向应用广度候选"
+        )
     if not (
         metrics["effective_task_count"] >= 4
         and metrics["task_group_count"] >= 2
@@ -1647,6 +1693,27 @@ def shared_new_information_signal(
             "跨模块融合",
             "多模块深度融合",
         }
+    )
+
+
+def observable_shared_new_information_signal(
+    model_features: Dict[str, Any],
+) -> bool:
+    """V4仅识别同一新关系被共享模型实际复用的高档候选。"""
+    if (
+        not isinstance(model_features, dict)
+        or frozenset(model_features)
+        != frozenset(OBSERVABLE_FEATURE_FIELDS)
+    ):
+        return False
+    validated = validate_observable_features(model_features)
+    return bool(
+        validated["new_information_operation"]
+        == "新关系被多个任务共同使用"
+        and validated["parallel_task_relation"]
+        == "共享同一化学模型的关联任务"
+        and validated["solution_topology"]
+        != "单点直接回答"
     )
 
 
@@ -2939,6 +3006,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     )
     model_features = rating_result["features"]
     observable_contract = is_observable_feature_contract(model_features)
+    schema_version = ""
     if observable_contract:
         observable_metrics = derive_observable_metrics(model_features)
         features = project_observable_to_core12(model_features)
@@ -2949,9 +3017,13 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             features
         )
         rating_result["postprocess_profile"] = (
-            "chemistry_observable_v3_teacher_calibrated_v2"
-            if schema_version == "chemistry_observable_v3"
-            else "chemistry_observable_v2_teacher_distribution_v2_safe"
+            "chemistry_observable_v4_narrow_guard_v1"
+            if schema_version == "chemistry_observable_v4"
+            else (
+                "chemistry_observable_v3_teacher_calibrated_v2"
+                if schema_version == "chemistry_observable_v3"
+                else "chemistry_observable_v2_teacher_distribution_v2_safe"
+            )
         )
     else:
         features = model_features
@@ -3113,6 +3185,11 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     candidate_actions = copy.deepcopy(
         candidate_result.get("postprocess_trace", [])
     )
+    if schema_version == "chemistry_observable_v4":
+        # V4专为摆脱“投影后的抽象特征再反向改档”而设计。通用Core-12
+        # 分支只服务V2/V3历史回放，不能成为新版输出的候选或写回来源。
+        candidate_result = copy.deepcopy(rating_result)
+        candidate_actions = []
     final_boundary_guard_action = next(
         (
             action
@@ -3187,6 +3264,11 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         elif (
             raw_level == "送分题"
             and features["experiment_requirement"] == "基础操作或读数"
+            and (
+                schema_version != "chemistry_observable_v4"
+                or model_features.get("experiment_task_structure")
+                == "多仪器或多条件比较"
+            )
         ):
             set_level_with_reason(
                 teacher_candidate_result,
@@ -3373,8 +3455,14 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             )
         elif (
             raw_level == "中等题"
-            and depth >= 2
-            and shared_new_information_signal(features)
+            and (
+                observable_shared_new_information_signal(model_features)
+                if schema_version == "chemistry_observable_v4"
+                else (
+                    depth >= 2
+                    and shared_new_information_signal(features)
+                )
+            )
         ):
             set_level_with_reason(
                 teacher_candidate_result,
@@ -3382,11 +3470,24 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 "结构边界窄校准：给定新信息被多个小问在同一深层模型中共同使用",
                 rule="teacher_medium_to_hard_shared_new_information",
                 evidence=[
-                    f"推理深度={features['reasoning_depth']}",
-                    "陌生信息迁移="
-                    + features["unfamiliar_information_transfer"],
-                    f"小问关系={features['subquestion_dependency']}",
-                    f"知识关系={features['knowledge_relation']}",
+                    (
+                        "新信息操作="
+                        + model_features["new_information_operation"]
+                        if schema_version == "chemistry_observable_v4"
+                        else "陌生信息迁移="
+                        + features["unfamiliar_information_transfer"]
+                    ),
+                    (
+                        "并列关系="
+                        + model_features["parallel_task_relation"]
+                        if schema_version == "chemistry_observable_v4"
+                        else f"小问关系={features['subquestion_dependency']}"
+                    ),
+                    (
+                        "解题拓扑=" + model_features["solution_topology"]
+                        if schema_version == "chemistry_observable_v4"
+                        else f"知识关系={features['knowledge_relation']}"
+                    ),
                 ],
             )
         elif (

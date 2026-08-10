@@ -69,6 +69,20 @@ def valid_v3_features() -> dict:
     return features
 
 
+def valid_v4_features() -> dict:
+    """一题中的任务按最高实际操作恰好归入直接提取或规则应用。"""
+    features = valid_v3_features()
+    features.update(
+        {
+            "direct_retrieval_task_count": 1,
+            "rule_application_task_count": 2,
+            "solution_topology": "单线性常规链",
+            "experiment_task_structure": "无实验判断",
+        }
+    )
+    return features
+
+
 class ChemistryObservableFeatureTests(unittest.TestCase):
     def test_candidate_module_exists(self) -> None:
         self.assertTrue(MODULE_PATH.exists())
@@ -137,6 +151,40 @@ class ChemistryObservableFeatureTests(unittest.TestCase):
             "跨单元耦合（U5-1、U9-3）",
         )
         self.assertTrue(derived["has_task_dependency"])
+
+    def test_v4_records_task_nature_topology_and_experiment_structure(
+        self,
+    ) -> None:
+        module = load_module()
+
+        validated = module.validate_observable_features(
+            valid_v4_features()
+        )
+        derived = module.derive_observable_metrics(validated)
+
+        self.assertEqual(
+            derived["direct_retrieval_task_count"],
+            1,
+        )
+        self.assertEqual(
+            derived["rule_application_task_count"],
+            2,
+        )
+        self.assertEqual(derived["solution_topology"], "单线性常规链")
+        self.assertEqual(
+            derived["experiment_task_structure"],
+            "无实验判断",
+        )
+
+    def test_v4_rejects_task_nature_counts_that_do_not_cover_tasks(
+        self,
+    ) -> None:
+        module = load_module()
+        features = valid_v4_features()
+        features["direct_retrieval_task_count"] = 2
+
+        with self.assertRaisesRegex(ValueError, "任务性质计数"):
+            module.validate_observable_features(features)
 
     def test_v3_distinguishes_parallel_cross_unit_coverage(self) -> None:
         module = load_module()

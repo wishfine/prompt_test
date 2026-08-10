@@ -1,9 +1,9 @@
-"""初中化学可观测特征 V3 正式契约。
+"""初中化学可观测特征 V4 正式契约。
 
 该模块提供严格校验和派生量计算。正式特征不直接输出“推理深度”
 “约束复杂度”等难度摘要，而是记录任务、规则、课程单元和具体
-化学操作。V3 在 V2 基础上增加课题级课程坐标、并列任务关系、
-视觉任务结构和误差分析操作；V2 仍可严格读取，用于历史回放。
+化学操作。V4 在 V3 基础上增加任务性质计数、解题拓扑和实验任务
+结构；V2/V3 仍可严格读取，用于历史回放。
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ OBSERVABLE_V2_FEATURE_FIELDS = (
     "new_information_operation",
 )
 
-OBSERVABLE_FEATURE_FIELDS = (
+OBSERVABLE_V3_FEATURE_FIELDS = (
     "longest_solution_chain",
     "task_groups",
     "rule_families",
@@ -38,6 +38,28 @@ OBSERVABLE_FEATURE_FIELDS = (
     "representation_operations",
     "evidence_operations",
     "experiment_operation",
+    "visual_task_structure",
+    "graph_table_operation",
+    "error_analysis_operation",
+    "calculation_operations",
+    "new_information_operation",
+)
+
+OBSERVABLE_FEATURE_FIELDS = (
+    "longest_solution_chain",
+    "task_groups",
+    "direct_retrieval_task_count",
+    "rule_application_task_count",
+    "rule_families",
+    "curriculum_topics",
+    "parallel_task_relation",
+    "solution_topology",
+    "reaction_structure",
+    "condition_operations",
+    "representation_operations",
+    "evidence_operations",
+    "experiment_operation",
+    "experiment_task_structure",
     "visual_task_structure",
     "graph_table_operation",
     "error_analysis_operation",
@@ -193,6 +215,24 @@ NEW_INFORMATION_OPERATIONS = {
     "新关系被多个任务共同使用",
 }
 
+SOLUTION_TOPOLOGIES = {
+    "单点直接回答",
+    "单线性常规链",
+    "条件分支或范围筛选",
+    "未知组成或量反推",
+    "双来源交叉验证",
+    "多阶段反应网络",
+}
+
+EXPERIMENT_TASK_STRUCTURES = {
+    "无实验判断",
+    "名称或单点规范匹配",
+    "多仪器或多条件比较",
+    "操作偏差因果链",
+    "控制变量或数据归纳",
+    "方案设计或评价",
+}
+
 
 def _validate_unique_enum_list(
     features: Dict[str, Any],
@@ -228,7 +268,7 @@ def _validate_single_enum(
 
 
 def validate_observable_features(features: Any) -> Dict[str, Any]:
-    """严格校验可观测特征 V3，并兼容读取 V2。
+    """严格校验可观测特征 V4，并兼容读取 V3/V2。
 
     校验器不静默补默认值：缺字段、多字段或枚举错误均直接
     拒绝，便于重试提示精确修正。
@@ -236,13 +276,15 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
     if not isinstance(features, dict):
         raise ValueError("features必须是JSON对象")
     actual = set(features)
-    v3_expected = set(OBSERVABLE_FEATURE_FIELDS)
+    v4_expected = set(OBSERVABLE_FEATURE_FIELDS)
+    v3_expected = set(OBSERVABLE_V3_FEATURE_FIELDS)
     v2_expected = set(OBSERVABLE_V2_FEATURE_FIELDS)
+    is_v4 = actual == v4_expected
     is_v3 = actual == v3_expected
     is_v2 = actual == v2_expected
-    if not (is_v3 or is_v2):
-        missing = sorted(v3_expected - actual)
-        extra = sorted(actual - v3_expected)
+    if not (is_v4 or is_v3 or is_v2):
+        missing = sorted(v4_expected - actual)
+        extra = sorted(actual - v4_expected)
         raise ValueError(
             f"可观测特征字段集不匹配; missing={missing}; extra={extra}"
         )
@@ -294,13 +336,39 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
         )
     validated["task_groups"] = normalized_groups
 
+    if is_v4:
+        direct_count = validated["direct_retrieval_task_count"]
+        application_count = validated["rule_application_task_count"]
+        for field, value in (
+            ("direct_retrieval_task_count", direct_count),
+            ("rule_application_task_count", application_count),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field}必须是非负整数")
+        if direct_count + application_count != sum(
+            group["count"] for group in normalized_groups
+        ):
+            raise ValueError(
+                "任务性质计数必须恰好覆盖task_groups中的全部有效任务"
+            )
+        _validate_single_enum(
+            validated,
+            "solution_topology",
+            SOLUTION_TOPOLOGIES,
+        )
+        _validate_single_enum(
+            validated,
+            "experiment_task_structure",
+            EXPERIMENT_TASK_STRUCTURES,
+        )
+
     _validate_unique_enum_list(
         validated,
         "rule_families",
         RULE_FAMILIES,
         allow_empty=False,
     )
-    if is_v3:
+    if is_v3 or is_v4:
         _validate_unique_enum_list(
             validated,
             "curriculum_topics",
@@ -347,7 +415,7 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
         "experiment_operation",
         EXPERIMENT_OPERATIONS,
     )
-    if is_v3:
+    if is_v3 or is_v4:
         _validate_single_enum(
             validated,
             "visual_task_structure",
@@ -364,7 +432,7 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
         CALCULATION_OPERATIONS,
         allow_empty=True,
     )
-    if is_v3:
+    if is_v3 or is_v4:
         _validate_single_enum(
             validated,
             "error_analysis_operation",
@@ -384,7 +452,7 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
     if graph_conversions and validated["graph_table_operation"] == "无":
         raise ValueError("存在图表转换时graph_table_operation不能为无")
     if (
-        is_v3
+        (is_v3 or is_v4)
         and validated["graph_table_operation"] != "无"
         and validated["visual_task_structure"] == "无必要视觉信息"
     ):
@@ -406,11 +474,23 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
     ):
         raise ValueError("实验任务必须记录experiment_operation")
     if (
-        is_v3
+        (is_v3 or is_v4)
         and validated["error_analysis_operation"] != "无误差分析"
         and validated["experiment_operation"] == "无"
     ):
         raise ValueError("误差分析任务必须记录experiment_operation")
+    if is_v4:
+        experiment_structure = validated["experiment_task_structure"]
+        if (
+            validated["experiment_operation"] == "无"
+            and experiment_structure != "无实验判断"
+        ):
+            raise ValueError("experiment_operation=无时实验任务结构必须为无实验判断")
+        if (
+            validated["experiment_operation"] != "无"
+            and experiment_structure == "无实验判断"
+        ):
+            raise ValueError("存在实验操作时experiment_task_structure不能为无实验判断")
     return validated
 
 
@@ -419,8 +499,8 @@ def derive_observable_metrics(
 ) -> Dict[str, Any]:
     """从可审计数组派生 D/B/W/U 等数量，不接受模型自报计数。"""
     validated = validate_observable_features(features)
-    is_v3 = "curriculum_topics" in validated
-    if is_v3:
+    is_v3_or_v4 = "curriculum_topics" in validated
+    if is_v3_or_v4:
         curriculum_topics = validated["curriculum_topics"]
         curriculum_units = sorted(
             {topic.split("-", 1)[0] for topic in curriculum_topics}
@@ -439,7 +519,7 @@ def derive_observable_metrics(
             "跨单元" if len(curriculum_units) >= 2 else "单一课题"
         )
 
-    if is_v3:
+    if is_v3_or_v4:
         parallel_relation = validated["parallel_task_relation"]
         has_task_dependency = bool(
             len(validated["longest_solution_chain"]) >= 2
@@ -469,7 +549,7 @@ def derive_observable_metrics(
             len(validated["longest_solution_chain"]) >= 2
         )
 
-    if is_v3:
+    if is_v3_or_v4:
         curriculum_span_summary = (
             f"{curriculum_coupling_type}（"
             + "、".join(curriculum_topics)
@@ -509,4 +589,14 @@ def derive_observable_metrics(
             validated["calculation_operations"]
         ),
         "has_task_dependency": has_task_dependency,
+        "direct_retrieval_task_count": validated.get(
+            "direct_retrieval_task_count"
+        ),
+        "rule_application_task_count": validated.get(
+            "rule_application_task_count"
+        ),
+        "solution_topology": validated.get("solution_topology"),
+        "experiment_task_structure": validated.get(
+            "experiment_task_structure"
+        ),
     }

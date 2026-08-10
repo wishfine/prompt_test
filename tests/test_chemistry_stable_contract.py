@@ -37,14 +37,15 @@ class ChemistryStableContractTests(unittest.TestCase):
         self.assertNotIn("boundary_features", validated)
         self.assertNotIn("curriculum_span", validated)
 
-    def test_production_prompt_uses_observable_v3_not_boundary8(self) -> None:
+    def test_production_prompt_uses_observable_v4_not_boundary8(self) -> None:
         prompt = (
             ROOT / "prompts" / "初中化学难度打标提示词.txt"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("15项可观测特征协议", prompt)
+        self.assertIn("19项可观测特征协议", prompt)
         self.assertIn('"longest_solution_chain"', prompt)
         self.assertIn('"curriculum_topics"', prompt)
+        self.assertIn('"solution_topology"', prompt)
         self.assertIn("量筒俯仰视误差链", prompt)
         self.assertIn("关键是三个前后依赖判断", prompt)
         self.assertNotIn('"boundary_features"', prompt)

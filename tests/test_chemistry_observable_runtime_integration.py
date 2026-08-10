@@ -68,6 +68,19 @@ def observable_v3_features() -> dict:
     return features
 
 
+def observable_v4_features() -> dict:
+    features = observable_v3_features()
+    features.update(
+        {
+            "direct_retrieval_task_count": 1,
+            "rule_application_task_count": 2,
+            "solution_topology": "单线性常规链",
+            "experiment_task_structure": "无实验判断",
+        }
+    )
+    return features
+
+
 def rating(level: str = "中等题") -> dict:
     coarse = {
         "送分题": "送分/基础区间（1-2档）",
@@ -123,7 +136,138 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
 
         self.assertEqual(
             set(validated["features"]),
+            set(self.runtime.OBSERVABLE_V3_FEATURE_FIELDS),
+        )
+
+    def test_rating_contract_accepts_observable_v4_features(self) -> None:
+        item = rating()
+        item["features"] = observable_v4_features()
+
+        validated = self.runtime.validate_rating_contract(item)
+
+        self.assertEqual(
+            set(validated["features"]),
             set(self.runtime.OBSERVABLE_FEATURE_FIELDS),
+        )
+
+    def test_v4_does_not_emit_generic_core12_candidate(self) -> None:
+        item = rating("基础题")
+        item["features"] = observable_v4_features()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "根据反应现象确定反应物",
+                    "书写化学方程式建立质量关系",
+                    "利用方程式计算生成物质量",
+                ],
+                "direct_retrieval_task_count": 0,
+                "rule_application_task_count": 3,
+                "solution_topology": "单线性常规链",
+                "calculation_operations": ["单一方程式"],
+                "representation_operations": ["化学方程式→定量关系"],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "根据反应现象和方程式完成计算。", "options": ""},
+        )
+
+        self.assertEqual(result["feature_schema_version"], "chemistry_observable_v4")
+        self.assertEqual(result["postprocess_candidate_actions"], [])
+
+    def test_v4_direct_experiment_match_is_not_breadth_candidate(self) -> None:
+        item = rating("送分题")
+        item["features"] = observable_v4_features()
+        item["features"].update(
+            {
+                "longest_solution_chain": ["识别量筒名称"],
+                "task_groups": [
+                    {"task_type": "实验操作与探究", "count": 1},
+                ],
+                "direct_retrieval_task_count": 1,
+                "rule_application_task_count": 0,
+                "rule_families": ["实验操作与探究"],
+                "representation_operations": [],
+                "evidence_operations": [],
+                "experiment_operation": "基础操作或读数",
+                "experiment_task_structure": "名称或单点规范匹配",
+                "visual_task_structure": "单图直接识别",
+                "graph_table_operation": "无",
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "下列仪器中，量筒是（ ）。", "options": ""},
+        )
+
+        self.assertIsNone(
+            result["teacher_distribution_guard_candidate_action"]
+        )
+
+    def test_v4_multi_condition_experiment_is_audit_candidate(self) -> None:
+        item = rating("送分题")
+        item["features"] = observable_v4_features()
+        item["features"].update(
+            {
+                "longest_solution_chain": ["比较三种仪器是否可直接加热"],
+                "task_groups": [
+                    {"task_type": "实验操作与探究", "count": 3},
+                ],
+                "direct_retrieval_task_count": 0,
+                "rule_application_task_count": 3,
+                "rule_families": ["实验操作与探究"],
+                "representation_operations": [],
+                "evidence_operations": [],
+                "experiment_operation": "基础操作或读数",
+                "experiment_task_structure": "多仪器或多条件比较",
+                "visual_task_structure": "多图独立同规则识别",
+                "graph_table_operation": "无",
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "比较三种仪器能否直接加热。", "options": ""},
+        )
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_easy_to_basic_experiment_application",
+        )
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+
+    def test_v4_shared_new_relation_is_audit_candidate(self) -> None:
+        item = rating("中等题")
+        item["features"] = observable_v4_features()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "根据题给新关系建立物质组成判断",
+                    "将该关系用于后续定量核验",
+                ],
+                "direct_retrieval_task_count": 0,
+                "rule_application_task_count": 3,
+                "solution_topology": "未知组成或量反推",
+                "parallel_task_relation": "共享同一化学模型的关联任务",
+                "new_information_operation": "新关系被多个任务共同使用",
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "根据题给新关系完成组成反推和后续定量核验。"},
+        )
+
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_medium_to_hard_shared_new_information",
+        )
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
         )
 
     def test_postprocess_derives_metrics_without_replacing_features(self) -> None:
