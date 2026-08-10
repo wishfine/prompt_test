@@ -549,7 +549,14 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
         )
         for anchor in required_anchors:
             self.assertIn(anchor, prompt)
-        self.assertGreaterEqual(prompt.count("### 示例"), 13)
+        self.assertGreaterEqual(prompt.count("【Case"), 29)
+        for obsolete_field in (
+            "knowledge_distribution",
+            "chemical_object_distribution",
+            "step_count",
+            "task_count",
+        ):
+            self.assertNotIn(obsolete_field, prompt)
 
     def test_prompt_uses_curriculum_units_as_task_boundaries(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
