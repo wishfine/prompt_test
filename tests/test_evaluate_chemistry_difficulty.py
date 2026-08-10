@@ -23,6 +23,46 @@ def load_module():
 
 
 class ChemistryEvaluationTests(unittest.TestCase):
+    def test_run_consistency_reports_schema_retry_and_normalization(self) -> None:
+        evaluation = load_module()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "predictions.jsonl"
+            rows = [
+                {
+                    "question_id": "q1",
+                    "schema_retry_count": 1,
+                    "schema_validation_errors": ["bad enum"],
+                    "feature_normalization_actions": [
+                        {"field": "task_groups.task_type"}
+                    ],
+                },
+                {
+                    "question_id": "q2",
+                    "schema_retry_count": 0,
+                    "schema_validation_errors": [],
+                    "feature_normalization_actions": [],
+                },
+            ]
+            path.write_text(
+                "".join(
+                    json.dumps(row, ensure_ascii=False) + "\n"
+                    for row in rows
+                ),
+                encoding="utf-8",
+            )
+
+            result = evaluation.validate_prediction_run_consistency(path)
+
+        diagnostics = result["schema_diagnostics"]
+        self.assertEqual(diagnostics["retry_rows"], 1)
+        self.assertEqual(diagnostics["retry_total"], 1)
+        self.assertEqual(diagnostics["normalization_rows"], 1)
+        self.assertEqual(diagnostics["normalization_action_total"], 1)
+        self.assertEqual(
+            diagnostics["normalization_fields"],
+            {"task_groups.task_type": 1},
+        )
+
     def test_human_review_jsonl_is_supported_as_label_source(self) -> None:
         evaluation = load_module()
         with tempfile.TemporaryDirectory() as temp_dir:

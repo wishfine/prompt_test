@@ -268,8 +268,36 @@ def validate_prediction_run_consistency(
         "boundary_v4_guard_writeback_enabled": set(),
     }
     row_count = 0
+    schema_retry_rows = 0
+    schema_retry_total = 0
+    schema_retry_max = 0
+    schema_error_counts: Counter[str] = Counter()
+    normalization_rows = 0
+    normalization_action_total = 0
+    normalization_field_counts: Counter[str] = Counter()
     for line_number, item in jsonl_items(path):
         row_count += 1
+        retry_count = item.get("schema_retry_count", 0)
+        if isinstance(retry_count, int) and not isinstance(retry_count, bool):
+            schema_retry_total += retry_count
+            schema_retry_max = max(schema_retry_max, retry_count)
+            schema_retry_rows += retry_count > 0
+        for error in item.get("schema_validation_errors", []) or []:
+            schema_error_counts[str(error)] += 1
+        normalization_actions = item.get(
+            "feature_normalization_actions",
+            [],
+        )
+        if not isinstance(normalization_actions, list):
+            normalization_actions = []
+        if normalization_actions:
+            normalization_rows += 1
+            normalization_action_total += len(normalization_actions)
+            for action in normalization_actions:
+                if isinstance(action, dict):
+                    normalization_field_counts[
+                        str(action.get("field", "unknown"))
+                    ] += 1
         signature = str(item.get("run_signature", "")).strip()
         if signature:
             signatures.add(signature)
@@ -325,6 +353,22 @@ def validate_prediction_run_consistency(
             else None
         ),
         "legacy_unsigned": bool(row_count and not signatures),
+        "schema_diagnostics": {
+            "retry_rows": schema_retry_rows,
+            "retry_row_rate": safe_rate(schema_retry_rows, row_count),
+            "retry_total": schema_retry_total,
+            "retry_max": schema_retry_max,
+            "top_errors": dict(schema_error_counts.most_common(20)),
+            "normalization_rows": normalization_rows,
+            "normalization_row_rate": safe_rate(
+                normalization_rows,
+                row_count,
+            ),
+            "normalization_action_total": normalization_action_total,
+            "normalization_fields": dict(
+                normalization_field_counts.most_common()
+            ),
+        },
     }
 
 
@@ -747,6 +791,17 @@ def main() -> None:
     )
     print(f"MAE: {report['mae']}")
     print(f"严重偏差: {report['severe_deviation_count']}")
+    schema_diagnostics = report["run_consistency"].get(
+        "schema_diagnostics",
+        {},
+    )
+    print(
+        "Schema重试/归一: "
+        f"重试{schema_diagnostics.get('retry_rows', 0)}题/"
+        f"{schema_diagnostics.get('retry_total', 0)}次，"
+        f"本地归一{schema_diagnostics.get('normalization_rows', 0)}题/"
+        f"{schema_diagnostics.get('normalization_action_total', 0)}次"
+    )
     print(f"标签分布: {report['label_distribution']}")
     print(f"预测分布: {report['prediction_distribution']}")
     print(

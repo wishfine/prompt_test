@@ -43,7 +43,9 @@ try:
         OBSERVABLE_V4_FEATURE_FIELDS,
         OBSERVABLE_V3_FEATURE_FIELDS,
         OBSERVABLE_V2_FEATURE_FIELDS,
+        OBSERVABLE_ENUM_VALUES_BY_FIELD,
         derive_observable_metrics,
+        normalize_observable_features,
         validate_observable_features,
     )
 except ModuleNotFoundError:
@@ -52,7 +54,9 @@ except ModuleNotFoundError:
         OBSERVABLE_V4_FEATURE_FIELDS,
         OBSERVABLE_V3_FEATURE_FIELDS,
         OBSERVABLE_V2_FEATURE_FIELDS,
+        OBSERVABLE_ENUM_VALUES_BY_FIELD,
         derive_observable_metrics,
+        normalize_observable_features,
         validate_observable_features,
     )
 
@@ -790,6 +794,13 @@ def build_schema_repair_feedback(
     """
     error_text = str(error)
     hints = [f"上次输出未通过化学特征schema：{error_text}"]
+    for field, allowed in OBSERVABLE_ENUM_VALUES_BY_FIELD.items():
+        if field in error_text:
+            hints.append(
+                f"{field}只能从以下原文中复制："
+                + "、".join(sorted(allowed))
+                + "。"
+            )
     if "experiment_operation" in error_text:
         hints.append(
             "experiment_operation描述做了什么实验认知操作，只能从："
@@ -835,6 +846,16 @@ def is_observable_feature_contract(features: Any) -> bool:
     )
 
 
+def looks_like_observable_feature_contract(features: Any) -> bool:
+    """识别字段名偶发拼错的可观测特征输出。"""
+    if not isinstance(features, dict):
+        return False
+    known = set(OBSERVABLE_FEATURE_FIELDS) | {
+        "new_ininformation_operation",
+    }
+    return len(set(features) & known) >= 8
+
+
 def observable_feature_schema_version(features: Dict[str, Any]) -> str:
     if set(features) == set(OBSERVABLE_FEATURE_FIELDS):
         return "chemistry_observable_v5"
@@ -854,9 +875,13 @@ def validate_feature_contract(features: Any) -> Dict[str, Any]:
     读取能力是为了历史 JSONL 回放和回归测试，不会把旧字段
     重新暴露给模型。
     """
-    if is_observable_feature_contract(features):
+    if (
+        is_observable_feature_contract(features)
+        or looks_like_observable_feature_contract(features)
+    ):
         try:
-            return validate_observable_features(features)
+            normalized, _ = normalize_observable_features(features)
+            return validate_observable_features(normalized)
         except ValueError as exc:
             raise ChemistrySchemaError(str(exc)) from exc
 
@@ -1248,7 +1273,24 @@ def validate_rating_contract(rating_result: Any) -> Dict[str, Any]:
         raise ChemistrySchemaError("reasoning四个字段均不得为空")
 
     prepared = copy.deepcopy(rating_result)
-    prepared["features"] = validate_feature_contract(prepared["features"])
+    raw_features = prepared["features"]
+    if (
+        is_observable_feature_contract(raw_features)
+        or looks_like_observable_feature_contract(raw_features)
+    ):
+        normalized_features, normalization_actions = (
+            normalize_observable_features(raw_features)
+        )
+        try:
+            prepared["features"] = validate_observable_features(
+                normalized_features
+            )
+        except ValueError as exc:
+            raise ChemistrySchemaError(str(exc)) from exc
+        prepared["feature_normalization_actions"] = normalization_actions
+    else:
+        prepared["features"] = validate_feature_contract(raw_features)
+        prepared["feature_normalization_actions"] = []
     return prepared
 
 # -------------------------- 4. 后处理纠偏规则 --------------------------
@@ -4129,15 +4171,24 @@ async def call_model_with_cache(
                     continue
                 if 400 <= response.status < 500:
                     return {}, "", 0.0, 0, 0, 0, image_status
-        except aiohttp.ClientError as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             backoff = (2 ** retry) + random.uniform(0, 1)
             if retry == retries - 1:
-                print(f"网络异常最终失败: {e}")
+                print(
+                    "网络异常最终失败 "
+                    f"[{type(e).__name__}]: {e!r}"
+                )
                 return {}, "", 0.0, 0, 0, 0, image_status
-            print(f"网络出现异常: {e}，将进行退避 {backoff:.2f} 秒后重试...")
+            print(
+                f"网络出现异常 [{type(e).__name__}]: {e!r}，"
+                f"将进行退避 {backoff:.2f} 秒后重试..."
+            )
             await asyncio.sleep(backoff)
         except Exception as e:
-            print(f"运行过程中请求异常: {e}")
+            print(
+                f"运行过程中请求异常 "
+                f"[{type(e).__name__}]: {e!r}"
+            )
             if retry == retries - 1:
                 return {}, "", 0.0, 0, 0, 0, image_status
             if USE_CACHE:
@@ -4239,6 +4290,9 @@ async def process_single_question(
                 output_data.update(image_status)
                 output_data["schema_retry_count"] = schema_retry_count
                 output_data["schema_validation_errors"] = schema_errors
+                output_data["feature_normalization_actions"] = copy.deepcopy(
+                    rating_result.get("feature_normalization_actions", [])
+                )
                 output_data["model_input_audit"] = {
                     "source_difficulty_sent": False,
                     "structured_text_primary": True,

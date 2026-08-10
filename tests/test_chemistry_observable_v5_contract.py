@@ -135,6 +135,94 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
         self.assertIn("experiment_operation描述做了什么实验认知操作", feedback)
         self.assertIn("experiment_task_structure描述实验任务怎样组织", feedback)
 
+    def test_physics_style_normalization_repairs_observed_enum_variants(self) -> None:
+        invalid = current_features()
+        invalid["task_groups"] = [
+            {"task_type": "误差分析", "count": 1},
+            {"task_type": "实验操作与探究", "count": 1},
+        ]
+        invalid["rule_families"] = ["误差分析"]
+        invalid["representation_operations"] = [
+            "宏观名称→化学符号",
+            "化学式→定量关系",
+        ]
+        invalid["experiment_operation"] = "方案设计与评价"
+        invalid["experiment_task_structure"] = "方案设计或评价"
+
+        normalized, actions = self.features.normalize_observable_features(
+            invalid
+        )
+        validated = self.features.validate_observable_features(normalized)
+
+        self.assertEqual(
+            validated["task_groups"],
+            [{"task_type": "实验操作与探究", "count": 2}],
+        )
+        self.assertEqual(validated["rule_families"], ["实验操作与探究"])
+        self.assertEqual(
+            validated["representation_operations"],
+            ["宏观对象→化学符号", "化学符号→定量关系"],
+        )
+        self.assertTrue(actions)
+
+    def test_normalization_repairs_field_typo_duplicates_and_cross_field_values(self) -> None:
+        invalid = current_features()
+        invalid["new_ininformation_operation"] = invalid.pop(
+            "new_information_operation"
+        )
+        invalid["curriculum_topics"] = ["U5-2", "U5-2", "U9-3"]
+        invalid["condition_operations"] = ["多证据共同成立"]
+        invalid["evidence_operations"] = ["分类讨论"]
+
+        normalized, actions = self.features.normalize_observable_features(
+            invalid
+        )
+        validated = self.features.validate_observable_features(normalized)
+
+        self.assertNotIn("new_ininformation_operation", validated)
+        self.assertEqual(validated["curriculum_topics"], ["U5-2", "U9-3"])
+        self.assertEqual(validated["condition_operations"], ["分类讨论"])
+        self.assertEqual(validated["evidence_operations"], ["多证据共同成立"])
+        self.assertTrue(actions)
+
+    def test_unknown_enum_still_fails_after_safe_normalization(self) -> None:
+        invalid = current_features()
+        invalid["representation_operations"] = ["看起来很难的转换"]
+
+        with self.assertRaisesRegex(
+            self.runtime.ChemistrySchemaError,
+            "representation_operations",
+        ):
+            self.runtime.validate_feature_contract(invalid)
+
+    def test_rating_records_normalization_actions_without_schema_retry(self) -> None:
+        item = rating()
+        item["features"]["representation_operations"] = [
+            "宏观物质→化学符号"
+        ]
+
+        result = self.runtime.validate_rating_contract(item)
+
+        self.assertEqual(
+            result["features"]["representation_operations"],
+            ["宏观对象→化学符号"],
+        )
+        self.assertTrue(result["feature_normalization_actions"])
+
+    def test_generic_repair_feedback_lists_allowed_values_for_bad_enum(self) -> None:
+        invalid_rating = rating()
+        error = self.runtime.ChemistrySchemaError(
+            "representation_operations包含非法枚举: ['未知转换']"
+        )
+
+        feedback = self.runtime.build_schema_repair_feedback(
+            error,
+            invalid_rating,
+        )
+
+        self.assertIn("representation_operations只能从", feedback)
+        self.assertIn("宏观对象→化学符号", feedback)
+
     def test_historical_nineteen_field_v4_remains_readable(self) -> None:
         historical = copy.deepcopy(current_features())
         historical["direct_retrieval_task_count"] = 1

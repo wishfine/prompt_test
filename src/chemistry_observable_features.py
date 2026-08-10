@@ -181,9 +181,12 @@ CONDITION_OPERATIONS = {
 
 REPRESENTATION_OPERATIONS = {
     "宏观现象→微观粒子",
+    "微观粒子→宏观含义",
     "微观粒子→化学符号",
+    "宏观对象→化学符号",
     "宏观现象→化学符号",
     "化学符号→宏观含义",
+    "化学符号→定量关系",
     "化学方程式→定量关系",
     "图表数据→化学关系",
     "文字新信息→化学关系",
@@ -253,6 +256,320 @@ EXPERIMENT_TASK_STRUCTURES = {
     "控制变量或数据归纳",
     "方案设计或评价",
 }
+
+
+# 与物理生产脚本相同：先把模型偶发的近义输出收敛到
+# 可审计枚举，再作严格校验。只收录语义唯一的别名；无法
+# 唯一判断的值仍会被严格校验拒绝，不会默认填低档。
+OBSERVABLE_FIELD_ALIASES = {
+    "new_ininformation_operation": "new_information_operation",
+}
+
+TASK_TYPE_ALIASES = {
+    "误差分析": "实验操作与探究",
+    "微观粒子表征": "化学用语",
+    "微观粒子与符号转换": "化学用语",
+    "化学式推断": "化学用语",
+    "反应条件与速率分析": "性质与反应判断",
+    "方案评价": "方案设计与评价",
+}
+
+ENUM_VALUE_ALIASES = {
+    "representation_operations": {
+        "宏观含义→化学符号": "宏观对象→化学符号",
+        "宏观物质→化学符号": "宏观对象→化学符号",
+        "宏观名称→化学符号": "宏观对象→化学符号",
+        "宏观元素→化学符号": "宏观对象→化学符号",
+        "宏观要求→化学符号": "宏观对象→化学符号",
+        "化学式→定量关系": "化学符号→定量关系",
+        "元素质量→原子个数比": "化学符号→定量关系",
+        "化学方程式→宏观含义": "化学符号→宏观含义",
+        "实验现象→微观粒子": "宏观现象→微观粒子",
+        "宏观特征→微观粒子": "宏观现象→微观粒子",
+    },
+    "evidence_operations": {
+        "双来源交叉验证": "多证据共同成立",
+    },
+    "condition_operations": {
+        "条件对比": "条件切换",
+        "多条件比较": "条件切换",
+    },
+    "experiment_operation": {
+        "方案设计与评价": "方案评价或补充实验",
+        "方案评价": "方案评价或补充实验",
+    },
+    "experiment_task_structure": {
+        "数据归纳": "控制变量或数据归纳",
+    },
+    "solution_topology": {
+        "范围或边界筛选": "条件分支或范围筛选",
+    },
+}
+
+OBSERVABLE_ENUM_VALUES_BY_FIELD = {
+    "task_type": TASK_TYPES,
+    "rule_families": RULE_FAMILIES,
+    "curriculum_topics": CURRICULUM_TOPICS,
+    "parallel_task_relation": PARALLEL_TASK_RELATIONS,
+    "solution_topology": SOLUTION_TOPOLOGIES,
+    "reaction_structure": REACTION_STRUCTURES,
+    "condition_operations": CONDITION_OPERATIONS,
+    "representation_operations": REPRESENTATION_OPERATIONS,
+    "evidence_operations": EVIDENCE_OPERATIONS,
+    "experiment_operation": EXPERIMENT_OPERATIONS,
+    "experiment_task_structure": EXPERIMENT_TASK_STRUCTURES,
+    "visual_task_structure": VISUAL_TASK_STRUCTURES,
+    "graph_table_operation": GRAPH_TABLE_OPERATIONS,
+    "error_analysis_operation": ERROR_ANALYSIS_OPERATIONS,
+    "calculation_operations": CALCULATION_OPERATIONS,
+    "new_information_operation": NEW_INFORMATION_OPERATIONS,
+}
+
+
+def _clean_enum_text(value: Any) -> str:
+    return "".join(str(value or "").strip().split())
+
+
+def _canonical_task_type(value: Any) -> str:
+    clean = _clean_enum_text(value)
+    if clean in TASK_TYPES:
+        return clean
+    if clean in TASK_TYPE_ALIASES:
+        return TASK_TYPE_ALIASES[clean]
+    if "误差" in clean:
+        return "实验操作与探究"
+    if any(word in clean for word in ("微观", "化学式", "化学符号")):
+        return "化学用语"
+    if any(word in clean for word in ("方案设计", "方案评价")):
+        return "方案设计与评价"
+    if any(word in clean for word in ("反应条件", "反应速率")):
+        return "性质与反应判断"
+    return clean
+
+
+def _canonical_enum_value(field: str, value: Any) -> str:
+    clean = _clean_enum_text(value)
+    allowed = OBSERVABLE_ENUM_VALUES_BY_FIELD[field]
+    if clean in allowed:
+        return clean
+    return ENUM_VALUE_ALIASES.get(field, {}).get(clean, clean)
+
+
+def normalize_observable_features(
+    features: Any,
+) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """按物理生产逻辑对常见近义枚举作确定性归一。
+
+    未知值不填默认值，后续严格校验仍会拒绝，避免把
+    语义不明的输出静默改成低档特征。
+    """
+    if not isinstance(features, dict):
+        return features, []
+    normalized: Dict[str, Any] = {}
+    actions: List[Dict[str, Any]] = []
+
+    def record(
+        field: str,
+        old: Any,
+        new: Any,
+        reason: str,
+        *,
+        force: bool = False,
+    ) -> None:
+        if force or old != new:
+            actions.append(
+                {"field": field, "from": old, "to": new, "reason": reason}
+            )
+
+    for raw_key, value in features.items():
+        clean_key = _clean_enum_text(raw_key)
+        key = OBSERVABLE_FIELD_ALIASES.get(clean_key, clean_key)
+        record("features.key", clean_key, key, "字段名别名归一")
+        if key in normalized and clean_key != key:
+            continue
+        normalized[key] = copy.deepcopy(value)
+
+    groups = normalized.get("task_groups")
+    if isinstance(groups, list):
+        rebuilt: List[Any] = []
+        positions: Dict[str, int] = {}
+        for group in groups:
+            if not isinstance(group, dict) or set(group) != {"task_type", "count"}:
+                rebuilt.append(group)
+                continue
+            old_type = group.get("task_type")
+            new_type = _canonical_task_type(old_type)
+            record("task_groups.task_type", old_type, new_type, "任务类型近义归一")
+            count = group.get("count")
+            if (
+                new_type in positions
+                and isinstance(count, int)
+                and not isinstance(count, bool)
+                and isinstance(rebuilt[positions[new_type]].get("count"), int)
+            ):
+                rebuilt[positions[new_type]]["count"] += count
+            else:
+                positions[new_type] = len(rebuilt)
+                rebuilt.append({"task_type": new_type, "count": count})
+        record("task_groups", groups, rebuilt, "归一后合并重复任务类型")
+        normalized["task_groups"] = rebuilt
+
+    if isinstance(normalized.get("rule_families"), list):
+        old_values = normalized["rule_families"]
+        new_values: List[str] = []
+        for value in old_values:
+            canonical = _canonical_task_type(value)
+            if canonical not in new_values:
+                new_values.append(canonical)
+        record("rule_families", old_values, new_values, "规则族近义归一与去重")
+        normalized["rule_families"] = new_values
+
+    for field in (
+        "condition_operations",
+        "representation_operations",
+        "evidence_operations",
+        "calculation_operations",
+    ):
+        values = normalized.get(field)
+        if not isinstance(values, list):
+            continue
+        canonical_values: List[str] = []
+        for value in values:
+            canonical = _canonical_enum_value(field, value)
+            if canonical not in canonical_values:
+                canonical_values.append(canonical)
+        record(field, values, canonical_values, "枚举近义归一与去重")
+        normalized[field] = canonical_values
+
+    conditions = normalized.get("condition_operations")
+    evidence = normalized.get("evidence_operations")
+    if isinstance(conditions, list) and isinstance(evidence, list):
+        for misplaced in ("多证据共同成立", "排除多个候选解释"):
+            if misplaced in conditions:
+                conditions.remove(misplaced)
+                if misplaced not in evidence:
+                    evidence.append(misplaced)
+                record(
+                    "condition_operations→evidence_operations",
+                    misplaced,
+                    misplaced,
+                    "证据操作字段串位修复",
+                    force=True,
+                )
+        if "分类讨论" in evidence:
+            evidence.remove("分类讨论")
+            if "分类讨论" not in conditions:
+                conditions.append("分类讨论")
+            record(
+                "evidence_operations→condition_operations",
+                "分类讨论",
+                "分类讨论",
+                "条件操作字段串位修复",
+                force=True,
+            )
+
+    for field in (
+        "parallel_task_relation",
+        "solution_topology",
+        "reaction_structure",
+        "experiment_operation",
+        "experiment_task_structure",
+        "visual_task_structure",
+        "graph_table_operation",
+        "error_analysis_operation",
+        "new_information_operation",
+    ):
+        if field not in normalized:
+            continue
+        old_value = normalized[field]
+        new_value = _canonical_enum_value(field, old_value)
+        record(field, old_value, new_value, "枚举近义归一")
+        normalized[field] = new_value
+
+    for field in ("curriculum_topics", "curriculum_units", "longest_solution_chain"):
+        values = normalized.get(field)
+        if not isinstance(values, list):
+            continue
+        deduped: List[Any] = []
+        for value in values:
+            clean_value = value.strip() if isinstance(value, str) else value
+            if clean_value not in deduped:
+                deduped.append(clean_value)
+        record(field, values, deduped, "数组去重")
+        normalized[field] = deduped
+
+    graph_op = normalized.get("graph_table_operation")
+    if (
+        graph_op in GRAPH_TABLE_OPERATIONS - {"无"}
+        and normalized.get("visual_task_structure") == "无必要视觉信息"
+    ):
+        visual = (
+            "单图直接识别"
+            if graph_op == "直接读数"
+            else "共享装置流程或图表模型"
+        )
+        record(
+            "visual_task_structure",
+            normalized["visual_task_structure"],
+            visual,
+            "由已填图表操作修复视觉一致性",
+        )
+        normalized["visual_task_structure"] = visual
+
+    experiment_op = normalized.get("experiment_operation")
+    experiment_structure = normalized.get("experiment_task_structure")
+    has_experiment_task = any(
+        isinstance(group, dict)
+        and group.get("task_type") == "实验操作与探究"
+        for group in normalized.get("task_groups", [])
+    )
+    if experiment_op == "无" and (
+        has_experiment_task
+        or normalized.get(
+            "error_analysis_operation",
+            "无误差分析",
+        ) != "无误差分析"
+        or experiment_structure not in {None, "无实验判断"}
+    ):
+        operation_by_structure = {
+            "控制变量或数据归纳": "数据归纳",
+            "方案设计或评价": "方案评价或补充实验",
+            "操作偏差因果链": "基础操作或读数",
+            "多仪器或多条件比较": "基础操作或读数",
+            "名称或单点规范匹配": "基础操作或读数",
+        }
+        inferred = operation_by_structure.get(
+            experiment_structure,
+            "基础操作或读数",
+        )
+        record(
+            "experiment_operation",
+            experiment_op,
+            inferred,
+            "由已填实验任务事实修复内部一致性",
+        )
+        normalized["experiment_operation"] = inferred
+        experiment_op = inferred
+    if experiment_op not in {None, "无"} and experiment_structure == "无实验判断":
+        structure_by_operation = {
+            "基础操作或读数": "名称或单点规范匹配",
+            "变量控制": "控制变量或数据归纳",
+            "现象解释": "控制变量或数据归纳",
+            "数据归纳": "控制变量或数据归纳",
+            "方案设计": "方案设计或评价",
+            "方案评价或补充实验": "方案设计或评价",
+            "多阶段定量探究": "方案设计或评价",
+        }
+        inferred = structure_by_operation[experiment_op]
+        record(
+            "experiment_task_structure",
+            experiment_structure,
+            inferred,
+            "由已填实验操作修复内部一致性",
+        )
+        normalized["experiment_task_structure"] = inferred
+
+    return normalized, actions
 
 
 def _validate_unique_enum_list(
