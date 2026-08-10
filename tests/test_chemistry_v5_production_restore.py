@@ -175,6 +175,10 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             "元素符号、离子符号、化合价、化学式、方程式或数字含义中的多类规则",
             prompt,
         )
+        self.assertIn(
+            "多个空都重复同一种符号书写、化合价推式或数字含义规则时仍按同一规则处理",
+            prompt,
+        )
 
     def test_prompt_example_23_separates_proposition_object_order_and_images(
         self,
@@ -185,6 +189,14 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         self.assertIn("同一固定规则判断多个对象", prompt)
         self.assertIn("前者/后者或先后顺序条件", prompt)
         self.assertIn("多图独立不同规则判断", prompt)
+        self.assertIn(
+            "同一透明分类规则判断多个对象时仍可为送分题",
+            prompt,
+        )
+        self.assertIn(
+            "多个对象分别需要核验不同教材事实",
+            prompt,
+        )
 
     def test_prompt_controlled_breadth_distinguishes_subjective_responses(
         self,
@@ -215,6 +227,40 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         )
         self.assertIn(
             "只有一个最终求解目标或主线清晰不能否决该特殊压轴口径",
+            prompt,
+        )
+
+    def test_hard_reason_must_audit_both_final_paths(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "若最终判为拔高题，why_not_higher必须分别核对两条压轴路径",
+            prompt,
+        )
+        self.assertIn(
+            "单主线深定量路径具体缺少哪一项",
+            prompt,
+        )
+        self.assertIn(
+            "不得只写“缺少深度耦合、多模块或多阶段”",
+            prompt,
+        )
+
+    def test_repeated_single_conservation_stays_hard_counterexample(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "多次重复使用同一种元素守恒",
+            prompt,
+        )
+        self.assertIn(
+            "仍是同一个清晰模型中的重复应用",
+            prompt,
+        )
+        self.assertIn(
+            "不能仅因链长达到5步或反应数量较多判为压轴题",
             prompt,
         )
 
