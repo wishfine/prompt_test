@@ -1258,7 +1258,9 @@ def observable_dense_multiquestion_final_signal(
 
     信号同时依赖模型可核验事实与程序题面统计：至少四个显式小问、
     七项有效任务、四步最长链，并包含差量、多反应、联立、组分消元
-    或范围分类计算。题干长度、课程跨度和小问数量均不能单独触发。
+    或范围分类计算。若只有单一反应和四步常规链，则至少需要八个显式
+    小问才保留该广度通道，避免把普通综合探究连续抬成压轴。题干长度、
+    课程跨度和小问数量均不能单独触发。
     """
     if not isinstance(features, dict):
         return False
@@ -1285,6 +1287,11 @@ def observable_dense_multiquestion_final_signal(
         and question_metrics["explicit_subquestion_count"] >= 4
         and set(validated["calculation_operations"])
         & advanced_calculations
+        and not (
+            validated["reaction_structure"] == "单一反应"
+            and metrics["longest_chain_steps"] == 4
+            and question_metrics["explicit_subquestion_count"] < 8
+        )
     )
 
 

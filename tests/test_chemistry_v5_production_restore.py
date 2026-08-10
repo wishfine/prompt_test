@@ -472,6 +472,59 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             "teacher_hard_to_final_dense_multiquestion_quantitative_chain",
         )
 
+    def test_dense_guard_blocks_short_single_reaction_breadth(self) -> None:
+        item = hard_rating()
+        item["features"]["longest_solution_chain"] = [
+            "读取反应前后质量差",
+            "按给定方程式建立计量关系",
+            "求出目标物质质量",
+            "计算目标质量分数",
+        ]
+        item["features"]["reaction_structure"] = "单一反应"
+        item["features"]["solution_topology"] = "单线性常规链"
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {
+                "stem": "围绕一个反应设置六个并列探究任务。",
+                "sub_questions": [
+                    {"stem": f"任务{i}"}
+                    for i in range(1, 7)
+                ],
+            },
+        )
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["postprocess_actions"], [])
+
+    def test_dense_guard_keeps_exceptionally_broad_single_reaction(self) -> None:
+        item = hard_rating()
+        item["features"]["longest_solution_chain"] = [
+            "读取反应前后质量差",
+            "按给定方程式建立计量关系",
+            "求出目标物质质量",
+            "计算目标质量分数",
+        ]
+        item["features"]["reaction_structure"] = "单一反应"
+        item["features"]["solution_topology"] = "单线性常规链"
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {
+                "stem": "围绕一个共享模型设置八个关联探究任务。",
+                "sub_questions": [
+                    {"stem": f"任务{i}"}
+                    for i in range(1, 9)
+                ],
+            },
+        )
+
+        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "teacher_hard_to_final_dense_multiquestion_quantitative_chain",
+        )
+
     def test_narrow_final_rule_requires_four_explicit_subquestions(self) -> None:
         item = hard_rating()
         # 隔离“深定量压轴链”这条独立路径，本测试只验证
