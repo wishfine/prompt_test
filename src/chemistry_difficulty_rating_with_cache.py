@@ -154,7 +154,7 @@ if CHEMISTRY_IMAGE_MODE not in {"off", "auto", "all"}:
         f"不支持的 CHEMISTRY_IMAGE_MODE={CHEMISTRY_IMAGE_MODE!r}；"
         "可选值：off, auto, all"
     )
-MAX_SCHEMA_RETRIES = int(os.getenv("CHEMISTRY_SCHEMA_RETRIES", "2"))
+MAX_SCHEMA_RETRIES = int(os.getenv("CHEMISTRY_SCHEMA_RETRIES", "3"))
 
 UNTRUSTED_LABEL_FIELDS = {
     "difficulty",
@@ -2794,7 +2794,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             features
         )
         rating_result["postprocess_profile"] = (
-            "chemistry_observable_v2_teacher_distribution_v1"
+            "chemistry_observable_v2_teacher_distribution_v2_safe"
         )
     else:
         features = model_features
@@ -3196,6 +3196,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             )
         elif (
             raw_level == "拔高题"
+            and not observable_contract
             and not final_ceiling_reason
             and existing_final_guard_signal
         ):

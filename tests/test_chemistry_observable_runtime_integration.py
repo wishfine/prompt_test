@@ -114,7 +114,7 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(
             result["postprocess_profile"],
-            "chemistry_observable_v2_teacher_distribution_v1",
+            "chemistry_observable_v2_teacher_distribution_v2_safe",
         )
         self.assertEqual(result["observable_metrics"]["longest_chain_steps"], 4)
         self.assertEqual(result["observable_metrics"]["effective_task_count"], 3)
@@ -173,6 +173,99 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
             result["postprocess_candidate_actions"][0]["rule"],
             "core12_basic_to_medium_complete_model",
         )
+
+    def test_observable_projection_does_not_reuse_legacy_final_guard(
+        self,
+    ) -> None:
+        item = rating("拔高题")
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "根据装置限制确定反应条件",
+                    "由反应现象确定中间产物",
+                    "把中间产物用于后一反应",
+                    "联合图表数据建立计算关系",
+                    "根据计算结果评价实验方案",
+                ],
+                "task_groups": [
+                    {"task_type": "实验操作与探究", "count": 2},
+                    {"task_type": "图表与数据", "count": 1},
+                    {"task_type": "定量计算", "count": 1},
+                ],
+                "rule_families": [
+                    "实验操作与探究",
+                    "性质与反应判断",
+                    "图表与数据",
+                    "定量计算",
+                ],
+                "curriculum_units": ["U5", "U9", "U10"],
+                "reaction_structure": "产物进入后一反应",
+                "condition_operations": ["条件切换", "干扰条件排除"],
+                "representation_operations": [
+                    "宏观现象→化学符号",
+                    "化学方程式→定量关系",
+                    "图表数据→化学关系",
+                ],
+                "evidence_operations": ["多证据共同成立"],
+                "experiment_operation": "多阶段定量探究",
+                "graph_table_operation": "多图表联合",
+                "calculation_operations": ["单一守恒", "多反应定量关系"],
+                "new_information_operation": "新关系被多个任务共同使用",
+            }
+        )
+        old_enabled = self.runtime.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS
+        old_writeback = (
+            self.runtime.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
+        )
+        try:
+            self.runtime.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+            self.runtime.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = True
+            result = self.runtime.postprocess_chemistry_difficulty(
+                item,
+                {"stem": "根据装置、图表和实验数据完成探究。"},
+            )
+        finally:
+            self.runtime.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = old_enabled
+            self.runtime.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = (
+                old_writeback
+            )
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertIsNone(
+            result["teacher_distribution_guard_candidate_action"]
+        )
+
+    def test_prompt_restores_detailed_boundary_calibration(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        required_anchors = (
+            "同一熟悉分类规则检查四个候选项时，task_groups只记1个有效任务",
+            "普通方案正误判断不等于方案评价",
+            "中间量、纯算术和重复代入不单独增加最长链",
+            "标准实验、常规计算与决定性卡点的边界",
+            "工业流程、未知组成与守恒联立",
+            "熟悉类别的一条固定规则直接判断",
+            "多规则综合填空的受控广度",
+            "同深度不同耦合",
+            "固定基团转换关系",
+            "枚举防错表",
+        )
+        for anchor in required_anchors:
+            self.assertIn(anchor, prompt)
+        self.assertGreaterEqual(prompt.count("### 示例"), 13)
+
+    def test_prompt_uses_curriculum_units_as_task_boundaries(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        for anchor in (
+            "课程单元任务边界",
+            "U1：直接仪器识别",
+            "U4/U5：物质组成、化学用语与方程式",
+            "U9/U10：溶液、酸碱盐与证据链",
+            "单元名称不是难度先验",
+        ):
+            self.assertIn(anchor, prompt)
+
+    def test_schema_retry_budget_allows_three_repairs(self) -> None:
+        self.assertGreaterEqual(self.runtime.MAX_SCHEMA_RETRIES, 3)
 
     def test_legacy_core12_remains_readable_for_historical_results(self) -> None:
         legacy = copy.deepcopy(self.runtime.FEATURE_DEFAULTS)
