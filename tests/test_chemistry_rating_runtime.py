@@ -178,6 +178,64 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("不得仅因不足4步", candidates["H1_medium_decisive_task"]["reason"])
         self.assertEqual(result["difficulty_level"], "中等题")
 
+    def test_medium_review_requires_anchor_and_multiple_supporting_features(self):
+        value = rating("中等题", ["U05_T03", "U10_T03"])
+        value["features"]["task_count"] = "2-3项"
+        value["features"]["step_count"] = "4-5步"
+        value["features"]["task_relation"] = "前后依赖"
+        value["features"]["solution_method"] = "定性与定量联合"
+        value["features"]["information_operation"] = "多来源信息筛选联合"
+        value["features"]["calculation_type"] = "多类计算综合"
+        value["features"]["calculation_steps"] = "4步及以上"
+        value["features"]["calculation_structure"] = "多模型综合计算"
+        value["features"]["special_method"] = "元素守恒"
+        value["features"]["condition_relation"] = "多个关联条件"
+        value["features"]["hidden_condition_count"] = "2个"
+        value["features"]["hidden_condition_type"] = "多类条件联合"
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        action = result["postprocess_actions"][-1]
+        self.assertEqual(action["rule"], "R1_medium_to_hard_multi_feature_review")
+        self.assertGreaterEqual(action["evidence"]["review_score"], 5)
+
+    def test_hard_review_requires_multiple_types_of_final_level_evidence(self):
+        value = rating("拔高题", ["U05_T03", "U10_T03", "U09_T05"])
+        value["features"]["task_count"] = "4项及以上"
+        value["features"]["step_count"] = "6步及以上"
+        value["features"]["task_relation"] = "前后依赖"
+        value["features"]["solution_method"] = "定性与定量联合"
+        value["features"]["information_operation"] = "图像拐点或分段分析"
+        value["features"]["calculation_type"] = "多类计算综合"
+        value["features"]["calculation_steps"] = "4步及以上"
+        value["features"]["calculation_structure"] = "多个化学反应计算"
+        value["features"]["special_method"] = "极值法"
+        value["features"]["hidden_condition_count"] = "2个"
+        value["features"]["hidden_condition_type"] = "多类条件联合"
+        value["features"]["condition_relation"] = "多个关联条件"
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "压轴题")
+        action = result["postprocess_actions"][-1]
+        self.assertEqual(action["rule"], "R2_hard_to_final_multi_feature_review")
+        self.assertGreaterEqual(action["evidence"]["review_score"], 7)
+
+    def test_upper_level_review_never_cascades_two_levels(self):
+        value = rating("中等题", ["U05_T03", "U10_T03", "U09_T05"])
+        value["features"]["task_count"] = "4项及以上"
+        value["features"]["step_count"] = "6步及以上"
+        value["features"]["task_relation"] = "多条任务链汇合"
+        value["features"]["solution_method"] = "定性与定量联合"
+        value["features"]["information_operation"] = "图像拐点或分段分析"
+        value["features"]["calculation_type"] = "多类计算综合"
+        value["features"]["calculation_steps"] = "4步及以上"
+        value["features"]["calculation_structure"] = "多模型综合计算"
+        value["features"]["special_method"] = "多种特殊方法联合"
+        value["features"]["hidden_condition_count"] = "3个及以上"
+        value["features"]["hidden_condition_type"] = "多类条件联合"
+        value["features"]["condition_relation"] = "多层嵌套条件"
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(len(result["postprocess_actions"]), 1)
+
     def test_out_of_scope_requires_specific_content(self):
         value = rating(topic_ids=[])
         value["features"]["curriculum_scope"] = {

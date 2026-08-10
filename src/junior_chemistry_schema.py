@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v10"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v11"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -445,6 +445,126 @@ def _build_audit_candidates(result: dict[str, Any]) -> list[dict[str, Any]]:
     return candidates
 
 
+def _build_upper_level_review_candidate(
+    result: dict[str, Any],
+) -> dict[str, Any] | None:
+    """用一个高难锚点触发复核，再要求其他独立特征共同支持升档。"""
+    features = result["features"]
+    level = result["difficulty_level"]
+    decisive_special_method = features["special_method"] in {
+        "差量法", "极值法", "分情况计算", "多方程式联立",
+        "循环反应计算", "多种特殊方法联合",
+    }
+    complex_information = features["information_operation"] in {
+        "图像拐点或分段分析", "多来源信息筛选联合",
+    }
+    difficult_reaction = features["reaction_relation"] in {
+        "反应先后或过量不足", "分情况或竞争反应",
+    }
+    complex_calculation = features["calculation_structure"] in {
+        "多个化学反应计算", "含杂质多步质量分数",
+        "实验误差定量计算", "多模型综合计算",
+    }
+    dependent_tasks = features["task_relation"] in {
+        "前后依赖", "多条任务链汇合",
+    }
+    complex_condition = features["condition_relation"] in {
+        "多个关联条件", "多层嵌套条件",
+    }
+    high_experiment_design = features["experiment_design"] in {
+        "根据结论设计操作", "实验方案设计", "实验方案评价",
+        "实验改进", "多阶段探究设计",
+    }
+    high_error_analysis = features["error_analysis"] in {
+        "定量实验误差分析", "多种误差联合分析",
+    }
+
+    if level == "中等题":
+        weighted_anchors = {
+            "决定建模的特殊方法": decisive_special_method,
+            "图像分段或多来源信息联合": complex_information,
+            "反应先后、过量不足或竞争反应": difficult_reaction,
+            "四步及以上计算": features["calculation_steps"] == "4步及以上",
+        }
+        review_triggers = {
+            **weighted_anchors,
+            "高阶实验设计": high_experiment_design,
+            "定量或多种误差分析": high_error_analysis,
+        }
+        supporting_evidence = {
+            "四步及以上解题过程": features["step_count"] in {"4-5步", "6步及以上"},
+            "高阶实验设计": high_experiment_design,
+            "定量或多种误差分析": high_error_analysis,
+            "复杂计算结构": complex_calculation,
+            "多个关联或嵌套条件": complex_condition,
+            "任务前后依赖": dependent_tasks,
+            "多类型或高难图像": features["visual_complexity"] in {
+                "多个不同类型图像", "复杂高难图像",
+            },
+            "多个实验分析任务": features["experiment_analysis"] == "多个实验分析任务联合",
+            "定性与定量联合": features["solution_method"] == "定性与定量联合",
+            "使用特殊计算方法": features["special_method"] != "无",
+        }
+        score = 2 * sum(weighted_anchors.values()) + sum(supporting_evidence.values())
+        if any(review_triggers.values()) and score >= 5:
+            return _candidate(
+                "R1_medium_to_hard_multi_feature_review", "拔高题",
+                "高难锚点触发复核，且其他独立特征共同达到拔高支持阈值；不是由单一特征机械升档。",
+                {
+                    "review_score": score,
+                    "required_score": 5,
+                    "trigger_evidence": [
+                        name for name, active in review_triggers.items() if active
+                    ],
+                    "supporting_evidence": [
+                        name for name, active in supporting_evidence.items() if active
+                    ],
+                },
+            )
+
+    if level == "拔高题":
+        weighted_anchors = {
+            "多条任务链汇合": features["task_relation"] == "多条任务链汇合",
+            "反应先后、过量不足或竞争反应": difficult_reaction,
+            "多层嵌套条件": features["condition_relation"] == "多层嵌套条件",
+        }
+        review_triggers = {
+            **weighted_anchors,
+            "六步及以上解题过程": features["step_count"] == "6步及以上",
+            "图像分段或多来源信息联合": complex_information,
+            "决定建模的特殊方法": decisive_special_method,
+        }
+        supporting_evidence = {
+            "六步及以上解题过程": features["step_count"] == "6步及以上",
+            "图像分段或多来源信息联合": complex_information,
+            "决定建模的特殊方法": decisive_special_method,
+            "复杂计算结构": complex_calculation,
+            "四步及以上计算": features["calculation_steps"] == "4步及以上",
+            "任务前后依赖": features["task_relation"] == "前后依赖",
+            "复杂高难图像": features["visual_complexity"] == "复杂高难图像",
+            "多个实验分析任务": features["experiment_analysis"] == "多个实验分析任务联合",
+            "定性与定量联合": features["solution_method"] == "定性与定量联合",
+            "多个关联或嵌套条件": complex_condition,
+        }
+        score = 2 * sum(weighted_anchors.values()) + sum(supporting_evidence.values())
+        if any(review_triggers.values()) and score >= 7:
+            return _candidate(
+                "R2_hard_to_final_multi_feature_review", "压轴题",
+                "压轴锚点触发复核，且阶段依赖、信息处理和计算等多类证据共同达到阈值。",
+                {
+                    "review_score": score,
+                    "required_score": 7,
+                    "trigger_evidence": [
+                        name for name, active in review_triggers.items() if active
+                    ],
+                    "supporting_evidence": [
+                        name for name, active in supporting_evidence.items() if active
+                    ],
+                },
+            )
+    return None
+
+
 def _plain_char_count(value: Any) -> int:
     text = re.sub(r"<[^>]+>", "", str(value or ""))
     return len(re.sub(r"\s+", "", text))
@@ -524,7 +644,7 @@ def _writeback_floor(
 
 
 def postprocess_chemistry_difficulty(value: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
-    """严格校验、计算客观题面量，并执行教师明确给出的最低档规则。"""
+    """规范特征，并用多项独立证据复核中等题和拔高题的向上边界。"""
     result = validate_rating_contract(copy.deepcopy(value))
     topics = load_curriculum_topics()
     topic_ids = result["features"]["knowledge"]["topic_ids"]
@@ -550,6 +670,9 @@ def postprocess_chemistry_difficulty(value: dict[str, Any], data: dict[str, Any]
     original_level = result["difficulty_level"]
     question_statistics = compute_question_statistics(data)
     candidates = _build_audit_candidates(result)
+    review_candidate = _build_upper_level_review_candidate(result)
+    if review_candidate is not None:
+        candidates.append(review_candidate)
     result["postprocess_actions"] = []
 
     if result["features"]["error_analysis"] != "无":
@@ -557,6 +680,18 @@ def postprocess_chemistry_difficulty(value: dict[str, Any], data: dict[str, Any]
             result, "中等题", "T1_error_analysis_floor",
             "教师规则：涉及实验误差分析时最低为中等题。",
             {"error_analysis": result["features"]["error_analysis"]},
+        )
+    if review_candidate is not None:
+        before_review = result["difficulty_level"]
+        _writeback_floor(
+            result,
+            review_candidate["candidate_level"],
+            review_candidate["rule"],
+            review_candidate["reason"],
+            review_candidate["evidence"],
+        )
+        review_candidate["writeback_applied"] = (
+            result["difficulty_level"] != before_review
         )
     final_level = result["difficulty_level"]
     result["feature_schema_version"] = FEATURE_SCHEMA_VERSION
