@@ -139,7 +139,10 @@ def extract_prediction(
     level_name = None
     if isinstance(rating, dict):
         if level_source == "pre-postprocess":
-            level_name = rating.get("postprocess_original_level")
+            postprocess = rating.get("postprocess")
+            if isinstance(postprocess, dict):
+                level_name = postprocess.get("original_level")
+            level_name = level_name or rating.get("postprocess_original_level")
         elif level_source == "postprocess-candidate":
             level_name = rating.get("postprocess_candidate_level")
         elif level_source == "final-boundary-guard-candidate":
@@ -189,12 +192,16 @@ def load_predictions(
         rating = item.get("difficulty_rating")
         if not isinstance(rating, dict):
             rating = {}
+        postprocess = rating.get("postprocess")
+        if not isinstance(postprocess, dict):
+            postprocess = {}
         predictions[question_id] = {
             "predicted_level_name": level_name,
             "predicted_level": level_number,
             "stem": str(item.get("stem", "") or ""),
-            "postprocess_original_level": rating.get(
-                "postprocess_original_level"
+            "postprocess_original_level": (
+                postprocess.get("original_level")
+                or rating.get("postprocess_original_level")
             ),
             "postprocess_candidate_level": rating.get(
                 "postprocess_candidate_level"

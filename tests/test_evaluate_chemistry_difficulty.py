@@ -102,6 +102,27 @@ class ChemistryEvaluationTests(unittest.TestCase):
         self.assertEqual(level_name, "压轴题")
         self.assertEqual(level_number, 5)
 
+    def test_nested_postprocess_original_level_is_supported(self) -> None:
+        evaluation = load_module()
+        item = {
+            "question_id": "q1",
+            "difficulty_rating": {
+                "difficulty_level": "压轴题",
+                "postprocess": {
+                    "original_level": "拔高题",
+                    "final_level": "压轴题",
+                },
+            },
+        }
+
+        level_name, level_number = evaluation.extract_prediction(
+            item,
+            "pre-postprocess",
+        )
+
+        self.assertEqual(level_name, "拔高题")
+        self.assertEqual(level_number, 4)
+
     def test_high_chemistry_output_and_jsonl_labels_are_supported(self) -> None:
         evaluation = load_module()
         item = {
