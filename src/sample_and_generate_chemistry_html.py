@@ -5,7 +5,7 @@
     从初中化学难度打标结果中按档抽样，或直接渲染全部结果，生成交互式
     评议验收网页。
     - 评级判定：读取 chemistry_stable 的最终 difficulty_rating。
-    - 特征展示：对齐当前 chemistry_core12_strict_v1 特征契约。
+    - 特征展示：对齐初中化学教师口径的受控特征契约。
     - 图片展示：优先使用原始 V2 数据中的题干和解析图片 URL。
 """
 
@@ -1211,16 +1211,16 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
 """
                 if reasoning:
                     if isinstance(reasoning, dict):
-                        basis_txt = reasoning.get('core_basis', '')
-                        hard_txt = reasoning.get('hard_point', '')
-                        why_l = reasoning.get('why_not_lower', '')
-                        why_h = reasoning.get('why_not_higher', '')
+                        basis_txt = reasoning.get('knowledge_points', '')
+                        hard_txt = reasoning.get('solution_process', '')
+                        why_l = reasoning.get('main_difficulty_factors', '')
+                        why_h = reasoning.get('level_basis', '')
                         cards_html += f"""
                         <div class="rating-reasoning">
-                            <strong>1. 核心判定依据：</strong>{escape(basis_txt)}<br/>
-                            <strong>2. 易错卡点：</strong>{escape(hard_txt)}<br/>
-                            <strong>3. 为什么不低判定一档：</strong>{escape(why_l)}<br/>
-                            <strong>4. 为什么不高判定一档：</strong>{escape(why_h)}
+                            <strong>1. 涉及知识点：</strong>{escape(basis_txt)}<br/>
+                            <strong>2. 解题过程：</strong>{escape(hard_txt)}<br/>
+                            <strong>3. 主要难度因素：</strong>{escape(why_l)}<br/>
+                            <strong>4. 定档依据：</strong>{escape(why_h)}
                         </div>
                         """
                     else:
@@ -1228,23 +1228,22 @@ def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: st
 
                 if features_obj:
                     cards_html += '                    <div class="rating-details">\n'
-                    # 对齐 chemistry_core12_strict_v1 的唯一生产特征契约。
                     feature_fields = [
-                        ('reasoning_depth', '纵向推理深度 D'),
-                        ('reasoning_direction', '推理方向'),
-                        ('knowledge_relation', '知识关系'),
-                        ('representation_conversion', '表征转换'),
-                        ('reaction_relation', '反应关系'),
-                        ('constraint_complexity', '约束复杂度'),
-                        ('evidence_relation', '证据关系'),
-                        ('experiment_requirement', '实验要求'),
-                        ('graph_table_requirement', '图表要求'),
-                        ('calculation_model', '计算模型'),
-                        ('unfamiliar_information_transfer', '陌生信息迁移'),
-                        ('subquestion_dependency', '小问依赖关系'),
+                        ('knowledge', '知识覆盖'),
+                        ('solution_process', '解题任务与步骤'),
+                        ('information_processing', '信息处理'),
+                        ('reaction_processes', '反应与过程'),
+                        ('experiment_tasks', '实验任务'),
+                        ('calculation', '计算与特殊方法'),
+                        ('difficulty_conditions', '隐藏条件与干扰'),
+                        ('expression_requirements', '表达要求'),
+                        ('question_context', '题目情境'),
+                        ('curriculum_scope', '课内范围'),
                     ]
                     for key, label in feature_fields:
                         value = features_obj.get(key, '')
+                        if isinstance(value, dict):
+                            value = '；'.join(f'{k}={v}' for k, v in value.items())
                         if isinstance(value, list):
                             value = '、'.join(str(v) for v in value)
                         if value:

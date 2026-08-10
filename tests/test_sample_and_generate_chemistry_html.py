@@ -24,24 +24,49 @@ def rated_item(question_id: str, level: str) -> dict:
         "difficulty_rating": {
             "difficulty_level": level,
             "features": {
-                "reasoning_depth": "2-3层",
-                "reasoning_direction": "正向推导",
-                "knowledge_relation": "同模块深度关联",
-                "representation_conversion": "两类表征连续转换",
-                "reaction_relation": "单个反应或无反应",
-                "constraint_complexity": "单一约束",
-                "evidence_relation": "单一证据直接对应",
-                "experiment_requirement": "无",
-                "graph_table_requirement": "无",
-                "calculation_model": "无",
-                "unfamiliar_information_transfer": "无",
-                "subquestion_dependency": "无多问",
+                "knowledge": {
+                    "topic_ids": ["U02_T03"],
+                    "knowledge_point_count": 1,
+                    "unit_count": 1,
+                    "cross_unit": False,
+                },
+                "solution_process": {
+                    "step_count": "1步",
+                    "task_types": ["现象判断与解释"],
+                    "key_steps": ["判断燃烧现象"],
+                    "task_relation": "单项任务",
+                },
+                "information_processing": ["无"],
+                "reaction_processes": {
+                    "processes": ["单一反应判断"],
+                    "requires_condition_selection": False,
+                },
+                "experiment_tasks": ["现象判断"],
+                "calculation": {
+                    "has_calculation": False,
+                    "calculation_steps": "无",
+                    "types": ["无"],
+                    "special_methods": ["无"],
+                },
+                "difficulty_conditions": {
+                    "hidden_conditions": ["无"],
+                    "interference_points": ["无"],
+                },
+                "expression_requirements": ["无"],
+                "question_context": {
+                    "unfamiliar_materials": ["无"],
+                    "interdisciplinary_context": ["无"],
+                },
+                "curriculum_scope": {
+                    "scope": "within_junior",
+                    "extra_points": [],
+                },
             },
             "reasoning": {
-                "core_basis": "测试依据",
-                "hard_point": "测试卡点",
-                "why_not_lower": "不能降低",
-                "why_not_higher": "不能升高",
+                "knowledge_points": "测试知识点",
+                "solution_process": "测试过程",
+                "main_difficulty_factors": "测试难点",
+                "level_basis": "测试定档",
             },
         },
     }
@@ -126,7 +151,7 @@ class ChemistryVisualizationTests(unittest.TestCase):
         self.assertIn("题干图示资源缺失", section)
         self.assertIn("media-missing", section)
 
-    def test_all_results_renders_core12_and_exports_aligned_images(self) -> None:
+    def test_all_results_renders_teacher_features_and_exports_aligned_images(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             results = root / "rated.jsonl"
@@ -216,8 +241,12 @@ class ChemistryVisualizationTests(unittest.TestCase):
                 "查看原始题图 / 备用图片（1张）",
                 rendered,
             )
-            self.assertIn("纵向推理深度 D", rendered)
-            self.assertIn("两类表征连续转换", rendered)
+            self.assertIn("知识覆盖", rendered)
+            self.assertIn("解题任务与步骤", rendered)
+            self.assertIn("实验任务", rendered)
+            self.assertIn("主要难度因素", rendered)
+            self.assertNotIn("纵向推理深度 D", rendered)
+            self.assertNotIn("两类表征连续转换", rendered)
             self.assertIn("corrected-level-select", rendered)
             self.assertIn(
                 "人工评议验收（默认模型判定合理）",
