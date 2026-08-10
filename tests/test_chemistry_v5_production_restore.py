@@ -180,6 +180,38 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             "同一种作答形式不等于同一条具体化学命题",
             prompt,
         )
+
+    def test_prompt_does_not_promote_every_distinct_fact_by_count(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "不同对象并不自动升档",
+            prompt,
+        )
+        self.assertIn(
+            "分别检索不同的对象—结论对应关系",
+            prompt,
+        )
+        self.assertIn(
+            "同一课内结论的一眼识别",
+            prompt,
+        )
+
+    def test_prompt_treats_given_equation_check_as_one_task(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "题干已完整给出反应原理或化学方程式",
+            prompt,
+        )
+        self.assertIn(
+            "只记录一个有效任务",
+            prompt,
+        )
+        self.assertIn(
+            "理解应用背景→核验方程式",
+            prompt,
+        )
         self.assertIn(
             "科学家成就、元素缺乏症、性质用途或实验现象",
             prompt,
