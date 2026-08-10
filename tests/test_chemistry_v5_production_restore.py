@@ -173,6 +173,50 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             prompt,
         )
 
+    def test_prompt_does_not_merge_distinct_facts_by_answer_form(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "同一种作答形式不等于同一条具体化学命题",
+            prompt,
+        )
+        self.assertIn(
+            "科学家成就、元素缺乏症、性质用途或实验现象",
+            prompt,
+        )
+
+    def test_prompt_keeps_heterogeneous_subjective_breadth_above_basic(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "四项以上非重复任务",
+            prompt,
+        )
+        self.assertIn(
+            "规范现象、操作目的、失败原因、化学用语书写或含义解释",
+            prompt,
+        )
+
+    def test_prompt_names_decisive_hard_methods_without_chain_inflation(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "反应后完整体系质量",
+            prompt,
+        )
+        self.assertIn(
+            "未知组分消元或组成不变量",
+            prompt,
+        )
+        self.assertIn(
+            "由结论反推操作或控制变量方案",
+            prompt,
+        )
+
     def test_prompt_example_10_contains_five_real_decisions(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
@@ -454,6 +498,25 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             result["postprocess_actions"][0]["rule"],
             "teacher_hard_to_final_deep_quantitative_chain",
         )
+
+    def test_v5_deep_quantitative_chain_requires_a_reaction_task(self) -> None:
+        item = hard_rating()
+        item["features"]["reaction_structure"] = "无反应任务"
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {
+                "stem": "饱和溶液析晶中的质量差与组成计算。",
+                "sub_questions": [
+                    {"stem": "任务1"},
+                    {"stem": "任务2"},
+                    {"stem": "任务3"},
+                ],
+            },
+        )
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["postprocess_actions"], [])
 
     def test_narrow_final_rule_accepts_safe_historical_enum_aliases(self) -> None:
         item = hard_rating()

@@ -1207,6 +1207,7 @@ def observable_deep_quantitative_final_signal(
         validated = validate_observable_features(features)
         return bool(
             len(validated["longest_solution_chain"]) >= 5
+            and validated["reaction_structure"] != "无反应任务"
             and validated["solution_topology"]
             in {
                 "条件分支或范围筛选",
