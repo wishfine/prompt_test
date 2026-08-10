@@ -172,6 +172,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
     def test_prompt_documents_every_runtime_enum(self):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
         self.assertIn("30个细粒度特征", prompt)
+        self.assertEqual(prompt.count("## 输入题目信息"), 1)
         self.assertGreaterEqual(prompt.count("【Case"), 25)
         for field, options in schema.FEATURE_OPTIONS.items():
             self.assertIn(field, prompt)
