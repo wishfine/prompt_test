@@ -7,7 +7,7 @@
 调整一个相邻档；只有基于题干客观结构的严重低估安全底线，才允许将
 明显的连续反应核验从送分题直接托底到中等题。
 
-化学正式输出使用19个可从题目核验的任务与操作特征；历史Core-12
+化学正式输出使用17个可从题目核验的任务与操作特征；历史Core-12
 只保留兼容读取和确定性内部投影，不再要求模型直接填写抽象难度摘要。
 """
 
@@ -40,6 +40,7 @@ from dotenv import load_dotenv
 try:
     from chemistry_observable_features import (
         OBSERVABLE_FEATURE_FIELDS,
+        OBSERVABLE_V6_FEATURE_FIELDS,
         OBSERVABLE_V5_FEATURE_FIELDS,
         OBSERVABLE_V4_FEATURE_FIELDS,
         OBSERVABLE_V3_FEATURE_FIELDS,
@@ -52,6 +53,7 @@ try:
 except ModuleNotFoundError:
     from src.chemistry_observable_features import (
         OBSERVABLE_FEATURE_FIELDS,
+        OBSERVABLE_V6_FEATURE_FIELDS,
         OBSERVABLE_V5_FEATURE_FIELDS,
         OBSERVABLE_V4_FEATURE_FIELDS,
         OBSERVABLE_V3_FEATURE_FIELDS,
@@ -841,6 +843,7 @@ def is_observable_feature_contract(features: Any) -> bool:
         and frozenset(features)
         in {
             frozenset(OBSERVABLE_FEATURE_FIELDS),
+            frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V4_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V3_FEATURE_FIELDS),
@@ -853,16 +856,20 @@ def looks_like_observable_feature_contract(features: Any) -> bool:
     """识别字段名偶发拼错的可观测特征输出。"""
     if not isinstance(features, dict):
         return False
-    known = set(OBSERVABLE_FEATURE_FIELDS) | {
+    known = (
+        set(OBSERVABLE_FEATURE_FIELDS)
+        | set(OBSERVABLE_V6_FEATURE_FIELDS)
+        | {
         "new_ininformation_operation",
-    }
+        }
+    )
     return len(set(features) & known) >= 8
 
 
 def observable_feature_schema_version(features: Dict[str, Any]) -> str:
-    if set(features) == set(OBSERVABLE_FEATURE_FIELDS):
+    if set(features) == set(OBSERVABLE_V6_FEATURE_FIELDS):
         return "chemistry_observable_v6"
-    if set(features) == set(OBSERVABLE_V5_FEATURE_FIELDS):
+    if set(features) == set(OBSERVABLE_FEATURE_FIELDS):
         return "chemistry_observable_v5"
     if set(features) == set(OBSERVABLE_V4_FEATURE_FIELDS):
         return "chemistry_observable_v4"
@@ -874,9 +881,9 @@ def observable_feature_schema_version(features: Dict[str, Any]) -> str:
 
 
 def validate_feature_contract(features: Any) -> Dict[str, Any]:
-    """校验正式可观测 V6 或历史 V5/V4/V3/V2/Core-12 字段。
+    """校验正式可观测 V5 或历史 V6/V4/V3/V2/Core-12 字段。
 
-    新请求只由正式 Prompt 产生可观测 V6；保留 V5/V4/V3/V2/Core-12
+    新请求只由正式 Prompt 产生可观测 V5；保留 V6/V4/V3/V2/Core-12
     读取能力是为了历史 JSONL 回放和回归测试，不会把旧字段
     重新暴露给模型。
     """
@@ -1190,6 +1197,7 @@ def observable_deep_quantitative_final_signal(
     )
     if feature_keys in {
         frozenset(OBSERVABLE_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V4_FEATURE_FIELDS),
     }:
@@ -1235,6 +1243,44 @@ def observable_deep_quantitative_final_signal(
             set(validated["calculation_operations"])
             & {"差量", "多反应定量关系", "联立", "范围或分类计算"}
         )
+    )
+
+
+def observable_dense_multiquestion_final_signal(
+    features: Dict[str, Any],
+    data: Dict[str, Any],
+) -> bool:
+    """识别经三版500题回放均为净正的窄压轴结构。
+
+    信号同时依赖模型可核验事实与程序题面统计：至少四个显式小问、
+    七项有效任务、四步最长链，并包含差量、多反应、联立、组分消元
+    或范围分类计算。题干长度、课程跨度和小问数量均不能单独触发。
+    """
+    if not isinstance(features, dict):
+        return False
+    feature_keys = frozenset(features)
+    if feature_keys not in {
+        frozenset(OBSERVABLE_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
+    }:
+        return False
+    validated = validate_observable_features(features)
+    metrics = derive_observable_metrics(validated)
+    question_metrics = derive_question_structure_metrics(data)
+    advanced_calculations = {
+        "组分消元或组成不变量",
+        "差量",
+        "多反应定量关系",
+        "联立",
+        "范围或分类计算",
+    }
+    return bool(
+        metrics["longest_chain_steps"] >= 4
+        and metrics["effective_task_count"] >= 7
+        and question_metrics["explicit_subquestion_count"] >= 4
+        and set(validated["calculation_operations"])
+        & advanced_calculations
     )
 
 
@@ -1571,7 +1617,7 @@ def observable_multi_rule_breadth_signal(
         return None
     metrics = derive_observable_metrics(model_features)
     is_current_v6 = frozenset(model_features) == frozenset(
-        OBSERVABLE_FEATURE_FIELDS
+        OBSERVABLE_V6_FEATURE_FIELDS
     )
     if is_current_v6:
         response_operations = set(
@@ -1879,6 +1925,7 @@ def observable_shared_new_information_signal(
         or frozenset(model_features)
         not in {
             frozenset(OBSERVABLE_FEATURE_FIELDS),
+            frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V4_FEATURE_FIELDS),
         }
@@ -3727,6 +3774,41 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                             "chemistry_observable_v4",
                         }
                         else f"知识关系={features['knowledge_relation']}"
+                    ),
+                ],
+            )
+        elif (
+            raw_level == "拔高题"
+            and observable_contract
+            and observable_dense_multiquestion_final_signal(
+                model_features,
+                data,
+            )
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "压轴题",
+                "结构边界窄校准：多问共享的高密度高级定量链达到压轴边界",
+                rule=(
+                    "teacher_hard_to_final_"
+                    "dense_multiquestion_quantitative_chain"
+                ),
+                evidence=[
+                    "显式小问数="
+                    + str(
+                        observable_metrics[
+                            "explicit_subquestion_count"
+                        ]
+                    ),
+                    "有效任务数="
+                    + str(observable_metrics["effective_task_count"]),
+                    "最长链="
+                    + " → ".join(
+                        model_features["longest_solution_chain"]
+                    ),
+                    "高级计算="
+                    + "、".join(
+                        model_features["calculation_operations"]
                     ),
                 ],
             )

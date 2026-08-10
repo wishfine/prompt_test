@@ -1,10 +1,10 @@
-"""初中化学可观测特征 V6 正式契约。
+"""初中化学可观测特征 V5 正式契约。
 
 该模块提供严格校验和派生量计算。正式特征不直接输出“推理深度”
 “约束复杂度”等难度摘要，而是记录任务、规则、课程单元和具体
-化学操作。V6 在 V5 十七项基础上，只增加具体作答操作和真实跨学科
-依赖；移除容易受最终等级反向影响的任务性质计数。V2/V3/V4/V5
-仍可严格读取，用于历史回放。
+化学操作。正式模型输出恢复为稳定的 V5 十七项；V6 增加的具体
+作答操作和跨学科依赖仅保留历史读取能力，不再要求模型填写。
+V2/V3/V4/V6 仍可严格读取，用于历史回放。
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ OBSERVABLE_V5_FEATURE_FIELDS = (
     "new_information_operation",
 )
 
-OBSERVABLE_FEATURE_FIELDS = (
+OBSERVABLE_V6_FEATURE_FIELDS = (
     "longest_solution_chain",
     "task_groups",
     "rule_families",
@@ -109,6 +109,10 @@ OBSERVABLE_FEATURE_FIELDS = (
     "calculation_operations",
     "new_information_operation",
 )
+
+# 正式模型输出使用稳定的 V5 十七项。V6 十九项只用于历史回放，
+# 避免新增枚举继续增加 Schema 重试并干扰五档边界判断。
+OBSERVABLE_FEATURE_FIELDS = OBSERVABLE_V5_FEATURE_FIELDS
 
 TASK_TYPES = {
     "直接事实与概念",
@@ -706,7 +710,7 @@ def _validate_single_enum(
 
 
 def validate_observable_features(features: Any) -> Dict[str, Any]:
-    """严格校验可观测特征 V6，并兼容读取 V5/V4/V3/V2。
+    """严格校验正式 V5，并兼容读取历史 V6/V4/V3/V2。
 
     校验器不静默补默认值：缺字段、多字段或枚举错误均直接
     拒绝，便于重试提示精确修正。
@@ -714,8 +718,8 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
     if not isinstance(features, dict):
         raise ValueError("features必须是JSON对象")
     actual = set(features)
-    v6_expected = set(OBSERVABLE_FEATURE_FIELDS)
-    v5_expected = set(OBSERVABLE_V5_FEATURE_FIELDS)
+    v6_expected = set(OBSERVABLE_V6_FEATURE_FIELDS)
+    v5_expected = set(OBSERVABLE_FEATURE_FIELDS)
     v4_expected = set(OBSERVABLE_V4_FEATURE_FIELDS)
     v3_expected = set(OBSERVABLE_V3_FEATURE_FIELDS)
     v2_expected = set(OBSERVABLE_V2_FEATURE_FIELDS)
@@ -725,8 +729,8 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
     is_v3 = actual == v3_expected
     is_v2 = actual == v2_expected
     if not (is_v6 or is_v5 or is_v4 or is_v3 or is_v2):
-        missing = sorted(v6_expected - actual)
-        extra = sorted(actual - v6_expected)
+        missing = sorted(v5_expected - actual)
+        extra = sorted(actual - v5_expected)
         raise ValueError(
             f"可观测特征字段集不匹配; missing={missing}; extra={extra}"
         )

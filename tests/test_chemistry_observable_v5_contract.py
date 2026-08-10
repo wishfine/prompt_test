@@ -75,20 +75,33 @@ def rating(level: str = "中等题") -> dict:
     }
 
 
-class ChemistryObservableV6ContractTests(unittest.TestCase):
+class ChemistryObservableV5ContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.features = load_module("chemistry_observable_v5_features", FEATURE_PATH)
         cls.runtime = load_module("chemistry_observable_v5_runtime", RUNTIME_PATH)
 
-    def test_current_contract_adds_two_observable_fields_and_keeps_v5(self) -> None:
-        self.assertEqual(len(self.features.OBSERVABLE_FEATURE_FIELDS), 19)
+    def test_current_contract_is_stable_v5_and_keeps_v6_readable(self) -> None:
+        self.assertEqual(len(self.features.OBSERVABLE_FEATURE_FIELDS), 17)
         self.assertEqual(len(self.features.OBSERVABLE_V5_FEATURE_FIELDS), 17)
+        self.assertEqual(len(self.features.OBSERVABLE_V6_FEATURE_FIELDS), 19)
+        self.assertEqual(
+            self.features.OBSERVABLE_FEATURE_FIELDS,
+            self.features.OBSERVABLE_V5_FEATURE_FIELDS,
+        )
         self.assertIn(
+            "response_operations",
+            self.features.OBSERVABLE_V6_FEATURE_FIELDS,
+        )
+        self.assertIn(
+            "cross_subject_operations",
+            self.features.OBSERVABLE_V6_FEATURE_FIELDS,
+        )
+        self.assertNotIn(
             "response_operations",
             self.features.OBSERVABLE_FEATURE_FIELDS,
         )
-        self.assertIn(
+        self.assertNotIn(
             "cross_subject_operations",
             self.features.OBSERVABLE_FEATURE_FIELDS,
         )
@@ -106,10 +119,13 @@ class ChemistryObservableV6ContractTests(unittest.TestCase):
             self.features.OBSERVABLE_FEATURE_FIELDS,
         )
 
-    def test_current_contract_validates_as_observable_v6(self) -> None:
+    def test_historical_v6_contract_remains_readable(self) -> None:
         validated = self.runtime.validate_feature_contract(current_features())
 
-        self.assertEqual(set(validated), set(self.runtime.OBSERVABLE_FEATURE_FIELDS))
+        self.assertEqual(
+            set(validated),
+            set(self.runtime.OBSERVABLE_V6_FEATURE_FIELDS),
+        )
         self.assertEqual(
             self.runtime.observable_feature_schema_version(validated),
             "chemistry_observable_v6",
@@ -449,16 +465,14 @@ class ChemistryObservableV6ContractTests(unittest.TestCase):
     def test_prompt_documents_task_granularity_without_ra_fields(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("19项可观测特征协议", prompt)
+        self.assertIn("17项可观测特征协议", prompt)
         self.assertNotIn('"direct_retrieval_task_count"', prompt)
         self.assertNotIn('"rule_application_task_count"', prompt)
         self.assertIn("不同化学命题或不同作答目标", prompt)
         self.assertIn("同一规则只表示B不增加", prompt)
         self.assertIn("独立选项不增加D", prompt)
-        self.assertIn("response_operations", prompt)
-        self.assertIn("cross_subject_operations", prompt)
-        self.assertIn("真实依赖", prompt)
-        self.assertIn("题干未给出的超纲化学知识", prompt)
+        self.assertNotIn("response_operations", prompt)
+        self.assertNotIn("cross_subject_operations", prompt)
 
     def test_prompt_decouples_task_count_from_easy_level(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
