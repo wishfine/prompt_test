@@ -913,11 +913,14 @@ class ChemistryRuntimeTests(unittest.TestCase):
             result["teacher_distribution_guard_writeback_blocked_reason"],
         )
 
-    def test_teacher_guard_promotes_reported_four_fact_bundle_to_basic(
+    def test_reported_four_fact_bundle_is_audit_only_not_written_back(
         self,
     ) -> None:
         chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
         chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = (
+            True
+        )
         rating = valid_rating("送分题")
         rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
         rating["reasoning"]["core_basis"] = (
@@ -943,6 +946,14 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertEqual(
             result["teacher_distribution_guard_candidate_action"]["rule"],
             "teacher_easy_to_basic_reported_four_fact_floor",
+        )
+        self.assertEqual(result["difficulty_level"], "送分题")
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+        self.assertIn(
+            "teacher_easy_to_basic_reported_four_fact_floor",
+            result["teacher_distribution_guard_writeback_blocked_reason"],
         )
 
     def test_teacher_guard_promotes_measuring_cylinder_error_chain(

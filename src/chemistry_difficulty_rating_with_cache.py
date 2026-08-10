@@ -150,13 +150,15 @@ CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = os.getenv(
 }
 
 # 已知低稳定性规则仅保留候选审计；即使教师分布校准总写回开关开启，
-# 也不得自动改档。实验基础操作规则在V5-500中净收益为0；横向广度
-# 新规则尚未经过独立回放，均不能直接写回。
+# 也不得自动改档。实验基础操作规则在V5-500中净收益为0；四项事实
+# 下限已实测误伤同一规则选择题；横向广度新规则尚未经过独立回放，
+# 均不能直接写回。
 TEACHER_GUARD_AUDIT_ONLY_RULES = frozenset(
     {
         "teacher_hard_to_final_deep_quantitative_chain",
         "teacher_medium_to_hard_shared_new_information",
         "teacher_easy_to_basic_experiment_application",
+        "teacher_easy_to_basic_reported_four_fact_floor",
         "teacher_basic_to_medium_multi_rule_breadth_candidate",
     }
 )
@@ -1184,9 +1186,10 @@ def observable_deep_quantitative_final_signal(
     """可观测特征下的窄“拔高→压轴”信号。
 
     它只识别已在 500 题回放中稳定呈现的深定量链：至少五个
-    前后依赖的化学决策，连续/竞争/分情况反应结构，以及差量、
-    多反应定量、联立或范围分类中的至少一项。题干长、工业背景、
-    多图或多小问都不在触发条件中。
+    前后依赖的化学决策，存在分支、反推、组分消元、交叉验证或
+    多阶段网络拓扑，并包含差量、多反应定量、联立或范围分类中的
+    至少一项。该审计信号与Prompt的单主线反应路径互补；题干长、
+    工业背景、多图或多小问都不在触发条件中。
     """
     # V5/V4优先使用题目可观察的主模型拓扑；V3仍按历史语义回放。V2
     # 缺少新增的并列任务、视觉和误差事实，不在回放时改变其语义。

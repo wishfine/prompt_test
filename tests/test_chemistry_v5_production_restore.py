@@ -117,6 +117,171 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         self.assertNotIn("### 4. response_operations", prompt)
         self.assertNotIn("### 6. cross_subject_operations", prompt)
 
+    def test_prompt_final_path_has_priority_over_hard_dense_path(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "先检查压轴题的两条路径；若压轴路径成立，不得再用拔高题的高密度综合链截停",
+            prompt,
+        )
+        self.assertIn(
+            "反应、图表、实验、计算、证据或条件中至少两类共同参与",
+            prompt,
+        )
+        self.assertNotIn(
+            "反应、实验、图表、计算、证据或条件中至少三类共同参与",
+            prompt,
+        )
+
+    def test_prompt_final_definition_keeps_deep_linear_path(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "压轴题有“复杂模型耦合”和“单主线深定量”两条并列路径",
+            prompt,
+        )
+        self.assertIn(
+            "仅当各任务可沿显性节点分别解决，且不满足单主线深定量路径时",
+            prompt,
+        )
+        self.assertIn(
+            "单主线深定量路径已成立时，即使主线清晰，也按压轴题比较",
+            prompt,
+        )
+
+    def test_prompt_example_10_contains_five_real_decisions(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "由盐酸用量建立总碱量关系→由固体增重确定吸收CO₂量→"
+            "将CO₂量换算为已变质NaOH量→由总量扣出未变质NaOH量→求质量比",
+            prompt,
+        )
+
+    def test_prompt_example_12_separates_three_symbolic_response_levels(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "直接识别名称或从给定选项认出符号、化学式",
+            prompt,
+        )
+        self.assertIn(
+            "自主写出一个元素符号、离子符号或由化合价推出一个化学式",
+            prompt,
+        )
+        self.assertIn(
+            "元素符号、离子符号、化合价、化学式、方程式或数字含义中的多类规则",
+            prompt,
+        )
+
+    def test_prompt_example_23_separates_proposition_object_order_and_images(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("同一命题的不同措辞", prompt)
+        self.assertIn("同一固定规则判断多个对象", prompt)
+        self.assertIn("前者/后者或先后顺序条件", prompt)
+        self.assertIn("多图独立不同规则判断", prompt)
+
+    def test_prompt_controlled_breadth_distinguishes_subjective_responses(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "多处规范原因、作用、目的或失败诊断",
+            prompt,
+        )
+        self.assertIn(
+            "单个主观回答只改变作答形式，不自动升档",
+            prompt,
+        )
+
+    def test_prompt_final_paths_do_not_require_unrelated_extra_signals(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "不得再追加陌生信息、跨单元、多阶段实验或分类讨论作为必要条件",
+            prompt,
+        )
+        self.assertIn(
+            "定性证据网络不以存在定量计算为必要条件",
+            prompt,
+        )
+        self.assertIn(
+            "只有一个最终求解目标或主线清晰不能否决该特殊压轴口径",
+            prompt,
+        )
+
+    def test_prompt_lists_complete_new_information_enum_and_bare_topics(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("依赖题干未给出的超纲化学知识", prompt)
+        self.assertIn(
+            "curriculum_topics数组只能输出裸编码",
+            prompt,
+        )
+        self.assertIn("`U3-2`（原子结构）", prompt)
+        self.assertNotIn("U3-2原子结构", prompt)
+
+    def test_topic_name_suffix_is_safely_normalized_to_bare_code(self) -> None:
+        item = production_features()
+        item["curriculum_topics"] = [
+            "U3-2原子结构",
+            "U3-3（元素）",
+        ]
+
+        normalized, actions = self.features.normalize_observable_features(
+            item
+        )
+        validated = self.features.validate_observable_features(normalized)
+
+        self.assertEqual(
+            validated["curriculum_topics"],
+            ["U3-2", "U3-3"],
+        )
+        self.assertTrue(
+            any(
+                action["field"] == "curriculum_topics"
+                for action in actions
+            )
+        )
+
+    def test_mismatched_topic_name_is_not_silently_normalized(self) -> None:
+        item = production_features()
+        item["curriculum_topics"] = ["U3-2元素"]
+
+        normalized, _ = self.features.normalize_observable_features(item)
+
+        with self.assertRaisesRegex(ValueError, "curriculum_topics"):
+            self.features.validate_observable_features(normalized)
+
+    def test_prompt_does_not_require_model_to_name_derived_span(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "课程跨度与并列/耦合术语由程序派生，理由不强制自行命名",
+            prompt,
+        )
+        self.assertNotIn("若任务彼此独立，必须明确写“跨单元并列”", prompt)
+
+    def test_prompt_declares_runtime_shape_limits(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "longest_solution_chain包含1至12步，每步1至80字且不得重复",
+            prompt,
+        )
+        self.assertIn(
+            "task_groups包含1至12组，task_type不得重复",
+            prompt,
+        )
+
     def test_program_metrics_remain_available_for_v5_output(self) -> None:
         result = self.runtime.postprocess_chemistry_difficulty(
             hard_rating(),

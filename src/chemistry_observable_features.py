@@ -411,6 +411,23 @@ def _canonical_enum_value(field: str, value: Any) -> str:
     return ENUM_VALUE_ALIASES.get(field, {}).get(clean, clean)
 
 
+def _canonical_curriculum_topic(value: Any) -> Any:
+    """仅剥离与教材映射逐字匹配的课题名称后缀。"""
+    if not isinstance(value, str):
+        return value
+    clean = _clean_enum_text(value)
+    if clean in CURRICULUM_TOPICS:
+        return clean
+    for code, name in CURRICULUM_TOPIC_NAMES.items():
+        if clean in {
+            f"{code}{name}",
+            f"{code}({name})",
+            f"{code}（{name}）",
+        }:
+            return code
+    return clean
+
+
 def normalize_observable_features(
     features: Any,
 ) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
@@ -569,6 +586,19 @@ def normalize_observable_features(
         new_value = _canonical_enum_value(field, old_value)
         record(field, old_value, new_value, "枚举近义归一")
         normalized[field] = new_value
+
+    topics = normalized.get("curriculum_topics")
+    if isinstance(topics, list):
+        canonical_topics = [
+            _canonical_curriculum_topic(value) for value in topics
+        ]
+        record(
+            "curriculum_topics",
+            topics,
+            canonical_topics,
+            "剥离与教材映射匹配的课题名称后缀",
+        )
+        normalized["curriculum_topics"] = canonical_topics
 
     for field in ("curriculum_topics", "curriculum_units", "longest_solution_chain"):
         values = normalized.get(field)
