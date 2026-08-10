@@ -128,6 +128,32 @@ class ChemistryObservableFeatureTests(unittest.TestCase):
         self.assertEqual(derived["curriculum_topic_count"], 2)
         self.assertEqual(derived["curriculum_unit_count"], 2)
         self.assertEqual(derived["curriculum_span_type"], "跨单元")
+        self.assertEqual(
+            derived["curriculum_coupling_type"],
+            "跨单元耦合",
+        )
+        self.assertTrue(derived["has_task_dependency"])
+
+    def test_v3_distinguishes_parallel_cross_unit_coverage(self) -> None:
+        module = load_module()
+        features = valid_v3_features()
+        features["curriculum_topics"] = ["U2-2", "U7-1"]
+        features["parallel_task_relation"] = "同一规则下多个对象"
+        features["longest_solution_chain"] = [
+            "判断氧气中燃烧现象",
+            "判断燃烧条件",
+            "判断实验安全措施",
+            "确定正确选项",
+        ]
+
+        derived = module.derive_observable_metrics(features)
+
+        self.assertEqual(derived["curriculum_span_type"], "跨单元")
+        self.assertEqual(
+            derived["curriculum_coupling_type"],
+            "跨单元并列",
+        )
+        self.assertFalse(derived["has_task_dependency"])
 
     def test_v3_distinguishes_topics_inside_one_unit(self) -> None:
         module = load_module()

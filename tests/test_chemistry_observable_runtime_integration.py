@@ -172,6 +172,60 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
             "跨模块融合",
         )
 
+    def test_parallel_cross_unit_coverage_is_not_projected_as_fusion(
+        self,
+    ) -> None:
+        features = observable_v3_features()
+        features["curriculum_topics"] = ["U2-2", "U7-1"]
+        features["parallel_task_relation"] = "同一规则下多个对象"
+
+        projection = self.runtime.project_observable_to_core12(features)
+
+        self.assertEqual(
+            projection["knowledge_relation"],
+            "同模块简单关联",
+        )
+        self.assertEqual(
+            projection["subquestion_dependency"],
+            "多问相互独立",
+        )
+
+    def test_cross_unit_reasoning_and_parallel_chain_are_audited(
+        self,
+    ) -> None:
+        item = rating("基础题")
+        item["features"] = observable_v3_features()
+        item["features"].update(
+            {
+                "curriculum_topics": ["U2-2", "U7-1"],
+                "parallel_task_relation": "同一规则下多个对象",
+                "longest_solution_chain": [
+                    "判断选项A",
+                    "判断选项B",
+                    "判断选项C",
+                    "判断选项D",
+                ],
+            }
+        )
+        item["reasoning"]["core_basis"] = (
+            "覆盖U2-2和U7-1两个同单元相邻课题。"
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(item, {})
+
+        self.assertTrue(
+            any(
+                "不同U前缀却写成同单元" in flag
+                for flag in result["feature_audit_flags"]
+            )
+        )
+        self.assertTrue(
+            any(
+                "独立任务疑似按选项累计最长链" in flag
+                for flag in result["feature_audit_flags"]
+            )
+        )
+
     def test_observable_chain_drives_basic_to_medium_candidate(self) -> None:
         item = rating("基础题")
         item["features"]["longest_solution_chain"] = [
@@ -299,6 +353,10 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
             "同单元跨课题",
             "跨学科背景不等于跨学科推理",
             "误差分析不能按关键词直接升档",
+            "覆盖跨度不等于耦合跨度",
+            "跨单元并列",
+            "跨单元耦合",
+            "不同U前缀绝不能写成同单元",
         ):
             self.assertIn(anchor, prompt)
 
@@ -345,7 +403,7 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "基础题")
         self.assertEqual(result["postprocess_actions"], [])
 
-    def test_deep_quantitative_reaction_chain_can_reach_final(self) -> None:
+    def test_deep_quantitative_reaction_chain_is_audit_only(self) -> None:
         item = rating("拔高题")
         item["features"] = observable_v3_features()
         item["features"].update(
@@ -371,10 +429,47 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
             {"stem": "前段产物继续反应，根据差量与守恒求未知组成。"},
         )
 
-        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["postprocess_actions"], [])
         self.assertEqual(
-            result["postprocess_actions"][0]["rule"],
+            result["teacher_distribution_guard_candidate_action"]["rule"],
             "teacher_hard_to_final_deep_quantitative_chain",
+        )
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+        self.assertIn(
+            "V4回放净负收益",
+            result["teacher_distribution_guard_writeback_blocked_reason"],
+        )
+
+    def test_shared_new_information_promotion_is_audit_only(self) -> None:
+        item = rating("中等题")
+        item["features"] = observable_v3_features()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "读取题给的新关系",
+                    "把同一查值结果用于两个相关任务",
+                ],
+                "new_information_operation": "直接查值",
+                "parallel_task_relation": "共享同一化学模型的关联任务",
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "根据题给新关系完成两个相关任务。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(result["postprocess_actions"], [])
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_medium_to_hard_shared_new_information",
+        )
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
         )
 
     def test_schema_retry_budget_allows_three_repairs(self) -> None:

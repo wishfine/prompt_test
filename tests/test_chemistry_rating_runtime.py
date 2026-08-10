@@ -1714,7 +1714,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
             result["final_promotion_ceiling_reason"],
         )
 
-    def test_teacher_guard_writeback_is_independent_and_adjacent(
+    def test_negative_replay_teacher_guard_is_candidate_only(
         self,
     ) -> None:
         chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
@@ -1733,13 +1733,13 @@ class ChemistryRuntimeTests(unittest.TestCase):
 
         result = chemistry.postprocess_chemistry_difficulty(rating, {})
 
-        self.assertEqual(result["difficulty_level"], "拔高题")
-        self.assertTrue(
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertFalse(
             result["teacher_distribution_guard_writeback_applied"]
         )
-        self.assertEqual(len(result["postprocess_actions"]), 1)
+        self.assertEqual(result["postprocess_actions"], [])
         self.assertEqual(
-            result["postprocess_actions"][0]["rule"],
+            result["teacher_distribution_guard_candidate_action"]["rule"],
             "teacher_medium_to_hard_shared_new_information",
         )
 

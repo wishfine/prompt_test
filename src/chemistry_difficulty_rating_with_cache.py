@@ -136,6 +136,15 @@ CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = os.getenv(
     "yes",
     "on",
 }
+
+# V4-500逐题回放中，这两条规则分别净-4和净-1。候选动作继续保留
+# 用于审计，但即使教师分布校准总写回开关开启，也不得自动改档。
+TEACHER_GUARD_AUDIT_ONLY_RULES = frozenset(
+    {
+        "teacher_hard_to_final_deep_quantitative_chain",
+        "teacher_medium_to_hard_shared_new_information",
+    }
+)
 if (
     CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
     and (
@@ -902,7 +911,20 @@ def project_observable_to_core12(
         reasoning_direction = "正向推导"
 
     topic_count = metrics.get("curriculum_topic_count", unit_count)
-    if unit_count >= 3:
+    coupling_type = metrics.get("curriculum_coupling_type", "")
+    is_parallel_v3_span = coupling_type in {
+        "同单元跨课题并列",
+        "跨单元并列",
+    }
+    if is_parallel_v3_span:
+        # 课程覆盖广不等于知识在同一主链中融合。横向广度已经由
+        # task_groups/rule_families记录，不能再次投影成跨模块融合。
+        knowledge_relation = (
+            "同模块简单关联"
+            if topic_count >= 2 or rule_count >= 2
+            else "单一知识点"
+        )
+    elif unit_count >= 3:
         knowledge_relation = "多模块深度融合"
     elif unit_count == 2:
         knowledge_relation = "跨模块融合"
@@ -2780,6 +2802,31 @@ def add_feature_audit_flags(
     level = rating_result.get("difficulty_level", "")
     flags: List[str] = []
     text = visible_text(data, include_analysis=True)
+    model_features = rating_result.get("features") or {}
+    if (
+        is_observable_feature_contract(model_features)
+        and "curriculum_topics" in model_features
+    ):
+        observable_metrics = derive_observable_metrics(model_features)
+        core_basis = str(
+            rating_result.get("reasoning", {}).get("core_basis", "")
+        )
+        if (
+            observable_metrics["curriculum_span_type"] == "跨单元"
+            and re.search(r"同(?:一)?单元", core_basis)
+        ):
+            flags.append(
+                "课程跨度自检：curriculum_topics含不同U前缀却写成同单元"
+            )
+        if (
+            observable_metrics["curriculum_coupling_type"]
+            in {"同单元跨课题并列", "跨单元并列"}
+            and len(model_features["longest_solution_chain"]) >= 4
+        ):
+            flags.append(
+                "纵向链自检：独立任务疑似按选项累计最长链，"
+                "应只保留最高难单项自身的依赖链"
+            )
     if (
         VISUAL_REFERENCE_RE.search(text)
         and features.get("graph_table_requirement") == "无"
@@ -2865,7 +2912,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             features
         )
         rating_result["postprocess_profile"] = (
-            "chemistry_observable_v3_teacher_calibrated_v1"
+            "chemistry_observable_v3_teacher_calibrated_v2"
             if schema_version == "chemistry_observable_v3"
             else "chemistry_observable_v2_teacher_distribution_v2_safe"
         )
@@ -3355,9 +3402,17 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK
         and final_boundary_guard_action
     )
+    teacher_guard_writeback_blocked_rule = (
+        teacher_guard_action.get("rule")
+        if teacher_guard_action
+        and teacher_guard_action.get("rule")
+        in TEACHER_GUARD_AUDIT_ONLY_RULES
+        else ""
+    )
     teacher_guard_writeback_applied = bool(
         CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
         and teacher_guard_action
+        and not teacher_guard_writeback_blocked_rule
     )
     writeback_applied = bool(
         general_writeback_applied
@@ -3404,6 +3459,14 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["teacher_distribution_guard_writeback_applied"] = (
         teacher_guard_writeback_applied
     )
+    rating_result[
+        "teacher_distribution_guard_writeback_blocked_reason"
+    ] = (
+        "V4回放净负收益，规则仅保留候选审计："
+        + teacher_guard_writeback_blocked_rule
+        if teacher_guard_writeback_blocked_rule
+        else ""
+    )
     rating_result["final_promotion_ceiling_reason"] = (
         final_ceiling_reason
     )
@@ -3432,7 +3495,12 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             "存在通用候选校准，但自动写回默认关闭；"
             "仅记录postprocess_candidate_actions"
         )
-    if teacher_guard_action and not teacher_guard_writeback_applied:
+    if teacher_guard_writeback_blocked_rule:
+        rating_result["feature_audit_flags"].append(
+            "教师分布候选规则在V4回放中净负收益，已阻止自动写回："
+            + teacher_guard_writeback_blocked_rule
+        )
+    elif teacher_guard_action and not teacher_guard_writeback_applied:
         rating_result["feature_audit_flags"].append(
             "存在结构边界窄校准候选，但专用写回默认关闭；"
             "仅记录teacher_distribution_guard_candidate_action"

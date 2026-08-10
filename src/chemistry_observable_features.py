@@ -419,7 +419,8 @@ def derive_observable_metrics(
 ) -> Dict[str, Any]:
     """从可审计数组派生 D/B/W/U 等数量，不接受模型自报计数。"""
     validated = validate_observable_features(features)
-    if "curriculum_topics" in validated:
+    is_v3 = "curriculum_topics" in validated
+    if is_v3:
         curriculum_topics = validated["curriculum_topics"]
         curriculum_units = sorted(
             {topic.split("-", 1)[0] for topic in curriculum_topics}
@@ -438,6 +439,36 @@ def derive_observable_metrics(
             "跨单元" if len(curriculum_units) >= 2 else "单一课题"
         )
 
+    if is_v3:
+        parallel_relation = validated["parallel_task_relation"]
+        has_task_dependency = bool(
+            len(validated["longest_solution_chain"]) >= 2
+            and parallel_relation
+            in {
+                "单一答题目标",
+                "共享同一化学模型的关联任务",
+            }
+        )
+        if curriculum_span_type == "单一课题":
+            curriculum_coupling_type = "单一课题"
+        elif parallel_relation in {
+            "同一规则下多个对象",
+            "不同规则的独立任务",
+        }:
+            curriculum_coupling_type = (
+                f"{curriculum_span_type}并列"
+            )
+        else:
+            curriculum_coupling_type = (
+                f"{curriculum_span_type}耦合"
+            )
+    else:
+        # V2没有并列任务关系字段，只保留历史派生语义。
+        curriculum_coupling_type = curriculum_span_type
+        has_task_dependency = bool(
+            len(validated["longest_solution_chain"]) >= 2
+        )
+
     return {
         "longest_chain_steps": len(
             validated["longest_solution_chain"]
@@ -450,6 +481,7 @@ def derive_observable_metrics(
         "curriculum_topic_count": topic_count,
         "curriculum_unit_count": len(curriculum_units),
         "curriculum_span_type": curriculum_span_type,
+        "curriculum_coupling_type": curriculum_coupling_type,
         "condition_operation_count": len(
             validated["condition_operations"]
         ),
@@ -462,7 +494,5 @@ def derive_observable_metrics(
         "calculation_operation_count": len(
             validated["calculation_operations"]
         ),
-        "has_task_dependency": len(
-            validated["longest_solution_chain"]
-        ) >= 2,
+        "has_task_dependency": has_task_dependency,
     }
