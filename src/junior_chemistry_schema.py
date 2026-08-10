@@ -406,20 +406,6 @@ def _build_audit_candidates(result: dict[str, Any]) -> list[dict[str, Any]]:
                 "topic_ids": knowledge["topic_ids"],
             },
         ))
-    if (
-        level in {"送分题", "基础题"}
-        and knowledge["unit_count"] >= 3
-        and features["task_count"] == "4项及以上"
-    ):
-        candidates.append(_candidate(
-            "K3_multi_unit_composite", "中等题",
-            "至少三个单元且整题包含四项以上任务，需复核2/3档边界。",
-            {
-                "unit_count": knowledge["unit_count"],
-                "task_count": features["task_count"],
-            },
-        ))
-
     nontrivial = {
         "experiment": features["experiment_analysis"] not in {"无", "实验现象判断"}
         or features["experiment_design"] != "无",
@@ -433,20 +419,6 @@ def _build_audit_candidates(result: dict[str, Any]) -> list[dict[str, Any]]:
             "送分题包含隐藏条件、干扰、规范表达或非基础实验任务。",
             {key: value for key, value in nontrivial.items() if value},
         ))
-    if (
-        level == "基础题"
-        and features["task_count"] == "4项及以上"
-        and features["task_relation"] == "多项独立"
-    ):
-        candidates.append(_candidate(
-            "B2_basic_multiple_tasks", "中等题",
-            "基础题包含四项以上独立任务，需复核整题知识切换负担。",
-            {
-                "task_count": features["task_count"],
-                "task_relation": features["task_relation"],
-            },
-        ))
-
     hard_experiment = (
         features["experiment_design"] in {
             "实验方案评价", "实验改进", "多阶段探究设计",

@@ -150,6 +150,18 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertEqual(result["features"]["task_count"], "4项及以上")
         self.assertEqual(result["features"]["step_count"], "1步")
 
+    def test_cross_unit_and_task_count_do_not_suggest_medium_by_themselves(self):
+        value = rating("基础题", ["U07_T01", "U02_T03", "U10_T01", "U10_T02"])
+        value["features"]["task_count"] = "4项及以上"
+        value["features"]["task_relation"] = "多项独立"
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        candidate_codes = {
+            candidate["code"] for candidate in result["postprocess"]["candidates"]
+        }
+        self.assertNotIn("K3_multi_unit_composite", candidate_codes)
+        self.assertNotIn("B2_basic_multiple_tasks", candidate_codes)
+        self.assertEqual(result["difficulty_level"], "基础题")
+
     def test_out_of_scope_requires_specific_content(self):
         value = rating(topic_ids=[])
         value["features"]["curriculum_scope"] = {
@@ -180,6 +192,8 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
                 self.assertIn(value, prompt)
         for value in (*schema.SCOPES, *schema.LEVELS):
             self.assertIn(value, prompt)
+        self.assertIn("task_count只描述工作量，不能单独决定档位", prompt)
+        self.assertIn("不能因`跨单元不同知识点`或`多单元综合`自动升档", prompt)
 
     def test_prompt_json_example_follows_runtime_contract(self):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
