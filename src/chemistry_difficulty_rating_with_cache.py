@@ -82,7 +82,6 @@ if CHEMISTRY_IMAGE_MODE not in {"off", "auto", "all"}:
         f"不支持的 CHEMISTRY_IMAGE_MODE={CHEMISTRY_IMAGE_MODE!r}；"
         "可选值：off, auto, all"
     )
-MAX_SCHEMA_RETRIES = int(os.getenv("CHEMISTRY_SCHEMA_RETRIES", "2"))
 
 QUESTION_INPUT_FIELDS = (
     "parent_id", "question_id", "stem", "options", "analysis",
@@ -568,7 +567,6 @@ async def call_model_with_cache(
     session: aiohttp.ClientSession,
     retries: int,
     timeout_sec: int,
-    repair_feedback: str = "",
 ) -> Tuple[
     Dict[str, Any],
     str,
@@ -604,26 +602,10 @@ async def call_model_with_cache(
             print("警告: 无法获取有效缓存 ID，终止单题请求")
             return {}, "", 0.0, 0, 0, 0, image_status
 
-    for retry in range(retries):
+    # 每道题最多发送一次模型请求；HTTP/API失败也不在题目内部重试。
+    for retry in range(1):
         image_status["http_retry_count"] = retry
         user_content = build_user_content(data, selected_fields)
-        if repair_feedback:
-            repair_part = {
-                "type": "input_text",
-                "text": (
-                    "【上次输出修复要求】\n"
-                    + repair_feedback
-                    + "\n保持实质难度判断不变，只修复缺失字段、非法枚举或JSON格式。"
-                ),
-            }
-            if isinstance(user_content, list):
-                user_content = [*user_content, repair_part]
-            else:
-                user_content = [
-                    {"type": "input_text", "text": user_content},
-                    repair_part,
-                ]
-
         if USE_CACHE:
             request_content = user_content
         else:
@@ -681,43 +663,25 @@ async def call_model_with_cache(
                     )
 
                 if response.status == 429:
-                    retry_after = int(response.headers.get("Retry-After", 5))
-                    print(f"接口限流(429)，等待 {retry_after} 秒后进行第 {retry + 1} 次重试...")
-                    await asyncio.sleep(retry_after)
-                    continue
+                    print("接口限流(429)，按单题不重试原则写入错误文件")
+                    return {}, "", 0.0, 0, 0, 0, image_status
 
                 error_text = await response.text()
                 print(f"API请求失败 (状态码: {response.status}): {error_text[:200]}")
                 if USE_CACHE and "InvalidParameter.PreviousResponseNotFound" in error_text:
-                    print("检测到服务器缓存丢失，正在重建缓存...")
-                    new_response_id = await create_prefix_cache(session, retries, timeout_sec)
-                    if not new_response_id:
-                        return {}, "", 0.0, 0, 0, 0, image_status
-                    response_id = new_response_id
-                    continue
+                    print("检测到服务器缓存丢失；按单题不重试原则写入错误文件")
+                    return {}, "", 0.0, 0, 0, 0, image_status
                 if response.status >= 500:
-                    backoff = (2 ** retry) + random.uniform(0, 1)
-                    print(f"服务器故障({response.status})，{backoff:.2f}秒后重试 (第{retry + 1}次)...")
-                    await asyncio.sleep(backoff)
-                    continue
+                    print(f"服务器故障({response.status})，按单题不重试原则写入错误文件")
+                    return {}, "", 0.0, 0, 0, 0, image_status
                 if 400 <= response.status < 500:
                     return {}, "", 0.0, 0, 0, 0, image_status
         except aiohttp.ClientError as e:
-            backoff = (2 ** retry) + random.uniform(0, 1)
-            if retry == retries - 1:
-                print(f"网络异常最终失败: {e}")
-                return {}, "", 0.0, 0, 0, 0, image_status
-            print(f"网络出现异常: {e}，将进行退避 {backoff:.2f} 秒后重试...")
-            await asyncio.sleep(backoff)
+            print(f"网络异常，按单题不重试原则写入错误文件: {e}")
+            return {}, "", 0.0, 0, 0, 0, image_status
         except Exception as e:
             print(f"运行过程中请求异常: {e}")
-            if retry == retries - 1:
-                return {}, "", 0.0, 0, 0, 0, image_status
-            if USE_CACHE:
-                new_response_id = await create_prefix_cache(session, retries, timeout_sec)
-                if new_response_id:
-                    response_id = new_response_id
-            await asyncio.sleep(1)
+            return {}, "", 0.0, 0, 0, 0, image_status
 
     return {}, "", 0.0, 0, 0, 0, image_status
 
@@ -738,14 +702,13 @@ async def process_single_question(
         total_prompt_tokens = 0
         total_completion_tokens = 0
         total_tokens = 0
-        schema_retry_count = 0
         schema_errors: List[str] = []
-        repair_feedback = ""
         raw_result: Dict[str, Any] = {}
         raw_text = ""
         image_status: Dict[str, Any] = {}
 
-        while True:
+        # 每道题只调用模型一次；schema失败直接写入错误文件，不自动重试。
+        for _single_schema_attempt in range(1):
             try:
                 (
                     candidate,
@@ -760,7 +723,6 @@ async def process_single_question(
                     session,
                     retries,
                     timeout_sec,
-                    repair_feedback=repair_feedback,
                 )
                 raw_result = copy.deepcopy(candidate)
                 total_time += time_use
@@ -779,13 +741,9 @@ async def process_single_question(
                     )
                 except junior_schema.ChemistrySchemaError as exc:
                     schema_errors.append(str(exc))
-                    if schema_retry_count >= MAX_SCHEMA_RETRIES:
-                        raise RuntimeError(
-                            f"schema校验重试耗尽({MAX_SCHEMA_RETRIES}): {exc}"
-                        ) from exc
-                    schema_retry_count += 1
-                    repair_feedback = f"上次输出未通过知识点—任务 schema：{exc}"
-                    continue
+                    raise RuntimeError(
+                        f"schema校验失败（未自动重试）: {exc}"
+                    ) from exc
 
                 output_data = copy.deepcopy(question_input)
                 output_data["rating_profile"] = RATING_PROFILE
@@ -809,7 +767,6 @@ async def process_single_question(
                 output_data["api_completion_tokens"] = total_completion_tokens
                 output_data["api_total_tokens"] = total_tokens
                 output_data.update(image_status)
-                output_data["schema_retry_count"] = schema_retry_count
                 output_data["schema_validation_errors"] = schema_errors
                 output_data["model_input_audit"] = {
                     "structured_text_primary": True,
@@ -845,7 +802,6 @@ async def process_single_question(
                 error_data["api_completion_tokens"] = total_completion_tokens
                 error_data["api_total_tokens"] = total_tokens
                 error_data.update(image_status)
-                error_data["schema_retry_count"] = schema_retry_count
                 error_data["schema_validation_errors"] = schema_errors
                 async with FILE_LOCK:
                     async with aiofiles.open(
@@ -916,7 +872,13 @@ async def main_batch_run() -> None:
     parser.add_argument("-e", "--error", type=str, default="chemistry_difficulty_errors.jsonl", help="输出保存失败结果的 JSONL 路径")
     parser.add_argument("-c", "--concurrency", type=int, default=15, help="最大并发限制，默认 15")
     parser.add_argument("-t", "--timeout", type=int, default=180, help="单次 API 调用超时时间，默认 180 秒")
-    parser.add_argument("-r", "--retries", type=int, default=3, help="失败最大重试次数，默认 3")
+    parser.add_argument(
+        "-r",
+        "--retries",
+        type=int,
+        default=3,
+        help="仅用于前缀缓存创建；单道题模型请求和schema失败均不自动重试",
+    )
     parser.add_argument("-n", "--num", type=int, default=None, help="测试打标的限制数量（留空表示全部打标）")
     parser.add_argument("--seed", type=int, default=42, help="随机抽样/打乱的种子，默认 42")
     parser.add_argument("--no-cache", action="store_true", help="禁用前缀缓存，每题发送完整提示词")

@@ -16,7 +16,7 @@ def rating(level="基础题", topic_ids=None):
             "knowledge": {"topic_ids": topic_ids or ["U02_T03"]},
             "solution_process": {
                 "step_count": "2-3步",
-                "task_types": ["实验操作判断"],
+                "task_types": ["实验操作与装置分析"],
                 "key_steps": ["判断实验操作"],
                 "task_relation": "单项任务",
             },
@@ -95,7 +95,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             schema.validate_rating_contract(value)
 
         value = rating()
-        value["features"]["solution_process"]["task_types"] = ["实验操作判断", "计算"]
+        value["features"]["solution_process"]["task_types"] = ["实验操作与装置分析", "定量计算"]
         value["features"]["solution_process"]["task_relation"] = "前后依赖"
         value["features"]["calculation"] = {
             "has_calculation": True,
@@ -117,6 +117,48 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             self.assertFalse(candidate["writeback_applied"])
         self.assertEqual(result["difficulty_level"], "送分题")
         self.assertEqual(result["postprocess"]["final_level"], "送分题")
+
+    def test_synonyms_are_normalized_without_changing_level(self):
+        value = rating("中等题", ["U02_T03", "U10_T01"])
+        value["features"]["solution_process"]["task_types"] = [
+            "实验操作判断",
+            "实验方案评价",
+            "原因规范表达",
+        ]
+        value["features"]["solution_process"]["task_relation"] = "多项独立"
+        value["features"]["experiment_tasks"] = ["实验方案评价"]
+        value["features"]["expression_requirements"] = ["试剂名称规范书写"]
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(
+            result["features"]["solution_process"]["task_types"],
+            ["实验操作与装置分析", "实验探究与方案评价", "解释与规范表达"],
+        )
+        self.assertEqual(result["features"]["expression_requirements"], ["试剂名称自主书写"])
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(result["postprocess"]["final_level"], "中等题")
+        self.assertGreater(len(result["postprocess_actions"]), 0)
+        self.assertTrue(all(not action["difficulty_level_changed"] for action in result["postprocess_actions"]))
+
+    def test_calculation_redundancy_is_normalized_auditably(self):
+        value = rating("基础题")
+        value["features"]["solution_process"]["task_types"] = ["化合价计算"]
+        value["features"]["calculation"] = {
+            "has_calculation": True,
+            "calculation_steps": "1步",
+            "types": ["化合价计算"],
+            "special_methods": ["无"],
+        }
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["features"]["solution_process"]["task_types"], ["定量计算"])
+        self.assertEqual(result["features"]["calculation"]["types"], ["化合价计算"])
+        self.assertEqual(result["difficulty_level"], "基础题")
+
+    def test_unknown_topic_is_removed_only_when_valid_topics_remain(self):
+        value = rating("中等题", ["U07_T01", "U07_T05", "U10_T01"])
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["features"]["knowledge"]["topic_ids"], ["U07_T01", "U10_T01"])
+        actions = result["postprocess_actions"]
+        self.assertTrue(any(action["path"] == "features.knowledge.topic_ids" for action in actions))
 
     def test_all_prompt_json_examples_follow_runtime_contract(self):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
@@ -181,6 +223,15 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             "CORE" + "12",
         ):
             self.assertNotIn(forbidden, source)
+        runtime_source = paths[0].read_text(encoding="utf-8")
+        self.assertNotIn("MAX_SCHEMA_RETRIES", runtime_source)
+        self.assertNotIn("repair_feedback", runtime_source)
+        self.assertIn("schema校验失败（未自动重试）", runtime_source)
+        call_model_source = runtime_source.split(
+            "async def call_model_with_cache", 1
+        )[1].split("async def process_single_question", 1)[0]
+        self.assertIn("for retry in range(1)", call_model_source)
+        self.assertNotIn("await asyncio.sleep", call_model_source)
 
 
 if __name__ == "__main__":

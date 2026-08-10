@@ -32,7 +32,7 @@ def rated_item(question_id: str, level: str) -> dict:
                 },
                 "solution_process": {
                     "step_count": "1步",
-                    "task_types": ["现象判断与解释"],
+                    "task_types": ["解释与规范表达"],
                     "key_steps": ["判断燃烧现象"],
                     "task_relation": "单项任务",
                 },
