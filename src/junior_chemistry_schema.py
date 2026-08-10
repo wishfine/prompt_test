@@ -391,26 +391,14 @@ def _build_audit_candidates(result: dict[str, Any]) -> list[dict[str, Any]]:
     level = result["difficulty_level"]
     candidates: list[dict[str, Any]] = []
 
-    if level == "送分题" and knowledge["unit_count"] >= 2:
-        candidates.append(_candidate(
-            "K1_easy_cross_unit", "基础题",
-            "送分题涉及跨单元知识，需复核是否低估知识切换负担。",
-            {"unit_count": knowledge["unit_count"], "topic_ids": knowledge["topic_ids"]},
-        ))
-    if level == "送分题" and knowledge["knowledge_point_count"] >= 2:
-        candidates.append(_candidate(
-            "K2_easy_multiple_topics", "基础题",
-            "送分题涉及多个去重知识点，需复核是否仍属于直接识记。",
-            {
-                "knowledge_point_count": knowledge["knowledge_point_count"],
-                "topic_ids": knowledge["topic_ids"],
-            },
-        ))
     nontrivial = {
         "experiment": features["experiment_analysis"] not in {"无", "实验现象判断"}
         or features["experiment_design"] != "无",
         "hidden_condition": features["hidden_condition_count"] != "0个",
-        "interference": features["interference_type"] != "无",
+        "interference": features["interference_type"] in {
+            "规范表述易错", "干扰数据", "特例或边界",
+            "体系质量关系易错", "多种剩余情况或竞争解释",
+        },
         "expression": features["expression_type"] != "无",
     }
     if level == "送分题" and any(nontrivial.values()):
@@ -566,42 +554,6 @@ def postprocess_chemistry_difficulty(value: dict[str, Any], data: dict[str, Any]
             "教师规则：涉及实验误差分析时最低为中等题。",
             {"error_analysis": result["features"]["error_analysis"]},
         )
-    if question_statistics["stem_char_count"] > 100:
-        _writeback_floor(
-            result, "中等题", "T2_long_stem_floor",
-            "题干超过100字，已不符合送分题或基础题的题干长度边界。",
-            {"stem_char_count": question_statistics["stem_char_count"]},
-        )
-    elif question_statistics["stem_char_count"] > 60:
-        _writeback_floor(
-            result, "基础题", "T3_nonshort_stem_floor",
-            "题干超过60字，不符合送分题的题干长度边界。",
-            {"stem_char_count": question_statistics["stem_char_count"]},
-        )
-    if question_statistics["question_item_count"] >= 5:
-        _writeback_floor(
-            result, "基础题", "T4_many_items_floor",
-            "选项或小问达到5项，低档题至少升至基础题。",
-            {
-                "option_count": question_statistics["option_count"],
-                "subquestion_count": question_statistics["subquestion_count"],
-            },
-        )
-    if (
-        result["features"]["visual_item_count"] in {"2-3幅", "4幅及以上"}
-        or result["features"]["visual_complexity"] in {
-            "多个同类型图像", "多个不同类型图像", "复杂高难图像",
-        }
-    ):
-        _writeback_floor(
-            result, "基础题", "T5_multiple_visuals_floor",
-            "需要识别多个图像时不属于单一信息直接再现的送分题。",
-            {
-                "visual_item_count": result["features"]["visual_item_count"],
-                "visual_complexity": result["features"]["visual_complexity"],
-            },
-        )
-
     final_level = result["difficulty_level"]
     result["feature_schema_version"] = FEATURE_SCHEMA_VERSION
     result["postprocess"] = {

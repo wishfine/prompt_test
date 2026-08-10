@@ -82,7 +82,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         )
         self.assertEqual(result["difficulty_level"], "送分题")
         self.assertFalse(result["postprocess"]["writeback_applied"])
-        self.assertEqual(result["postprocess"]["candidates"][0]["candidate_level"], "基础题")
+        self.assertEqual(result["postprocess"]["candidates"], [])
 
     def test_error_analysis_is_written_back_to_medium_floor(self):
         value = rating("送分题")
@@ -92,7 +92,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertTrue(result["postprocess"]["writeback_applied"])
         self.assertEqual(result["postprocess_actions"][0]["rule"], "T1_error_analysis_floor")
 
-    def test_question_statistics_and_objective_floors(self):
+    def test_question_statistics_do_not_create_difficulty_floors(self):
         long_stem = "化" * 101
         result = schema.postprocess_chemistry_difficulty(
             rating("送分题"), {"stem": long_stem, "options": "A.甲 B.乙 C.丙 D.丁"}
@@ -101,19 +101,20 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertEqual(stats["stem_char_count"], 101)
         self.assertEqual(stats["stem_length_band"], "101-300字")
         self.assertEqual(stats["option_count"], 4)
-        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(result["difficulty_level"], "送分题")
+        self.assertFalse(result["postprocess"]["writeback_applied"])
 
         result = schema.postprocess_chemistry_difficulty(
             rating("送分题"), {"sub_questions": [{"stem": str(i)} for i in range(5)]}
         )
-        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(result["difficulty_level"], "送分题")
 
         value = rating("送分题")
         value["features"]["visual_content"] = "仪器图"
         value["features"]["visual_item_count"] = "4幅及以上"
         value["features"]["visual_complexity"] = "多个同类型图像"
         result = schema.postprocess_chemistry_difficulty(value, {})
-        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(result["difficulty_level"], "送分题")
 
     def test_related_enum_fields_are_normalized_without_retry(self):
         value = rating()
@@ -194,6 +195,8 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             self.assertIn(value, prompt)
         self.assertIn("task_count只描述工作量，不能单独决定档位", prompt)
         self.assertIn("不能因`跨单元不同知识点`或`多单元综合`自动升档", prompt)
+        self.assertIn("普通选择题中的错误选项不算干扰", prompt)
+        self.assertIn("题干字数、选项数、小问数、图片数只用于审计", prompt)
 
     def test_prompt_json_example_follows_runtime_contract(self):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
