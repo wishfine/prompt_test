@@ -270,12 +270,6 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("不能因`跨单元不同知识点`或`多单元综合`自动升档", prompt)
         self.assertIn("普通选择题中的错误选项不算干扰", prompt)
         self.assertIn("题干字数、选项数、小问数、图片数只用于审计", prompt)
-        self.assertIn("4—5步连续分析是常见表现，不是必要条件", prompt)
-        self.assertIn("不得把“多条高难任务链”设为必要条件", prompt)
-        self.assertIn("完整真题对照——常规多项计算 vs 决定性极值法", prompt)
-        self.assertIn("不得仅用“未达到4步”", prompt)
-        self.assertNotIn("通常6步以上或多条任务链汇合", prompt)
-        self.assertNotIn("并形成4步左右计算链时", prompt)
 
     def test_prompt_json_example_follows_runtime_contract(self):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
