@@ -152,10 +152,10 @@ CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = os.getenv(
 # 已知低稳定性规则仅保留候选审计；即使教师分布校准总写回开关开启，
 # 也不得自动改档。实验基础操作规则在V5-500中净收益为0；四项事实
 # 下限已实测误伤同一规则选择题；横向广度新规则尚未经过独立回放，
-# 均不能直接写回。
+# 均不能直接写回。深定量压轴链已在五个500题版本上回放均为
+# 净正，不再属于审计专用规则。
 TEACHER_GUARD_AUDIT_ONLY_RULES = frozenset(
     {
-        "teacher_hard_to_final_deep_quantitative_chain",
         "teacher_medium_to_hard_shared_new_information",
         "teacher_easy_to_basic_experiment_application",
         "teacher_easy_to_basic_reported_four_fact_floor",
@@ -3658,6 +3658,34 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             )
         elif (
             raw_level == "中等题"
+            and observable_contract
+            and schema_version
+            in {
+                "chemistry_observable_v6",
+                "chemistry_observable_v5",
+                "chemistry_observable_v4",
+            }
+            and "差量"
+            in model_features.get("calculation_operations", [])
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "拔高题",
+                "结构边界窄校准：差量是决定未知量的核心建模关系",
+                rule="teacher_medium_to_hard_explicit_difference_method",
+                evidence=[
+                    "计算操作="
+                    + "、".join(
+                        model_features["calculation_operations"]
+                    ),
+                    "最长链="
+                    + " → ".join(
+                        model_features["longest_solution_chain"]
+                    ),
+                ],
+            )
+        elif (
+            raw_level == "中等题"
             and coordinated_multigraph_reaction_signal(features, data)
         ):
             set_level_with_reason(
@@ -3879,11 +3907,20 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK
         and final_boundary_guard_action
     )
+    legacy_v3_deep_guard_audit_only = bool(
+        teacher_guard_action
+        and schema_version == "chemistry_observable_v3"
+        and teacher_guard_action.get("rule")
+        == "teacher_hard_to_final_deep_quantitative_chain"
+    )
     teacher_guard_writeback_blocked_rule = (
         teacher_guard_action.get("rule")
         if teacher_guard_action
-        and teacher_guard_action.get("rule")
-        in TEACHER_GUARD_AUDIT_ONLY_RULES
+        and (
+            teacher_guard_action.get("rule")
+            in TEACHER_GUARD_AUDIT_ONLY_RULES
+            or legacy_v3_deep_guard_audit_only
+        )
         else ""
     )
     teacher_guard_writeback_applied = bool(
@@ -3939,7 +3976,14 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result[
         "teacher_distribution_guard_writeback_blocked_reason"
     ] = (
-        "V4回放净负收益或独立回放不足，规则仅保留候选审计："
+        (
+            "历史V3反应字段与当前拓扑口径不同，"
+            "深定量规则仅保留候选审计："
+            if legacy_v3_deep_guard_audit_only
+            else
+            "V4回放净负收益或独立回放不足，"
+            "规则仅保留候选审计："
+        )
         + teacher_guard_writeback_blocked_rule
         if teacher_guard_writeback_blocked_rule
         else ""
@@ -3974,7 +4018,14 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         )
     if teacher_guard_writeback_blocked_rule:
         rating_result["feature_audit_flags"].append(
-            "教师分布候选规则在V4回放中净负收益，已阻止自动写回："
+            (
+                "历史V3深定量规则仅保留审计，"
+                "已阻止自动写回："
+                if legacy_v3_deep_guard_audit_only
+                else
+                "教师分布候选规则回放净负或证据不足，"
+                "已阻止自动写回："
+            )
             + teacher_guard_writeback_blocked_rule
         )
     elif teacher_guard_action and not teacher_guard_writeback_applied:

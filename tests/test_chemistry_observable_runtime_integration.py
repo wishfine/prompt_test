@@ -623,7 +623,7 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "基础题")
         self.assertEqual(result["postprocess_actions"], [])
 
-    def test_deep_quantitative_reaction_chain_is_audit_only(self) -> None:
+    def test_v3_deep_quantitative_reaction_chain_remains_audit_only(self) -> None:
         item = rating("拔高题")
         item["features"] = observable_v3_features()
         item["features"].update(
@@ -659,9 +659,89 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
             result["teacher_distribution_guard_writeback_applied"]
         )
         self.assertIn(
-            "V4回放净负收益",
+            "历史V3",
             result["teacher_distribution_guard_writeback_blocked_reason"],
         )
+        self.assertTrue(
+            any(
+                "历史V3" in flag
+                for flag in result["feature_audit_flags"]
+            )
+        )
+
+    def test_explicit_difference_method_promotes_medium_to_hard(self) -> None:
+        item = rating("中等题")
+        item["features"] = observable_v4_features()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "建立反应前后质量差",
+                    "由质量差求反应量",
+                    "据方程式求未知量",
+                    "核验最终结果",
+                ],
+                "reaction_structure": "单一反应",
+                "calculation_operations": ["单一方程式", "差量"],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "根据反应前后质量差求未知物质质量。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "teacher_medium_to_hard_explicit_difference_method",
+        )
+
+    def test_v3_difference_method_remains_unchanged(self) -> None:
+        item = rating("中等题")
+        item["features"] = observable_v3_features()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "建立反应前后质量差",
+                    "由质量差求反应量",
+                    "据方程式求未知量",
+                    "核验最终结果",
+                ],
+                "reaction_structure": "单一反应",
+                "calculation_operations": ["单一方程式", "差量"],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "历史V3输出仅供回放，不启用新写回。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(result["postprocess_actions"], [])
+
+    def test_single_equation_without_difference_stays_medium(self) -> None:
+        item = rating("中等题")
+        item["features"] = observable_v3_features()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "写出熟悉反应方程式",
+                    "代入已知质量",
+                    "求目标物质质量",
+                ],
+                "reaction_structure": "单一反应",
+                "calculation_operations": ["单一方程式"],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "根据一个熟悉方程式完成常规计算。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(result["postprocess_actions"], [])
 
     def test_shared_new_information_promotion_is_audit_only(self) -> None:
         item = rating("中等题")

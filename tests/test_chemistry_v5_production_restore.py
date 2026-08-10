@@ -149,6 +149,30 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             prompt,
         )
 
+    def test_prompt_does_not_double_count_a_supplied_equation(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "核验题干已给出的熟悉方程式",
+            prompt,
+        )
+        self.assertIn(
+            "不得重复计作自主书写方程式或新增一个任务",
+            prompt,
+        )
+
+    def test_prompt_treats_difference_method_as_a_hard_boundary(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "差量是决定性建模方法时，应进入拔高题比较",
+            prompt,
+        )
+        self.assertIn(
+            "不得仅因差量关系属于熟悉方法而停在中等题",
+            prompt,
+        )
+
     def test_prompt_example_10_contains_five_real_decisions(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
@@ -373,8 +397,12 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         )
 
     def test_narrow_final_rule_requires_four_explicit_subquestions(self) -> None:
+        item = hard_rating()
+        # 隔离“深定量压轴链”这条独立路径，本测试只验证
+        # 高密度多问规则自身仍要求四个显式小问。
+        item["features"]["solution_topology"] = "单线性常规链"
         result = self.runtime.postprocess_chemistry_difficulty(
-            hard_rating(),
+            item,
             {
                 "stem": "共享装置中的多阶段反应与定量计算。",
                 "sub_questions": [
@@ -407,6 +435,25 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
 
         self.assertEqual(result["difficulty_level"], "拔高题")
         self.assertEqual(result["postprocess_actions"], [])
+
+    def test_v5_deep_quantitative_chain_writes_back_to_final(self) -> None:
+        result = self.runtime.postprocess_chemistry_difficulty(
+            hard_rating(),
+            {
+                "stem": "多阶段反应网络中使用多反应定量关系。",
+                "sub_questions": [
+                    {"stem": "任务1"},
+                    {"stem": "任务2"},
+                    {"stem": "任务3"},
+                ],
+            },
+        )
+
+        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "teacher_hard_to_final_deep_quantitative_chain",
+        )
 
     def test_narrow_final_rule_accepts_safe_historical_enum_aliases(self) -> None:
         item = hard_rating()
