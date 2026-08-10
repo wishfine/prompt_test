@@ -2,13 +2,13 @@
 """初中化学难度批量评级。
 
 运行与审计方式对齐当前物理正式流程：OpenAI-compatible Responses API、
-可选前缀缓存、并发、重试、断点续跑、JSONL 输入输出、严格 Core-12
-schema、原始/最终结果分离，以及可审计的窄后处理。常规校准每次最多
+可选前缀缓存、并发、重试、断点续跑、JSONL 输入输出、严格可观测
+特征schema、原始/最终结果分离，以及可审计的窄后处理。常规校准每次最多
 调整一个相邻档；只有基于题干客观结构的严重低估安全底线，才允许将
 明显的连续反应核验从送分题直接托底到中等题。
 
-化学使用历史效果更稳定的12个核心特征，不复用物理特征，也不把
-Evidence-15的三个辅助观察量加入生产输出协议。
+化学正式输出使用12个可从题目核验的任务与操作特征；历史Core-12
+只保留兼容读取和确定性内部投影，不再要求模型直接填写抽象难度摘要。
 """
 
 import os
@@ -36,6 +36,19 @@ from typing import Dict, Any, Optional, List, Tuple, Sequence
 from tqdm.asyncio import tqdm
 from asyncio import Lock, Semaphore
 from dotenv import load_dotenv
+
+try:
+    from chemistry_observable_features import (
+        OBSERVABLE_FEATURE_FIELDS,
+        derive_observable_metrics,
+        validate_observable_features,
+    )
+except ModuleNotFoundError:
+    from src.chemistry_observable_features import (
+        OBSERVABLE_FEATURE_FIELDS,
+        derive_observable_metrics,
+        validate_observable_features,
+    )
 
 # -------------------------- 0. API 基础配置 --------------------------
 load_dotenv()
@@ -747,12 +760,25 @@ class ChemistrySchemaError(ValueError):
     """模型输出不满足 Core-12 生产契约。"""
 
 
-def validate_feature_contract(features: Any) -> Dict[str, str]:
-    """严格校验 Core-12 字段，禁止缺字段后静默填默认值。
+def is_observable_feature_contract(features: Any) -> bool:
+    return bool(
+        isinstance(features, dict)
+        and set(features) == set(OBSERVABLE_FEATURE_FIELDS)
+    )
 
-    只接受合法枚举和明确维护的历史别名；不使用模糊关键词把任意文本
-    猜成某个枚举，因为这会让错误 feature 静默进入后处理。
+
+def validate_feature_contract(features: Any) -> Dict[str, Any]:
+    """校验正式可观测 V2 或历史 Core-12 字段。
+
+    新请求只由正式 Prompt 产生可观测 V2；保留 Core-12 读取能力是为了
+    历史 JSONL 回放和回归测试，不会把旧字段重新暴露给模型。
     """
+    if is_observable_feature_contract(features):
+        try:
+            return validate_observable_features(features)
+        except ValueError as exc:
+            raise ChemistrySchemaError(str(exc)) from exc
+
     if not isinstance(features, dict):
         raise ChemistrySchemaError("features必须是JSON对象")
     keyed = normalize_feature_keys(features)
@@ -804,6 +830,192 @@ def validate_feature_contract(features: Any) -> Dict[str, str]:
             "真实任务链依赖不能与0层/1层推理同时出现"
         )
     return validated
+
+
+def project_observable_to_core12(
+    observable_features: Dict[str, Any],
+) -> Dict[str, str]:
+    """把可观测事实确定性投影为旧规则所需的内部兼容信号。
+
+    该投影不回写到 ``features``，也不要求模型自报抽象结论。它只用于
+    复用已验证过的历史后处理，并在输出中以
+    ``derived_core12_projection`` 单独记录，便于逐题审计。
+    """
+    features = validate_observable_features(observable_features)
+    metrics = derive_observable_metrics(features)
+    chain_steps = metrics["longest_chain_steps"]
+    rule_count = metrics["rule_family_count"]
+    unit_count = metrics["curriculum_unit_count"]
+    condition_ops = set(features["condition_operations"])
+    representation_ops = set(features["representation_operations"])
+    evidence_ops = set(features["evidence_operations"])
+    calculation_ops = set(features["calculation_operations"])
+
+    has_nontrivial_operation = bool(
+        condition_ops
+        or representation_ops
+        or evidence_ops
+        or calculation_ops
+        or features["reaction_structure"] != "无反应任务"
+        or features["experiment_operation"] != "无"
+        or features["graph_table_operation"] != "无"
+        or features["new_information_operation"] != "无新信息"
+    )
+    if chain_steps == 1 and not has_nontrivial_operation:
+        reasoning_depth = "0层"
+    elif chain_steps <= 1:
+        reasoning_depth = "1层"
+    elif chain_steps <= 3:
+        reasoning_depth = "2-3层"
+    elif chain_steps <= 5:
+        reasoning_depth = "4-5层"
+    else:
+        reasoning_depth = "6层及以上"
+
+    if "分类讨论" in condition_ops or "范围或边界" in condition_ops:
+        reasoning_direction = "分类讨论或综合推导"
+    elif evidence_ops & {
+        "排除一个候选",
+        "排除多个候选解释",
+        "处理冲突证据",
+        "补充实验获得唯一结论",
+    }:
+        reasoning_direction = "逆向推导"
+    elif reasoning_depth == "0层":
+        reasoning_direction = "直接识记"
+    else:
+        reasoning_direction = "正向推导"
+
+    if unit_count >= 3:
+        knowledge_relation = "多模块深度融合"
+    elif unit_count == 2:
+        knowledge_relation = "跨模块融合"
+    elif rule_count >= 3:
+        knowledge_relation = "同模块深度关联"
+    elif rule_count == 2:
+        knowledge_relation = "同模块简单关联"
+    else:
+        knowledge_relation = "单一知识点"
+
+    representation_count = len(representation_ops)
+    representation_domains: set[str] = set()
+    for operation in representation_ops:
+        for domain in ("宏观", "微观", "符号", "定量", "图表", "文字"):
+            if domain in operation:
+                representation_domains.add(domain)
+    if len(representation_domains) >= 4:
+        representation_conversion = "宏观-微观-符号-定量多重转换"
+    elif representation_count >= 2:
+        representation_conversion = "两类表征连续转换"
+    elif representation_count == 1:
+        representation_conversion = "一次表征转换"
+    else:
+        representation_conversion = "无"
+
+    reaction_relation = {
+        "无反应任务": "无反应关系",
+        "单一反应": "单一直接反应",
+        "多个并列反应": "2-3个并列或简单连续反应",
+        "产物进入后一反应": "多反应连续转化",
+        "先后竞争或过量不足": "先后、竞争或过量不足",
+        "分情况反应模型": "需要分情况判断的反应模型",
+    }[features["reaction_structure"]]
+
+    if len(condition_ops) >= 3:
+        constraint_complexity = "多层嵌套约束"
+    elif len(condition_ops) >= 2:
+        constraint_complexity = "多个相互关联约束"
+    elif condition_ops:
+        constraint_complexity = "单一约束"
+    else:
+        constraint_complexity = "无约束"
+
+    if evidence_ops & {"处理冲突证据", "排除多个候选解释"}:
+        evidence_relation = "证据冲突、筛选或多层排除"
+    elif evidence_ops & {
+        "排除一个候选",
+        "补充实验获得唯一结论",
+    }:
+        evidence_relation = "需要排除竞争解释"
+    elif "多证据共同成立" in evidence_ops:
+        evidence_relation = "多条清晰证据联合"
+    elif "单证据直接匹配" in evidence_ops:
+        evidence_relation = "单一证据直接对应"
+    else:
+        evidence_relation = "无证据任务"
+
+    experiment_requirement = {
+        "无": "无",
+        "基础操作或读数": "基础操作或读数",
+        "变量控制": "控制变量、现象解释或数据归纳",
+        "现象解释": "控制变量、现象解释或数据归纳",
+        "数据归纳": "控制变量、现象解释或数据归纳",
+        "方案设计": "方案设计、评价或补充实验",
+        "方案评价或补充实验": "方案设计、评价或补充实验",
+        "多阶段定量探究": "多阶段探究与定量误差",
+    }[features["experiment_operation"]]
+    graph_table_requirement = {
+        "无": "无",
+        "直接读数": "直接读数",
+        "多组比较": "多组比较归纳",
+        "趋势判断": "多组比较归纳",
+        "拐点平台或分段": "拐点、平台或分段反推",
+        "多图表联合": "多图表耦合建模",
+    }[features["graph_table_operation"]]
+
+    if calculation_ops & {"联立", "范围或分类计算"}:
+        calculation_model = "多重守恒、差量、联立或分类"
+    elif (
+        "差量" in calculation_ops
+        and len(calculation_ops) >= 2
+    ):
+        calculation_model = "多重守恒、差量、联立或分类"
+    elif calculation_ops & {"单一守恒", "多反应定量关系", "差量"}:
+        calculation_model = "单一守恒或多反应计算"
+    elif "单一方程式" in calculation_ops:
+        calculation_model = "单一方程式或关系式"
+    elif "直接比例" in calculation_ops:
+        calculation_model = "口算或直接比例"
+    else:
+        calculation_model = "无"
+
+    unfamiliar_information_transfer = {
+        "无新信息": "课内直接原型",
+        "直接查值": "给定新信息直接应用",
+        "给定关系直接代入": "给定新信息直接应用",
+        "根据新信息建立一个关系": "迁移后建立关系",
+        "新关系被多个任务共同使用": "迁移后建立关系",
+    }[features["new_information_operation"]]
+
+    effective_task_count = metrics["effective_task_count"]
+    if effective_task_count <= 1:
+        subquestion_dependency = "无多问"
+    elif (
+        features["new_information_operation"]
+        == "新关系被多个任务共同使用"
+    ):
+        subquestion_dependency = "多问共享模型但无答案依赖"
+    elif chain_steps >= 3 and effective_task_count >= 2:
+        subquestion_dependency = "多问存在结果或任务链依赖"
+    else:
+        subquestion_dependency = "多问相互独立"
+
+    return {
+        "reasoning_depth": reasoning_depth,
+        "reasoning_direction": reasoning_direction,
+        "knowledge_relation": knowledge_relation,
+        "representation_conversion": representation_conversion,
+        "reaction_relation": reaction_relation,
+        "constraint_complexity": constraint_complexity,
+        "evidence_relation": evidence_relation,
+        "experiment_requirement": experiment_requirement,
+        "graph_table_requirement": graph_table_requirement,
+        "calculation_model": calculation_model,
+        "unfamiliar_information_transfer": (
+            unfamiliar_information_transfer
+        ),
+        "subquestion_dependency": subquestion_dependency,
+    }
 
 
 def validate_rating_contract(rating_result: Any) -> Dict[str, Any]:
@@ -2488,9 +2700,11 @@ def core12_is_direct_retrieval(features: Dict[str, Any]) -> bool:
 def add_feature_audit_flags(
     rating_result: Dict[str, Any],
     data: Dict[str, Any],
+    *,
+    rule_features: Optional[Dict[str, Any]] = None,
 ) -> None:
     """记录 Core-12 的结构异常，只审计、不直接改档。"""
-    features = rating_result.get("features") or {}
+    features = rule_features or rating_result.get("features") or {}
     level = rating_result.get("difficulty_level", "")
     flags: List[str] = []
     text = visible_text(data, include_analysis=True)
@@ -2567,9 +2781,27 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["teacher_distribution_guard_writeback_enabled"] = (
         CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
     )
-    rating_result["feature_schema_version"] = "chemistry_core12_strict_v1"
+    model_features = rating_result["features"]
+    observable_contract = is_observable_feature_contract(model_features)
+    if observable_contract:
+        observable_metrics = derive_observable_metrics(model_features)
+        features = project_observable_to_core12(model_features)
+        rating_result["feature_schema_version"] = (
+            "chemistry_observable_v2"
+        )
+        rating_result["observable_metrics"] = observable_metrics
+        rating_result["derived_core12_projection"] = copy.deepcopy(
+            features
+        )
+        rating_result["postprocess_profile"] = (
+            "chemistry_observable_v2_teacher_distribution_v1"
+        )
+    else:
+        features = model_features
+        rating_result["feature_schema_version"] = (
+            "chemistry_core12_strict_v1"
+        )
     rating_result["schema_validation_passed"] = True
-    features = rating_result["features"]
     medium_evidence = core12_medium_evidence(features)
     basic_evidence = core12_basic_application_evidence(features)
     complete_model_evidence = core12_complete_model_evidence(features)
@@ -3069,7 +3301,11 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         "decisive_transform": len(decisive_evidence),
         "final_coupling": len(final_evidence),
     }
-    add_feature_audit_flags(rating_result, data)
+    add_feature_audit_flags(
+        rating_result,
+        data,
+        rule_features=features,
+    )
     if candidate_actions and not CHEMISTRY_ENABLE_LEVEL_WRITEBACK:
         rating_result["feature_audit_flags"].append(
             "存在通用候选校准，但自动写回默认关闭；"
@@ -3088,6 +3324,8 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
 
 
 def infer_level_from_features(features: Dict[str, Any], data: Dict[str, Any]) -> str:
+    if is_observable_feature_contract(features):
+        features = project_observable_to_core12(features)
     depth = CORE12_DEPTH_ORDER[features["reasoning_depth"]]
     final = len(core12_final_evidence(features))
     decisive = len(core12_decisive_evidence(features))
@@ -3547,7 +3785,7 @@ async def process_single_question(
                             f"schema校验重试耗尽({MAX_SCHEMA_RETRIES}): {exc}"
                         ) from exc
                     schema_retry_count += 1
-                    repair_feedback = f"上次输出未通过Core-12 schema：{exc}"
+                    repair_feedback = f"上次输出未通过化学特征schema：{exc}"
                     continue
 
                 output_data = make_output_base(data)

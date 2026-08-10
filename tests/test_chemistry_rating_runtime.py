@@ -1821,135 +1821,24 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "chemistry_core12_teacher_distribution_v4_targeted_production",
         )
 
-    def test_prompt_example_is_valid_and_uses_core12_enums(self) -> None:
+    def test_prompt_example_uses_observable_v2_contract(self) -> None:
         namespace = runpy.run_path(str(PROMPT_PATH))
         prefix = namespace["DIFFICULTY_RATING_PROMPT_PREFIX"]
         suffix = namespace["DIFFICULTY_RATING_PROMPT_SUFFIX"]
         self.assertTrue(prefix)
         self.assertTrue(suffix)
-        blocks = re.findall(
-            r"```json\s*(\{.*?\})\s*```",
-            prefix,
-            flags=re.DOTALL,
-        )
-        self.assertEqual(len(blocks), 1)
-        example = json.loads(blocks[0])
-        self.assertEqual(
-            set(example["features"]),
-            set(chemistry.FEATURE_DEFAULTS),
-        )
-        for field, value in example["features"].items():
-            self.assertIn(
-                value,
-                chemistry.ALLOWED_FEATURE_VALUES[field],
-            )
-        for placeholder in (
-            "五个选项之一",
-            "四个选项之一",
-            "三个选项之一",
-        ):
-            self.assertNotIn(placeholder, prefix)
-        self.assertIn("冻结Core-12特征", suffix)
-        self.assertNotIn("冻结18维特征", suffix)
-        self.assertGreaterEqual(prefix.count("教师等级："), 17)
-        self.assertIn(
-            "不能看到题目要求“判断”就自动解释为一步应用",
-            prefix,
-        )
-        self.assertIn("用纵向深度 D 确定基准档", prefix)
-        self.assertIn(
-            "独立任务不增加纵向深度D，但会增加整题任务广度B",
-            prefix,
-        )
-        self.assertIn(
-            "中等题进入拔高比较的结构广度通道",
-            prefix,
-        )
-        self.assertIn(
-            "至少4个非重复有效任务",
-            prefix,
-        )
-        self.assertIn(
-            "至少2项属于实质应用、解释、实验分析、图表比较或计算",
-            prefix,
-        )
-        self.assertIn(
-            "严重低估安全底线",
-            prefix,
-        )
-        self.assertIn(
-            "多选项连续转化链",
-            prefix,
-        )
-        self.assertIn(
-            "短题中两个彼此独立的常规定量任务",
-            prefix,
-        )
-        self.assertIn(
-            "题干并列提出四个以上研究问题",
-            prefix,
-        )
-        self.assertNotIn(
-            "多个独立选项分别一步判断、同一规则重复填空、"
-            "只共享生活背景或图片、装置中直接填写名称和现象"
-            "但没有连续依赖，均不能据此升中等。",
-            prefix,
-        )
-        self.assertIn(
-            "先由 D 确定基准档，再由 B/W 做至多一个相邻档校准",
-            prefix,
-        )
-        self.assertIn(
-            "独立小问不能机械累加到 `reasoning_depth`",
-            prefix,
-        )
-        self.assertIn(
-            "`core_basis`必须说明D、B、W和至少一条真实任务边",
-            prefix,
-        )
-        self.assertNotIn("B/W 只通过三类受控结构校准", prefix)
-        self.assertNotIn("受控广度通道必须同时满足", prefix)
-        self.assertNotIn("高密度共享模型通道必须同时满足", prefix)
-        self.assertNotIn("4—5层复杂主模型通道必须同时满足", prefix)
-        self.assertNotIn(
-            "多个选项分别涉及不同教材结论，至少进入基础题",
-            prefix,
-        )
-        self.assertNotIn("异质事实核验只建立基础题下限", prefix)
-        self.assertNotIn("并列核验类型=", prefix)
-        self.assertNotIn("D/B/W 相邻校准矩阵", prefix)
-        self.assertNotIn("入口E=", prefix)
-        self.assertNotIn("广度校准=开启/关闭", prefix)
-        self.assertNotIn("有限横向广度", prefix)
-        self.assertIn(
-            "`reasoning_depth=6层及以上`不是压轴题的必要条件",
-            prefix,
-        )
-        self.assertIn(
-            "4—5层拔高/压轴对照",
-            prefix,
-        )
-        example_12 = prefix.split(
-            "### 示例12：压轴题——陌生装置、温控和纯度测定",
-            1,
-        )[1].split("### 补充示例：", 1)[0]
-        self.assertIn("`reasoning_depth=4-5层`", example_12)
-        self.assertNotIn(
-            "`unfamiliar_information_transfer=完全陌生模型现场建立`",
-            example_12,
-        )
-        supplementary_final = prefix.split(
-            "### 补充示例：压轴题——部分变质中的守恒与差量连续计算",
-            1,
-        )[1].split("### 示例13：", 1)[0]
-        self.assertIn(
-            "`reasoning_depth=4-5层`",
-            supplementary_final,
-        )
-        self.assertNotIn(
-            "`constraint_complexity=多层嵌套约束`",
-            supplementary_final,
-        )
+        for field in chemistry.OBSERVABLE_FEATURE_FIELDS:
+            self.assertIn(f'"{field}"', prefix)
+        for legacy_field in chemistry.FEATURE_DEFAULTS:
+            self.assertNotIn(f'"{legacy_field}"', prefix)
+        self.assertIn("严格填写12项可观测特征", suffix)
+        self.assertIn("纯算术、机械配平、重复代入", prefix)
+        self.assertIn("四个独立选项不等于四步", prefix)
+        self.assertIn("程序会从特征中派生以下指标", prefix)
+        self.assertIn("至少4个非重复有效任务", prefix)
+        self.assertIn("量筒俯仰视误差链", prefix)
+        self.assertIn("部分变质中的守恒与差量", prefix)
+        self.assertIn("不要求虚构6步以上", prefix)
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ SPEC.loader.exec_module(chemistry)
 
 
 class ChemistryStableContractTests(unittest.TestCase):
-    def test_production_contract_only_requires_core12(self) -> None:
+    def test_historical_core12_contract_remains_readable(self) -> None:
         rating = {
             "features": copy.deepcopy(chemistry.FEATURE_DEFAULTS),
             "coarse_difficulty": "送分/基础区间（1-2档）",
@@ -37,17 +37,16 @@ class ChemistryStableContractTests(unittest.TestCase):
         self.assertNotIn("boundary_features", validated)
         self.assertNotIn("curriculum_span", validated)
 
-    def test_production_prompt_does_not_require_boundary8_output(self) -> None:
+    def test_production_prompt_uses_observable_v2_not_boundary8(self) -> None:
         prompt = (
             ROOT / "prompts" / "初中化学难度打标提示词.txt"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("Core-12", prompt)
-        self.assertNotIn("初中化学课程知识坐标", prompt)
-        self.assertNotIn("同主题下的多个不同事实输出", prompt)
-        self.assertIn("量筒误差方向边界（窄规则）", prompt)
-        self.assertIn("量筒俯仰视读数误差的关系推导", prompt)
-        self.assertIn("不得因为出现“量筒”二字自动判为中等题", prompt)
+        self.assertIn("12项可观测特征协议", prompt)
+        self.assertIn('"longest_solution_chain"', prompt)
+        self.assertIn('"curriculum_units"', prompt)
+        self.assertIn("量筒俯仰视误差链", prompt)
+        self.assertIn("关键是三个前后依赖判断", prompt)
         self.assertNotIn('"boundary_features"', prompt)
         self.assertNotIn("Boundary-8 固定字段", prompt)
 
