@@ -55,6 +55,20 @@ def valid_features() -> dict:
     }
 
 
+def valid_v3_features() -> dict:
+    features = valid_features()
+    features.pop("curriculum_units")
+    features.update(
+        {
+            "curriculum_topics": ["U5-1", "U9-3"],
+            "parallel_task_relation": "共享同一化学模型的关联任务",
+            "visual_task_structure": "共享装置流程或图表模型",
+            "error_analysis_operation": "无误差分析",
+        }
+    )
+    return features
+
+
 class ChemistryObservableFeatureTests(unittest.TestCase):
     def test_candidate_module_exists(self) -> None:
         self.assertTrue(MODULE_PATH.exists())
@@ -101,6 +115,43 @@ class ChemistryObservableFeatureTests(unittest.TestCase):
         features["graph_table_operation"] = "无"
 
         with self.assertRaisesRegex(ValueError, "图表转换"):
+            module.validate_observable_features(features)
+
+    def test_v3_derives_cross_unit_and_topic_span(self) -> None:
+        module = load_module()
+
+        validated = module.validate_observable_features(
+            valid_v3_features()
+        )
+        derived = module.derive_observable_metrics(validated)
+
+        self.assertEqual(derived["curriculum_topic_count"], 2)
+        self.assertEqual(derived["curriculum_unit_count"], 2)
+        self.assertEqual(derived["curriculum_span_type"], "跨单元")
+
+    def test_v3_distinguishes_topics_inside_one_unit(self) -> None:
+        module = load_module()
+        features = valid_v3_features()
+        features["curriculum_topics"] = ["U1-1", "U1-2"]
+
+        derived = module.derive_observable_metrics(features)
+
+        self.assertEqual(derived["curriculum_topic_count"], 2)
+        self.assertEqual(derived["curriculum_unit_count"], 1)
+        self.assertEqual(
+            derived["curriculum_span_type"],
+            "同单元跨课题",
+        )
+
+    def test_v3_rejects_unknown_teacher_observable_enum(self) -> None:
+        module = load_module()
+        features = valid_v3_features()
+        features["error_analysis_operation"] = "看起来很容易错"
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "error_analysis_operation",
+        ):
             module.validate_observable_features(features)
 
     def test_formal_protocol_documents_counting_boundaries(self) -> None:

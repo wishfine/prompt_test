@@ -40,12 +40,14 @@ from dotenv import load_dotenv
 try:
     from chemistry_observable_features import (
         OBSERVABLE_FEATURE_FIELDS,
+        OBSERVABLE_V2_FEATURE_FIELDS,
         derive_observable_metrics,
         validate_observable_features,
     )
 except ModuleNotFoundError:
     from src.chemistry_observable_features import (
         OBSERVABLE_FEATURE_FIELDS,
+        OBSERVABLE_V2_FEATURE_FIELDS,
         derive_observable_metrics,
         validate_observable_features,
     )
@@ -763,15 +765,28 @@ class ChemistrySchemaError(ValueError):
 def is_observable_feature_contract(features: Any) -> bool:
     return bool(
         isinstance(features, dict)
-        and set(features) == set(OBSERVABLE_FEATURE_FIELDS)
+        and frozenset(features)
+        in {
+            frozenset(OBSERVABLE_FEATURE_FIELDS),
+            frozenset(OBSERVABLE_V2_FEATURE_FIELDS),
+        }
     )
 
 
-def validate_feature_contract(features: Any) -> Dict[str, Any]:
-    """校验正式可观测 V2 或历史 Core-12 字段。
+def observable_feature_schema_version(features: Dict[str, Any]) -> str:
+    if set(features) == set(OBSERVABLE_FEATURE_FIELDS):
+        return "chemistry_observable_v3"
+    if set(features) == set(OBSERVABLE_V2_FEATURE_FIELDS):
+        return "chemistry_observable_v2"
+    raise ValueError("非可观测化学特征契约")
 
-    新请求只由正式 Prompt 产生可观测 V2；保留 Core-12 读取能力是为了
-    历史 JSONL 回放和回归测试，不会把旧字段重新暴露给模型。
+
+def validate_feature_contract(features: Any) -> Dict[str, Any]:
+    """校验正式可观测 V3/V2 或历史 Core-12 字段。
+
+    新请求只由正式 Prompt 产生可观测 V3；保留 V2/Core-12
+    读取能力是为了历史 JSONL 回放和回归测试，不会把旧字段
+    重新暴露给模型。
     """
     if is_observable_feature_contract(features):
         try:
@@ -886,13 +901,14 @@ def project_observable_to_core12(
     else:
         reasoning_direction = "正向推导"
 
+    topic_count = metrics.get("curriculum_topic_count", unit_count)
     if unit_count >= 3:
         knowledge_relation = "多模块深度融合"
     elif unit_count == 2:
         knowledge_relation = "跨模块融合"
-    elif rule_count >= 3:
+    elif topic_count >= 3 or rule_count >= 3:
         knowledge_relation = "同模块深度关联"
-    elif rule_count == 2:
+    elif topic_count == 2 or rule_count == 2:
         knowledge_relation = "同模块简单关联"
     else:
         knowledge_relation = "单一知识点"
@@ -954,6 +970,18 @@ def project_observable_to_core12(
         "方案评价或补充实验": "方案设计、评价或补充实验",
         "多阶段定量探究": "多阶段探究与定量误差",
     }[features["experiment_operation"]]
+    error_operation = features.get(
+        "error_analysis_operation",
+        "无误差分析",
+    )
+    if error_operation in {"多因素误差比较", "定量误差修正"}:
+        experiment_requirement = "多阶段探究与定量误差"
+    elif (
+        error_operation
+        in {"读数偏差到实际量判断", "操作偏差到最终结果方向"}
+        and experiment_requirement == "基础操作或读数"
+    ):
+        experiment_requirement = "控制变量、现象解释或数据归纳"
     graph_table_requirement = {
         "无": "无",
         "直接读数": "直接读数",
@@ -988,7 +1016,18 @@ def project_observable_to_core12(
     }[features["new_information_operation"]]
 
     effective_task_count = metrics["effective_task_count"]
-    if effective_task_count <= 1:
+    parallel_relation = features.get("parallel_task_relation")
+    if parallel_relation == "共享同一化学模型的关联任务":
+        if chain_steps >= 3:
+            subquestion_dependency = "多问存在结果或任务链依赖"
+        else:
+            subquestion_dependency = "多问共享模型但无答案依赖"
+    elif parallel_relation in {
+        "同一规则下多个对象",
+        "不同规则的独立任务",
+    }:
+        subquestion_dependency = "多问相互独立"
+    elif effective_task_count <= 1:
         subquestion_dependency = "无多问"
     elif (
         features["new_information_operation"]
@@ -1016,6 +1055,39 @@ def project_observable_to_core12(
         ),
         "subquestion_dependency": subquestion_dependency,
     }
+
+
+def observable_deep_quantitative_final_signal(
+    features: Dict[str, Any],
+) -> bool:
+    """可观测特征下的窄“拔高→压轴”信号。
+
+    它只识别已在 500 题回放中稳定呈现的深定量链：至少五个
+    前后依赖的化学决策，连续/竞争/分情况反应结构，以及差量、
+    多反应定量、联立或范围分类中的至少一项。题干长、工业背景、
+    多图或多小问都不在触发条件中。
+    """
+    # 只对V3新输出生效：V2历史文件缺少新增的
+    # 并列任务、视觉和误差事实，不在回放时改变其语义。
+    if (
+        not isinstance(features, dict)
+        or frozenset(features) != frozenset(OBSERVABLE_FEATURE_FIELDS)
+    ):
+        return False
+    validated = validate_observable_features(features)
+    return bool(
+        len(validated["longest_solution_chain"]) >= 5
+        and validated["reaction_structure"]
+        in {
+            "产物进入后一反应",
+            "先后竞争或过量不足",
+            "分情况反应模型",
+        }
+        and bool(
+            set(validated["calculation_operations"])
+            & {"差量", "多反应定量关系", "联立", "范围或分类计算"}
+        )
+    )
 
 
 def validate_rating_contract(rating_result: Any) -> Dict[str, Any]:
@@ -2786,15 +2858,16 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     if observable_contract:
         observable_metrics = derive_observable_metrics(model_features)
         features = project_observable_to_core12(model_features)
-        rating_result["feature_schema_version"] = (
-            "chemistry_observable_v2"
-        )
+        schema_version = observable_feature_schema_version(model_features)
+        rating_result["feature_schema_version"] = schema_version
         rating_result["observable_metrics"] = observable_metrics
         rating_result["derived_core12_projection"] = copy.deepcopy(
             features
         )
         rating_result["postprocess_profile"] = (
-            "chemistry_observable_v2_teacher_distribution_v2_safe"
+            "chemistry_observable_v3_teacher_calibrated_v1"
+            if schema_version == "chemistry_observable_v3"
+            else "chemistry_observable_v2_teacher_distribution_v2_safe"
         )
     else:
         features = model_features
@@ -3039,6 +3112,30 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             )
         elif (
             raw_level == "基础题"
+            and observable_contract
+            and model_features.get("error_analysis_operation")
+            in {
+                "读数偏差到实际量判断",
+                "操作偏差到最终结果方向",
+            }
+            and len(model_features["longest_solution_chain"]) >= 2
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "中等题",
+                "结构边界窄校准：误差题需要由偏差来源连续推到实际量或最终结果",
+                rule="teacher_basic_to_medium_observable_error_chain",
+                evidence=[
+                    "误差操作="
+                    + model_features["error_analysis_operation"],
+                    "最长链="
+                    + " → ".join(
+                        model_features["longest_solution_chain"]
+                    ),
+                ],
+            )
+        elif (
+            raw_level == "基础题"
             and measuring_cylinder_error_chain
         ):
             set_level_with_reason(
@@ -3192,6 +3289,29 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                     + features["unfamiliar_information_transfer"],
                     f"小问关系={features['subquestion_dependency']}",
                     f"知识关系={features['knowledge_relation']}",
+                ],
+            )
+        elif (
+            raw_level == "拔高题"
+            and observable_contract
+            and observable_deep_quantitative_final_signal(model_features)
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "压轴题",
+                "结构边界窄校准：五步以上反应—定量主链需要连续、竞争或分情况建模",
+                rule="teacher_hard_to_final_deep_quantitative_chain",
+                evidence=[
+                    "最长链="
+                    + " → ".join(
+                        model_features["longest_solution_chain"]
+                    ),
+                    "反应结构="
+                    + model_features["reaction_structure"],
+                    "计算操作="
+                    + "、".join(
+                        model_features["calculation_operations"]
+                    ),
                 ],
             )
         elif (

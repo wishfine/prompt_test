@@ -1,8 +1,9 @@
-"""初中化学可观测特征 V2 正式契约。
+"""初中化学可观测特征 V3 正式契约。
 
 该模块提供严格校验和派生量计算。正式特征不直接输出“推理深度”
 “约束复杂度”等难度摘要，而是记录任务、规则、课程单元和具体
-化学操作；历史 Core-12 兼容逻辑保留在运行脚本中。
+化学操作。V3 在 V2 基础上增加课题级课程坐标、并列任务关系、
+视觉任务结构和误差分析操作；V2 仍可严格读取，用于历史回放。
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import copy
 from typing import Any, Dict, Iterable, List
 
 
-OBSERVABLE_FEATURE_FIELDS = (
+OBSERVABLE_V2_FEATURE_FIELDS = (
     "longest_solution_chain",
     "task_groups",
     "rule_families",
@@ -22,6 +23,24 @@ OBSERVABLE_FEATURE_FIELDS = (
     "evidence_operations",
     "experiment_operation",
     "graph_table_operation",
+    "calculation_operations",
+    "new_information_operation",
+)
+
+OBSERVABLE_FEATURE_FIELDS = (
+    "longest_solution_chain",
+    "task_groups",
+    "rule_families",
+    "curriculum_topics",
+    "parallel_task_relation",
+    "reaction_structure",
+    "condition_operations",
+    "representation_operations",
+    "evidence_operations",
+    "experiment_operation",
+    "visual_task_structure",
+    "graph_table_operation",
+    "error_analysis_operation",
     "calculation_operations",
     "new_information_operation",
 )
@@ -40,6 +59,63 @@ TASK_TYPES = {
 
 RULE_FAMILIES = set(TASK_TYPES)
 CURRICULUM_UNITS = {f"U{i}" for i in range(1, 12)}
+
+CURRICULUM_TOPIC_NAMES = {
+    "U1-1": "物质的变化和性质",
+    "U1-2": "化学实验与科学探究",
+    "U2-1": "空气",
+    "U2-2": "氧气",
+    "U2-3": "制取氧气",
+    "U3-1": "分子和原子",
+    "U3-2": "原子结构",
+    "U3-3": "元素",
+    "U4-1": "水资源及其利用",
+    "U4-2": "水的组成",
+    "U4-3": "物质组成的表示",
+    "U5-1": "质量守恒定律",
+    "U5-2": "化学方程式",
+    "U6-1": "碳单质的多样性",
+    "U6-2": "碳的氧化物",
+    "U6-3": "二氧化碳的实验室制取",
+    "U7-1": "燃料的燃烧",
+    "U7-2": "化石能源的利用",
+    "U8-1": "金属材料",
+    "U8-2": "金属的化学性质",
+    "U8-3": "金属资源的利用和保护",
+    "U9-1": "溶液及其应用",
+    "U9-2": "溶解度",
+    "U9-3": "溶质的质量分数",
+    "U10-1": "溶液的酸碱性",
+    "U10-2": "常见的酸和碱",
+    "U10-3": "常见的盐",
+    "U11-1": "化学与人体健康",
+    "U11-2": "化学与可持续发展",
+}
+CURRICULUM_TOPICS = set(CURRICULUM_TOPIC_NAMES)
+
+PARALLEL_TASK_RELATIONS = {
+    "单一答题目标",
+    "同一规则下多个对象",
+    "不同规则的独立任务",
+    "共享同一化学模型的关联任务",
+}
+
+VISUAL_TASK_STRUCTURES = {
+    "无必要视觉信息",
+    "单图直接识别",
+    "多图独立同规则识别",
+    "多图独立不同规则判断",
+    "共享装置流程或图表模型",
+}
+
+ERROR_ANALYSIS_OPERATIONS = {
+    "无误差分析",
+    "直接判断错误操作后果",
+    "读数偏差到实际量判断",
+    "操作偏差到最终结果方向",
+    "多因素误差比较",
+    "定量误差修正",
+}
 
 REACTION_STRUCTURES = {
     "无反应任务",
@@ -152,18 +228,21 @@ def _validate_single_enum(
 
 
 def validate_observable_features(features: Any) -> Dict[str, Any]:
-    """严格校验可观测特征 V2。
+    """严格校验可观测特征 V3，并兼容读取 V2。
 
     校验器不静默补默认值：缺字段、多字段或枚举错误均直接
     拒绝，便于重试提示精确修正。
     """
     if not isinstance(features, dict):
         raise ValueError("features必须是JSON对象")
-    expected = set(OBSERVABLE_FEATURE_FIELDS)
     actual = set(features)
-    if actual != expected:
-        missing = sorted(expected - actual)
-        extra = sorted(actual - expected)
+    v3_expected = set(OBSERVABLE_FEATURE_FIELDS)
+    v2_expected = set(OBSERVABLE_V2_FEATURE_FIELDS)
+    is_v3 = actual == v3_expected
+    is_v2 = actual == v2_expected
+    if not (is_v3 or is_v2):
+        missing = sorted(v3_expected - actual)
+        extra = sorted(actual - v3_expected)
         raise ValueError(
             f"可观测特征字段集不匹配; missing={missing}; extra={extra}"
         )
@@ -221,12 +300,25 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
         RULE_FAMILIES,
         allow_empty=False,
     )
-    _validate_unique_enum_list(
-        validated,
-        "curriculum_units",
-        CURRICULUM_UNITS,
-        allow_empty=False,
-    )
+    if is_v3:
+        _validate_unique_enum_list(
+            validated,
+            "curriculum_topics",
+            CURRICULUM_TOPICS,
+            allow_empty=False,
+        )
+        _validate_single_enum(
+            validated,
+            "parallel_task_relation",
+            PARALLEL_TASK_RELATIONS,
+        )
+    else:
+        _validate_unique_enum_list(
+            validated,
+            "curriculum_units",
+            CURRICULUM_UNITS,
+            allow_empty=False,
+        )
     _validate_single_enum(
         validated,
         "reaction_structure",
@@ -255,6 +347,12 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
         "experiment_operation",
         EXPERIMENT_OPERATIONS,
     )
+    if is_v3:
+        _validate_single_enum(
+            validated,
+            "visual_task_structure",
+            VISUAL_TASK_STRUCTURES,
+        )
     _validate_single_enum(
         validated,
         "graph_table_operation",
@@ -266,6 +364,12 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
         CALCULATION_OPERATIONS,
         allow_empty=True,
     )
+    if is_v3:
+        _validate_single_enum(
+            validated,
+            "error_analysis_operation",
+            ERROR_ANALYSIS_OPERATIONS,
+        )
     _validate_single_enum(
         validated,
         "new_information_operation",
@@ -279,6 +383,12 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
     ]
     if graph_conversions and validated["graph_table_operation"] == "无":
         raise ValueError("存在图表转换时graph_table_operation不能为无")
+    if (
+        is_v3
+        and validated["graph_table_operation"] != "无"
+        and validated["visual_task_structure"] == "无必要视觉信息"
+    ):
+        raise ValueError("存在图表任务时visual_task_structure不能为无必要视觉信息")
     if (
         any(
             group["task_type"] == "定量计算"
@@ -295,6 +405,12 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
         and validated["experiment_operation"] == "无"
     ):
         raise ValueError("实验任务必须记录experiment_operation")
+    if (
+        is_v3
+        and validated["error_analysis_operation"] != "无误差分析"
+        and validated["experiment_operation"] == "无"
+    ):
+        raise ValueError("误差分析任务必须记录experiment_operation")
     return validated
 
 
@@ -303,6 +419,25 @@ def derive_observable_metrics(
 ) -> Dict[str, Any]:
     """从可审计数组派生 D/B/W/U 等数量，不接受模型自报计数。"""
     validated = validate_observable_features(features)
+    if "curriculum_topics" in validated:
+        curriculum_topics = validated["curriculum_topics"]
+        curriculum_units = sorted(
+            {topic.split("-", 1)[0] for topic in curriculum_topics}
+        )
+        topic_count = len(curriculum_topics)
+        if len(curriculum_units) >= 2:
+            curriculum_span_type = "跨单元"
+        elif topic_count >= 2:
+            curriculum_span_type = "同单元跨课题"
+        else:
+            curriculum_span_type = "单一课题"
+    else:
+        curriculum_units = validated["curriculum_units"]
+        topic_count = len(curriculum_units)
+        curriculum_span_type = (
+            "跨单元" if len(curriculum_units) >= 2 else "单一课题"
+        )
+
     return {
         "longest_chain_steps": len(
             validated["longest_solution_chain"]
@@ -312,9 +447,9 @@ def derive_observable_metrics(
         ),
         "task_group_count": len(validated["task_groups"]),
         "rule_family_count": len(validated["rule_families"]),
-        "curriculum_unit_count": len(
-            validated["curriculum_units"]
-        ),
+        "curriculum_topic_count": topic_count,
+        "curriculum_unit_count": len(curriculum_units),
+        "curriculum_span_type": curriculum_span_type,
         "condition_operation_count": len(
             validated["condition_operations"]
         ),

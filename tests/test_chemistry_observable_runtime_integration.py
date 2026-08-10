@@ -54,6 +54,20 @@ def observable_features() -> dict:
     }
 
 
+def observable_v3_features() -> dict:
+    features = observable_features()
+    features.pop("curriculum_units")
+    features.update(
+        {
+            "curriculum_topics": ["U5-1", "U9-3"],
+            "parallel_task_relation": "共享同一化学模型的关联任务",
+            "visual_task_structure": "共享装置流程或图表模型",
+            "error_analysis_operation": "无误差分析",
+        }
+    )
+    return features
+
+
 def rating(level: str = "中等题") -> dict:
     coarse = {
         "送分题": "送分/基础区间（1-2档）",
@@ -96,6 +110,17 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
 
     def test_rating_contract_accepts_observable_features(self) -> None:
         validated = self.runtime.validate_rating_contract(rating())
+        self.assertEqual(
+            set(validated["features"]),
+            set(self.runtime.OBSERVABLE_V2_FEATURE_FIELDS),
+        )
+
+    def test_rating_contract_accepts_observable_v3_features(self) -> None:
+        item = rating()
+        item["features"] = observable_v3_features()
+
+        validated = self.runtime.validate_rating_contract(item)
+
         self.assertEqual(
             set(validated["features"]),
             set(self.runtime.OBSERVABLE_FEATURE_FIELDS),
@@ -263,6 +288,94 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
             "单元名称不是难度先验",
         ):
             self.assertIn(anchor, prompt)
+
+    def test_prompt_records_teacher_observables_and_topic_span(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        for anchor in (
+            '"curriculum_topics"',
+            '"parallel_task_relation"',
+            '"visual_task_structure"',
+            '"error_analysis_operation"',
+            "同单元跨课题",
+            "跨学科背景不等于跨学科推理",
+            "误差分析不能按关键词直接升档",
+        ):
+            self.assertIn(anchor, prompt)
+
+    def test_observable_error_chain_can_floor_basic_to_medium(self) -> None:
+        item = rating("基础题")
+        item["features"] = observable_v3_features()
+        item["features"]["longest_solution_chain"] = [
+            "判断仰视使量筒示数偏小",
+            "由示数与真实体积关系得到实际取液体积",
+            "判断配制溶液的质量分数偏差方向",
+        ]
+        item["features"]["experiment_operation"] = "基础操作或读数"
+        item["features"]["error_analysis_operation"] = (
+            "操作偏差到最终结果方向"
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "量筒仰视取液后判断配制结果偏差。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "teacher_basic_to_medium_observable_error_chain",
+        )
+
+    def test_direct_error_consequence_does_not_force_medium(self) -> None:
+        item = rating("基础题")
+        item["features"] = observable_v3_features()
+        item["features"]["longest_solution_chain"] = [
+            "直接判断错误操作可能造成的后果"
+        ]
+        item["features"]["error_analysis_operation"] = (
+            "直接判断错误操作后果"
+        )
+        item["features"]["experiment_operation"] = "基础操作或读数"
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "判断错误实验操作可能导致的后果。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(result["postprocess_actions"], [])
+
+    def test_deep_quantitative_reaction_chain_can_reach_final(self) -> None:
+        item = rating("拔高题")
+        item["features"] = observable_v3_features()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "根据前段反应确定中间产物",
+                    "将中间产物代入后续反应",
+                    "根据前后质量变化建立差量关系",
+                    "联合守恒求出未知组成",
+                    "使用组成完成后续定量验证",
+                ],
+                "reaction_structure": "产物进入后一反应",
+                "calculation_operations": [
+                    "单一守恒",
+                    "差量",
+                    "多反应定量关系",
+                ],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "前段产物继续反应，根据差量与守恒求未知组成。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "teacher_hard_to_final_deep_quantitative_chain",
+        )
 
     def test_schema_retry_budget_allows_three_repairs(self) -> None:
         self.assertGreaterEqual(self.runtime.MAX_SCHEMA_RETRIES, 3)
