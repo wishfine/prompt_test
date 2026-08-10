@@ -1,9 +1,9 @@
-"""初中化学可观测特征 V5 正式契约。
+"""初中化学可观测特征 V6 正式契约。
 
 该模块提供严格校验和派生量计算。正式特征不直接输出“推理深度”
 “约束复杂度”等难度摘要，而是记录任务、规则、课程单元和具体
-化学操作。V5 在稳定的 V3 十五项基础上，只增加解题拓扑和实验
-任务结构；移除容易受最终等级反向影响的任务性质计数。V2/V3/V4
+化学操作。V6 在 V5 十七项基础上，只增加具体作答操作和真实跨学科
+依赖；移除容易受最终等级反向影响的任务性质计数。V2/V3/V4/V5
 仍可严格读取，用于历史回放。
 """
 
@@ -68,11 +68,33 @@ OBSERVABLE_V4_FEATURE_FIELDS = (
     "new_information_operation",
 )
 
-OBSERVABLE_FEATURE_FIELDS = (
+OBSERVABLE_V5_FEATURE_FIELDS = (
     "longest_solution_chain",
     "task_groups",
     "rule_families",
     "curriculum_topics",
+    "parallel_task_relation",
+    "solution_topology",
+    "reaction_structure",
+    "condition_operations",
+    "representation_operations",
+    "evidence_operations",
+    "experiment_operation",
+    "experiment_task_structure",
+    "visual_task_structure",
+    "graph_table_operation",
+    "error_analysis_operation",
+    "calculation_operations",
+    "new_information_operation",
+)
+
+OBSERVABLE_FEATURE_FIELDS = (
+    "longest_solution_chain",
+    "task_groups",
+    "rule_families",
+    "response_operations",
+    "curriculum_topics",
+    "cross_subject_operations",
     "parallel_task_relation",
     "solution_topology",
     "reaction_structure",
@@ -101,6 +123,31 @@ TASK_TYPES = {
 }
 
 RULE_FAMILIES = set(TASK_TYPES)
+
+RESPONSE_OPERATIONS = {
+    "教材事实或名称直接匹配",
+    "分类标准应用",
+    "完整命题正误辨析",
+    "化学用语书写",
+    "化学用语含义解释",
+    "性质用途或现象解释",
+    "实验操作规范",
+    "实验作用或目的解释",
+    "异常或失败原因诊断",
+    "图表读取或归纳",
+    "证据推断或物质鉴别",
+    "定量计算",
+    "方案设计或评价",
+    "规范原因表达",
+    "开放举例或补写",
+}
+
+CROSS_SUBJECT_OPERATIONS = {
+    "文言诗词或语义转译",
+    "物理过程或物理量关系",
+    "生物过程或健康机制",
+    "数学函数、几何或统计模型",
+}
 CURRICULUM_UNITS = {f"U{i}" for i in range(1, 12)}
 
 CURRICULUM_TOPIC_NAMES = {
@@ -238,6 +285,7 @@ NEW_INFORMATION_OPERATIONS = {
     "给定关系直接代入",
     "根据新信息建立一个关系",
     "新关系被多个任务共同使用",
+    "依赖题干未给出的超纲化学知识",
 }
 
 SOLUTION_TOPOLOGIES = {
@@ -311,7 +359,9 @@ ENUM_VALUE_ALIASES = {
 OBSERVABLE_ENUM_VALUES_BY_FIELD = {
     "task_type": TASK_TYPES,
     "rule_families": RULE_FAMILIES,
+    "response_operations": RESPONSE_OPERATIONS,
     "curriculum_topics": CURRICULUM_TOPICS,
+    "cross_subject_operations": CROSS_SUBJECT_OPERATIONS,
     "parallel_task_relation": PARALLEL_TASK_RELATIONS,
     "solution_topology": SOLUTION_TOPOLOGIES,
     "reaction_structure": REACTION_STRUCTURES,
@@ -427,6 +477,8 @@ def normalize_observable_features(
         normalized["rule_families"] = new_values
 
     for field in (
+        "response_operations",
+        "cross_subject_operations",
         "condition_operations",
         "representation_operations",
         "evidence_operations",
@@ -654,7 +706,7 @@ def _validate_single_enum(
 
 
 def validate_observable_features(features: Any) -> Dict[str, Any]:
-    """严格校验可观测特征 V5，并兼容读取 V4/V3/V2。
+    """严格校验可观测特征 V6，并兼容读取 V5/V4/V3/V2。
 
     校验器不静默补默认值：缺字段、多字段或枚举错误均直接
     拒绝，便于重试提示精确修正。
@@ -662,17 +714,19 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
     if not isinstance(features, dict):
         raise ValueError("features必须是JSON对象")
     actual = set(features)
-    v5_expected = set(OBSERVABLE_FEATURE_FIELDS)
+    v6_expected = set(OBSERVABLE_FEATURE_FIELDS)
+    v5_expected = set(OBSERVABLE_V5_FEATURE_FIELDS)
     v4_expected = set(OBSERVABLE_V4_FEATURE_FIELDS)
     v3_expected = set(OBSERVABLE_V3_FEATURE_FIELDS)
     v2_expected = set(OBSERVABLE_V2_FEATURE_FIELDS)
+    is_v6 = actual == v6_expected
     is_v5 = actual == v5_expected
     is_v4 = actual == v4_expected
     is_v3 = actual == v3_expected
     is_v2 = actual == v2_expected
-    if not (is_v5 or is_v4 or is_v3 or is_v2):
-        missing = sorted(v5_expected - actual)
-        extra = sorted(actual - v5_expected)
+    if not (is_v6 or is_v5 or is_v4 or is_v3 or is_v2):
+        missing = sorted(v6_expected - actual)
+        extra = sorted(actual - v6_expected)
         raise ValueError(
             f"可观测特征字段集不匹配; missing={missing}; extra={extra}"
         )
@@ -739,7 +793,7 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
             raise ValueError(
                 "任务性质计数必须恰好覆盖task_groups中的全部有效任务"
             )
-    if is_v5 or is_v4:
+    if is_v6 or is_v5 or is_v4:
         _validate_single_enum(
             validated,
             "solution_topology",
@@ -757,7 +811,20 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
         RULE_FAMILIES,
         allow_empty=False,
     )
-    if is_v3 or is_v4 or is_v5:
+    if is_v6:
+        _validate_unique_enum_list(
+            validated,
+            "response_operations",
+            RESPONSE_OPERATIONS,
+            allow_empty=False,
+        )
+        _validate_unique_enum_list(
+            validated,
+            "cross_subject_operations",
+            CROSS_SUBJECT_OPERATIONS,
+            allow_empty=True,
+        )
+    if is_v3 or is_v4 or is_v5 or is_v6:
         _validate_unique_enum_list(
             validated,
             "curriculum_topics",
@@ -804,7 +871,7 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
         "experiment_operation",
         EXPERIMENT_OPERATIONS,
     )
-    if is_v3 or is_v4 or is_v5:
+    if is_v3 or is_v4 or is_v5 or is_v6:
         _validate_single_enum(
             validated,
             "visual_task_structure",
@@ -821,7 +888,7 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
         CALCULATION_OPERATIONS,
         allow_empty=True,
     )
-    if is_v3 or is_v4 or is_v5:
+    if is_v3 or is_v4 or is_v5 or is_v6:
         _validate_single_enum(
             validated,
             "error_analysis_operation",
@@ -841,7 +908,7 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
     if graph_conversions and validated["graph_table_operation"] == "无":
         raise ValueError("存在图表转换时graph_table_operation不能为无")
     if (
-        (is_v3 or is_v4 or is_v5)
+        (is_v3 or is_v4 or is_v5 or is_v6)
         and validated["graph_table_operation"] != "无"
         and validated["visual_task_structure"] == "无必要视觉信息"
     ):
@@ -863,12 +930,12 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
     ):
         raise ValueError("实验任务必须记录experiment_operation")
     if (
-        (is_v3 or is_v4 or is_v5)
+        (is_v3 or is_v4 or is_v5 or is_v6)
         and validated["error_analysis_operation"] != "无误差分析"
         and validated["experiment_operation"] == "无"
     ):
         raise ValueError("误差分析任务必须记录experiment_operation")
-    if is_v5 or is_v4:
+    if is_v6 or is_v5 or is_v4:
         experiment_structure = validated["experiment_task_structure"]
         if (
             validated["experiment_operation"] == "无"
@@ -880,6 +947,25 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
             and experiment_structure == "无实验判断"
         ):
             raise ValueError("存在实验操作时experiment_task_structure不能为无实验判断")
+    if is_v6:
+        invariant_topology = (
+            validated["solution_topology"]
+            == "未知组分消元或组成不变量"
+        )
+        invariant_operation = (
+            "组分消元或组成不变量"
+            in validated["calculation_operations"]
+        )
+        if invariant_topology and not invariant_operation:
+            raise ValueError(
+                "solution_topology为未知组分消元或组成不变量时，"
+                "calculation_operations必须包含组分消元或组成不变量"
+            )
+        if invariant_operation and not invariant_topology:
+            raise ValueError(
+                "calculation_operations包含组分消元或组成不变量时，"
+                "solution_topology必须为未知组分消元或组成不变量"
+            )
     return validated
 
 
@@ -960,6 +1046,12 @@ def derive_observable_metrics(
         ),
         "task_group_count": len(validated["task_groups"]),
         "rule_family_count": len(validated["rule_families"]),
+        "response_operation_count": len(
+            validated.get("response_operations", [])
+        ),
+        "cross_subject_operation_count": len(
+            validated.get("cross_subject_operations", [])
+        ),
         "curriculum_topic_count": topic_count,
         "curriculum_unit_count": len(curriculum_units),
         "curriculum_span_type": curriculum_span_type,

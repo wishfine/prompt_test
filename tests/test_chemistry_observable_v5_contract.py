@@ -32,7 +32,9 @@ def current_features() -> dict:
             {"task_type": "定量计算", "count": 2},
         ],
         "rule_families": ["图表与数据", "定量计算"],
+        "response_operations": ["图表读取或归纳", "定量计算"],
         "curriculum_topics": ["U5-2", "U9-3"],
+        "cross_subject_operations": [],
         "parallel_task_relation": "共享同一化学模型的关联任务",
         "solution_topology": "单线性常规链",
         "reaction_structure": "单一反应",
@@ -73,14 +75,23 @@ def rating(level: str = "中等题") -> dict:
     }
 
 
-class ChemistryObservableV5ContractTests(unittest.TestCase):
+class ChemistryObservableV6ContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.features = load_module("chemistry_observable_v5_features", FEATURE_PATH)
         cls.runtime = load_module("chemistry_observable_v5_runtime", RUNTIME_PATH)
 
-    def test_current_contract_has_seventeen_fields_without_ra_counts(self) -> None:
-        self.assertEqual(len(self.features.OBSERVABLE_FEATURE_FIELDS), 17)
+    def test_current_contract_adds_two_observable_fields_and_keeps_v5(self) -> None:
+        self.assertEqual(len(self.features.OBSERVABLE_FEATURE_FIELDS), 19)
+        self.assertEqual(len(self.features.OBSERVABLE_V5_FEATURE_FIELDS), 17)
+        self.assertIn(
+            "response_operations",
+            self.features.OBSERVABLE_FEATURE_FIELDS,
+        )
+        self.assertIn(
+            "cross_subject_operations",
+            self.features.OBSERVABLE_FEATURE_FIELDS,
+        )
         self.assertNotIn(
             "direct_retrieval_task_count",
             self.features.OBSERVABLE_FEATURE_FIELDS,
@@ -95,14 +106,117 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
             self.features.OBSERVABLE_FEATURE_FIELDS,
         )
 
-    def test_current_contract_validates_as_observable_v5(self) -> None:
+    def test_current_contract_validates_as_observable_v6(self) -> None:
         validated = self.runtime.validate_feature_contract(current_features())
 
         self.assertEqual(set(validated), set(self.runtime.OBSERVABLE_FEATURE_FIELDS))
         self.assertEqual(
             self.runtime.observable_feature_schema_version(validated),
+            "chemistry_observable_v6",
+        )
+
+    def test_historical_v5_contract_remains_readable(self) -> None:
+        historical = current_features()
+        historical.pop("response_operations")
+        historical.pop("cross_subject_operations")
+
+        validated = self.runtime.validate_feature_contract(historical)
+
+        self.assertEqual(
+            set(validated),
+            set(self.runtime.OBSERVABLE_V5_FEATURE_FIELDS),
+        )
+        self.assertEqual(
+            self.runtime.observable_feature_schema_version(validated),
             "chemistry_observable_v5",
         )
+
+    def test_new_observable_enums_are_strict_and_auditable(self) -> None:
+        item = current_features()
+        item["response_operations"] = [
+            "完整命题正误辨析",
+            "规范原因表达",
+        ]
+        item["cross_subject_operations"] = [
+            "物理过程或物理量关系",
+        ]
+        validated = self.runtime.validate_feature_contract(item)
+        metrics = self.features.derive_observable_metrics(validated)
+
+        self.assertEqual(metrics["response_operation_count"], 2)
+        self.assertEqual(metrics["cross_subject_operation_count"], 1)
+
+        item["response_operations"] = ["泛泛理解题意"]
+        with self.assertRaisesRegex(
+            self.runtime.ChemistrySchemaError,
+            "response_operations",
+        ):
+            self.runtime.validate_feature_contract(item)
+
+    def test_supercurricular_chemistry_is_not_cross_subject(self) -> None:
+        item = current_features()
+        item["new_information_operation"] = (
+            "依赖题干未给出的超纲化学知识"
+        )
+        item["cross_subject_operations"] = []
+
+        validated = self.runtime.validate_feature_contract(item)
+        projection = self.runtime.project_observable_to_core12(validated)
+
+        self.assertEqual(
+            projection["unfamiliar_information_transfer"],
+            "完全陌生模型现场建立",
+        )
+
+    def test_response_breadth_is_audited_but_not_written_back(self) -> None:
+        item = rating("基础题")
+        item["features"]["task_groups"] = [
+            {"task_type": "实验操作与探究", "count": 2},
+            {"task_type": "化学用语", "count": 2},
+        ]
+        item["features"]["rule_families"] = [
+            "实验操作与探究",
+            "化学用语",
+        ]
+        item["features"]["response_operations"] = [
+            "实验操作规范",
+            "异常或失败原因诊断",
+            "化学用语书写",
+        ]
+        item["features"]["parallel_task_relation"] = (
+            "不同规则的独立任务"
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "分别判断实验操作、分析失败原因并书写化学式。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_basic_to_medium_multi_rule_breadth_candidate",
+        )
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+
+    def test_program_derives_text_length_and_explicit_subquestion_count(self) -> None:
+        data = {
+            "stem": "某同学完成下列实验。（1）写出现象。（2）解释原因。",
+            "options": "A.甲 B.乙",
+            "analysis": "这部分不应计入题面字数。",
+            "sub_questions": [
+                {"stem": "写出现象", "analysis": "略"},
+                {"stem": "解释原因", "analysis": "略"},
+            ],
+        }
+
+        metrics = self.runtime.derive_question_structure_metrics(data)
+
+        self.assertEqual(metrics["explicit_subquestion_count"], 2)
+        self.assertGreater(metrics["question_text_char_count"], 10)
+        self.assertLessEqual(metrics["question_text_char_count"], 40)
 
     def test_cross_field_experiment_enum_reports_the_correct_destination(self) -> None:
         invalid = current_features()
@@ -237,6 +351,27 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
             "多重守恒、差量、联立或分类",
         )
 
+    def test_v6_requires_invariant_topology_and_operation_to_agree(self) -> None:
+        topology_only = current_features()
+        topology_only["solution_topology"] = (
+            "未知组分消元或组成不变量"
+        )
+        with self.assertRaisesRegex(
+            self.runtime.ChemistrySchemaError,
+            "solution_topology.*calculation_operations",
+        ):
+            self.runtime.validate_feature_contract(topology_only)
+
+        operation_only = current_features()
+        operation_only["calculation_operations"].append(
+            "组分消元或组成不变量"
+        )
+        with self.assertRaisesRegex(
+            self.runtime.ChemistrySchemaError,
+            "calculation_operations.*solution_topology",
+        ):
+            self.runtime.validate_feature_contract(operation_only)
+
     def test_unknown_enum_still_fails_after_safe_normalization(self) -> None:
         invalid = current_features()
         invalid["representation_operations"] = ["看起来很难的转换"]
@@ -277,6 +412,8 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
 
     def test_historical_nineteen_field_v4_remains_readable(self) -> None:
         historical = copy.deepcopy(current_features())
+        historical.pop("response_operations")
+        historical.pop("cross_subject_operations")
         historical["direct_retrieval_task_count"] = 1
         historical["rule_application_task_count"] = 2
 
@@ -298,18 +435,30 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
             {"stem": "根据图表和方程式完成定量计算。"},
         )
 
-        self.assertEqual(result["feature_schema_version"], "chemistry_observable_v5")
+        self.assertEqual(result["feature_schema_version"], "chemistry_observable_v6")
         self.assertEqual(result["postprocess_candidate_actions"], [])
+        self.assertEqual(
+            result["observable_metrics"]["explicit_subquestion_count"],
+            1,
+        )
+        self.assertGreater(
+            result["observable_metrics"]["question_text_char_count"],
+            0,
+        )
 
     def test_prompt_documents_task_granularity_without_ra_fields(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("17项可观测特征协议", prompt)
+        self.assertIn("19项可观测特征协议", prompt)
         self.assertNotIn('"direct_retrieval_task_count"', prompt)
         self.assertNotIn('"rule_application_task_count"', prompt)
         self.assertIn("不同化学命题或不同作答目标", prompt)
         self.assertIn("同一规则只表示B不增加", prompt)
         self.assertIn("独立选项不增加D", prompt)
+        self.assertIn("response_operations", prompt)
+        self.assertIn("cross_subject_operations", prompt)
+        self.assertIn("真实依赖", prompt)
+        self.assertIn("题干未给出的超纲化学知识", prompt)
 
     def test_prompt_decouples_task_count_from_easy_level(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")

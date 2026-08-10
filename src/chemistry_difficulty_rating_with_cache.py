@@ -7,7 +7,7 @@
 调整一个相邻档；只有基于题干客观结构的严重低估安全底线，才允许将
 明显的连续反应核验从送分题直接托底到中等题。
 
-化学正式输出使用17个可从题目核验的任务与操作特征；历史Core-12
+化学正式输出使用19个可从题目核验的任务与操作特征；历史Core-12
 只保留兼容读取和确定性内部投影，不再要求模型直接填写抽象难度摘要。
 """
 
@@ -40,6 +40,7 @@ from dotenv import load_dotenv
 try:
     from chemistry_observable_features import (
         OBSERVABLE_FEATURE_FIELDS,
+        OBSERVABLE_V5_FEATURE_FIELDS,
         OBSERVABLE_V4_FEATURE_FIELDS,
         OBSERVABLE_V3_FEATURE_FIELDS,
         OBSERVABLE_V2_FEATURE_FIELDS,
@@ -51,6 +52,7 @@ try:
 except ModuleNotFoundError:
     from src.chemistry_observable_features import (
         OBSERVABLE_FEATURE_FIELDS,
+        OBSERVABLE_V5_FEATURE_FIELDS,
         OBSERVABLE_V4_FEATURE_FIELDS,
         OBSERVABLE_V3_FEATURE_FIELDS,
         OBSERVABLE_V2_FEATURE_FIELDS,
@@ -839,6 +841,7 @@ def is_observable_feature_contract(features: Any) -> bool:
         and frozenset(features)
         in {
             frozenset(OBSERVABLE_FEATURE_FIELDS),
+            frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V4_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V3_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V2_FEATURE_FIELDS),
@@ -858,6 +861,8 @@ def looks_like_observable_feature_contract(features: Any) -> bool:
 
 def observable_feature_schema_version(features: Dict[str, Any]) -> str:
     if set(features) == set(OBSERVABLE_FEATURE_FIELDS):
+        return "chemistry_observable_v6"
+    if set(features) == set(OBSERVABLE_V5_FEATURE_FIELDS):
         return "chemistry_observable_v5"
     if set(features) == set(OBSERVABLE_V4_FEATURE_FIELDS):
         return "chemistry_observable_v4"
@@ -869,9 +874,9 @@ def observable_feature_schema_version(features: Dict[str, Any]) -> str:
 
 
 def validate_feature_contract(features: Any) -> Dict[str, Any]:
-    """校验正式可观测 V5 或历史 V4/V3/V2/Core-12 字段。
+    """校验正式可观测 V6 或历史 V5/V4/V3/V2/Core-12 字段。
 
-    新请求只由正式 Prompt 产生可观测 V5；保留 V4/V3/V2/Core-12
+    新请求只由正式 Prompt 产生可观测 V6；保留 V5/V4/V3/V2/Core-12
     读取能力是为了历史 JSONL 回放和回归测试，不会把旧字段
     重新暴露给模型。
     """
@@ -1121,6 +1126,7 @@ def project_observable_to_core12(
         "给定关系直接代入": "给定新信息直接应用",
         "根据新信息建立一个关系": "迁移后建立关系",
         "新关系被多个任务共同使用": "迁移后建立关系",
+        "依赖题干未给出的超纲化学知识": "完全陌生模型现场建立",
     }[features["new_information_operation"]]
 
     effective_task_count = metrics["effective_task_count"]
@@ -1184,6 +1190,7 @@ def observable_deep_quantitative_final_signal(
     )
     if feature_keys in {
         frozenset(OBSERVABLE_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V4_FEATURE_FIELDS),
     }:
         validated = validate_observable_features(features)
@@ -1411,6 +1418,42 @@ def visible_text(data: Dict[str, Any], include_analysis: bool = False) -> str:
     return "\n".join(parts)
 
 
+def derive_question_structure_metrics(data: Dict[str, Any]) -> Dict[str, int]:
+    """由结构化题面确定性统计字数和显式设问数。
+
+    只统计题干、选项和子题题面，不读取解析、图片URL或标签。结构化
+    ``sub_questions`` 优先；缺少该字段时才保守识别（1）、①等编号。
+    单一整题记为1个作答目标，避免把“没有子题数组”误写成零任务。
+    """
+    text = visible_text(data, include_analysis=False)
+    text_without_urls = re.sub(r"https?://\S+", "", text)
+    text_without_placeholders = re.sub(
+        r"(?:\[图片\]|【图片】|<image[^>]*>|\{\{image[^}]*\}\})",
+        "",
+        text_without_urls,
+        flags=re.IGNORECASE,
+    )
+    question_text_char_count = len(
+        re.sub(r"\s+", "", text_without_placeholders)
+    )
+
+    sub_questions = data.get("sub_questions", []) or []
+    if isinstance(sub_questions, list) and sub_questions:
+        explicit_subquestion_count = len(sub_questions)
+    else:
+        stem = str(data.get("stem", "") or "")
+        markers = re.findall(
+            r"(?:[①②③④⑤⑥⑦⑧⑨⑩]|[（\(][1-9]\d?[）\)])",
+            stem,
+        )
+        explicit_subquestion_count = max(1, len(markers))
+
+    return {
+        "question_text_char_count": question_text_char_count,
+        "explicit_subquestion_count": explicit_subquestion_count,
+    }
+
+
 def count_choice_options(data: Dict[str, Any]) -> int:
     """统计显式 A-D 选项，仅作客观结构门控。"""
     options = str(data.get("options", "") or "")
@@ -1527,6 +1570,32 @@ def observable_multi_rule_breadth_signal(
     if not is_observable_feature_contract(model_features):
         return None
     metrics = derive_observable_metrics(model_features)
+    is_current_v6 = frozenset(model_features) == frozenset(
+        OBSERVABLE_FEATURE_FIELDS
+    )
+    if is_current_v6:
+        response_operations = set(
+            model_features.get("response_operations", [])
+        )
+        substantive_operations = response_operations - {
+            "教材事实或名称直接匹配",
+            "分类标准应用",
+            "完整命题正误辨析",
+        }
+        if not (
+            metrics["effective_task_count"] >= 4
+            and metrics["task_group_count"] >= 2
+            and metrics["response_operation_count"] >= 3
+            and len(substantive_operations) >= 2
+            and model_features.get("parallel_task_relation")
+            == "不同规则的独立任务"
+        ):
+            return None
+        return (
+            "至少四项非重复任务包含三类具体作答操作，且其中至少"
+            "两类不是教材直接匹配、固定分类或普通命题核验；"
+            "属于待回放的横向应用广度候选"
+        )
     is_historical_v4 = frozenset(model_features) == frozenset(
         OBSERVABLE_V4_FEATURE_FIELDS
     )
@@ -1804,12 +1873,13 @@ def shared_new_information_signal(
 def observable_shared_new_information_signal(
     model_features: Dict[str, Any],
 ) -> bool:
-    """V5/V4仅识别同一新关系被共享模型实际复用的高档候选。"""
+    """V6/V5/V4仅识别同一新关系被共享模型实际复用的高档候选。"""
     if (
         not isinstance(model_features, dict)
         or frozenset(model_features)
         not in {
             frozenset(OBSERVABLE_FEATURE_FIELDS),
+            frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V4_FEATURE_FIELDS),
         }
     ):
@@ -3039,6 +3109,32 @@ def add_feature_audit_flags(
                 "纵向链自检：独立任务疑似按选项累计最长链，"
                 "应只保留最高难单项自身的依赖链"
             )
+        response_operations = model_features.get(
+            "response_operations",
+            [],
+        )
+        if response_operations:
+            flags.append(
+                "具体作答操作审计：" + "、".join(response_operations)
+            )
+        cross_subject_operations = model_features.get(
+            "cross_subject_operations",
+            [],
+        )
+        if cross_subject_operations:
+            flags.append(
+                "真实跨学科依赖审计："
+                + "、".join(cross_subject_operations)
+                + "；不得仅凭非空自动升档"
+            )
+        if (
+            model_features.get("new_information_operation")
+            == "依赖题干未给出的超纲化学知识"
+        ):
+            flags.append(
+                "课程越界审计：题目依赖题干未给出的超纲化学知识；"
+                "需优先复核严重低估，但不得按陌生名称机械升档"
+            )
     if (
         VISUAL_REFERENCE_RE.search(text)
         and features.get("graph_table_requirement") == "无"
@@ -3117,20 +3213,25 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     schema_version = ""
     if observable_contract:
         observable_metrics = derive_observable_metrics(model_features)
+        observable_metrics.update(derive_question_structure_metrics(data))
         features = project_observable_to_core12(model_features)
         schema_version = observable_feature_schema_version(model_features)
         rating_result["feature_schema_version"] = schema_version
         rating_result["observable_metrics"] = observable_metrics
         rating_result["postprocess_profile"] = (
-            "chemistry_observable_v5_narrow_guard_v1"
-            if schema_version == "chemistry_observable_v5"
+            "chemistry_observable_v6_narrow_guard_v1"
+            if schema_version == "chemistry_observable_v6"
             else (
-                "chemistry_observable_v4_narrow_guard_v1"
-                if schema_version == "chemistry_observable_v4"
+                "chemistry_observable_v5_narrow_guard_v1"
+                if schema_version == "chemistry_observable_v5"
                 else (
-                    "chemistry_observable_v3_teacher_calibrated_v2"
-                    if schema_version == "chemistry_observable_v3"
-                    else "chemistry_observable_v2_teacher_distribution_v2_safe"
+                    "chemistry_observable_v4_narrow_guard_v1"
+                    if schema_version == "chemistry_observable_v4"
+                    else (
+                        "chemistry_observable_v3_teacher_calibrated_v2"
+                        if schema_version == "chemistry_observable_v3"
+                        else "chemistry_observable_v2_teacher_distribution_v2_safe"
+                    )
                 )
             )
         )
@@ -3295,10 +3396,11 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         candidate_result.get("postprocess_trace", [])
     )
     if schema_version in {
+        "chemistry_observable_v6",
         "chemistry_observable_v5",
         "chemistry_observable_v4",
     }:
-        # V5/V4专为摆脱“投影后的抽象特征再反向改档”而设计。通用
+        # V6/V5/V4专为摆脱“投影后的抽象特征再反向改档”而设计。通用
         # Core-12分支只服务V2/V3历史回放，不能成为新版输出的候选
         # 或写回来源。
         candidate_result = copy.deepcopy(rating_result)
@@ -3380,6 +3482,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             and (
                 schema_version
                 not in {
+                    "chemistry_observable_v6",
                     "chemistry_observable_v5",
                     "chemistry_observable_v4",
                 }
@@ -3576,6 +3679,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 observable_shared_new_information_signal(model_features)
                 if schema_version
                 in {
+                    "chemistry_observable_v6",
                     "chemistry_observable_v5",
                     "chemistry_observable_v4",
                 }
@@ -3596,6 +3700,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         + model_features["new_information_operation"]
                         if schema_version
                         in {
+                            "chemistry_observable_v6",
                             "chemistry_observable_v5",
                             "chemistry_observable_v4",
                         }
@@ -3607,6 +3712,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         + model_features["parallel_task_relation"]
                         if schema_version
                         in {
+                            "chemistry_observable_v6",
                             "chemistry_observable_v5",
                             "chemistry_observable_v4",
                         }
@@ -3616,6 +3722,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         "解题拓扑=" + model_features["solution_topology"]
                         if schema_version
                         in {
+                            "chemistry_observable_v6",
                             "chemistry_observable_v5",
                             "chemistry_observable_v4",
                         }
@@ -4061,6 +4168,7 @@ async def call_model_with_cache(
         for field in selected_fields
         for url in extract_image_urls(data.get(field))
     ]
+    question_structure_metrics = derive_question_structure_metrics(data)
     image_status = {
         "question_input_mode": f"text_first_image_{CHEMISTRY_IMAGE_MODE}",
         "question_text_input_used": True,
@@ -4072,6 +4180,7 @@ async def call_model_with_cache(
         "image_input_url_count": len(dict.fromkeys(selected_urls)),
         "image_selection_reasons": selection_reasons,
         "http_retry_count": 0,
+        **question_structure_metrics,
     }
 
     response_id: Optional[str] = None
@@ -4308,6 +4417,14 @@ async def process_single_question(
                     "selected_image_fields": image_status.get(
                         "image_input_fields",
                         [],
+                    ),
+                    "question_text_char_count": image_status.get(
+                        "question_text_char_count",
+                        0,
+                    ),
+                    "explicit_subquestion_count": image_status.get(
+                        "explicit_subquestion_count",
+                        1,
                     ),
                 }
                 async with FILE_LOCK:
