@@ -469,6 +469,19 @@ def derive_observable_metrics(
             len(validated["longest_solution_chain"]) >= 2
         )
 
+    if is_v3:
+        curriculum_span_summary = (
+            f"{curriculum_coupling_type}（"
+            + "、".join(curriculum_topics)
+            + "）"
+        )
+    else:
+        curriculum_span_summary = (
+            f"{curriculum_coupling_type}（"
+            + "、".join(curriculum_units)
+            + "）"
+        )
+
     return {
         "longest_chain_steps": len(
             validated["longest_solution_chain"]
@@ -482,6 +495,7 @@ def derive_observable_metrics(
         "curriculum_unit_count": len(curriculum_units),
         "curriculum_span_type": curriculum_span_type,
         "curriculum_coupling_type": curriculum_coupling_type,
+        "curriculum_span_summary": curriculum_span_summary,
         "condition_operation_count": len(
             validated["condition_operations"]
         ),

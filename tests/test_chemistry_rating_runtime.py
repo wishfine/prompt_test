@@ -884,6 +884,35 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "teacher_easy_to_basic_experiment_application",
         )
 
+    def test_experiment_application_candidate_is_not_written_back(
+        self,
+    ) -> None:
+        chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = False
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+        chemistry.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = True
+        rating = valid_rating("送分题")
+        rating["features"] = copy.deepcopy(chemistry.FEATURE_DEFAULTS)
+        rating["features"]["experiment_requirement"] = "基础操作或读数"
+
+        result = chemistry.postprocess_chemistry_difficulty(rating, {})
+
+        self.assertEqual(result["difficulty_level"], "送分题")
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "基础题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_easy_to_basic_experiment_application",
+        )
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+        self.assertIn(
+            "teacher_easy_to_basic_experiment_application",
+            result["teacher_distribution_guard_writeback_blocked_reason"],
+        )
+
     def test_teacher_guard_promotes_reported_four_fact_bundle_to_basic(
         self,
     ) -> None:

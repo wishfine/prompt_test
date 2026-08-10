@@ -132,6 +132,10 @@ class ChemistryObservableFeatureTests(unittest.TestCase):
             derived["curriculum_coupling_type"],
             "跨单元耦合",
         )
+        self.assertEqual(
+            derived["curriculum_span_summary"],
+            "跨单元耦合（U5-1、U9-3）",
+        )
         self.assertTrue(derived["has_task_dependency"])
 
     def test_v3_distinguishes_parallel_cross_unit_coverage(self) -> None:

@@ -137,12 +137,15 @@ CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = os.getenv(
     "on",
 }
 
-# V4-500逐题回放中，这两条规则分别净-4和净-1。候选动作继续保留
-# 用于审计，但即使教师分布校准总写回开关开启，也不得自动改档。
+# 已知低稳定性规则仅保留候选审计；即使教师分布校准总写回开关开启，
+# 也不得自动改档。实验基础操作规则在V5-500中净收益为0；横向广度
+# 新规则尚未经过独立回放，均不能直接写回。
 TEACHER_GUARD_AUDIT_ONLY_RULES = frozenset(
     {
         "teacher_hard_to_final_deep_quantitative_chain",
         "teacher_medium_to_hard_shared_new_information",
+        "teacher_easy_to_basic_experiment_application",
+        "teacher_basic_to_medium_multi_rule_breadth_candidate",
     }
 )
 if (
@@ -1377,6 +1380,32 @@ def reported_four_fact_bundle_floor_signal(
     ):
         return "模型理由已明确报告四项非重复事实核验，建立基础题下限"
     return None
+
+
+def observable_multi_rule_breadth_signal(
+    model_features: Dict[str, Any],
+) -> Optional[str]:
+    """识别可审计的横向广度候选，不直接作为自动升档依据。
+
+    仅接受模型已逐项列出的任务组、规则族和课题关系；必须同时存在
+    至少四项非重复实质任务、两类规则以及“不同规则的独立任务”。
+    这避免把四个同规则选项、题干篇幅或单纯跨单元覆盖误当作中等题。
+    """
+    if not is_observable_feature_contract(model_features):
+        return None
+    metrics = derive_observable_metrics(model_features)
+    if not (
+        metrics["effective_task_count"] >= 4
+        and metrics["task_group_count"] >= 2
+        and metrics["rule_family_count"] >= 2
+        and model_features.get("parallel_task_relation")
+        == "不同规则的独立任务"
+    ):
+        return None
+    return (
+        "至少四项非重复实质任务覆盖两类规则，"
+        "属于横向广度候选"
+    )
 
 
 def measuring_cylinder_error_chain_signal(
@@ -2811,9 +2840,17 @@ def add_feature_audit_flags(
         core_basis = str(
             rating_result.get("reasoning", {}).get("core_basis", "")
         )
+        core_basis_without_negative_same_unit = re.sub(
+            r"(?:不(?:属于)?|非)同(?:一)?单元",
+            "",
+            core_basis,
+        )
         if (
             observable_metrics["curriculum_span_type"] == "跨单元"
-            and re.search(r"同(?:一)?单元", core_basis)
+            and re.search(
+                r"同(?:一)?单元(?:跨课题)?(?:并列|耦合|相邻课题)?",
+                core_basis_without_negative_same_unit,
+            )
         ):
             flags.append(
                 "课程跨度自检：curriculum_topics含不同U前缀却写成同单元"
@@ -3108,6 +3145,9 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     measuring_cylinder_error_chain = (
         measuring_cylinder_error_chain_signal(data)
     )
+    multi_rule_breadth = observable_multi_rule_breadth_signal(
+        model_features
+    ) if observable_contract else None
     reaction_floor = reaction_validation_floor_signal(data)
     if teacher_guard_active:
         if (
@@ -3191,6 +3231,17 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 "结构边界窄校准：量筒俯仰视需完成示数—实际体积—误差方向连续推导",
                 rule="teacher_basic_to_medium_measuring_cylinder_error_chain",
                 evidence=[measuring_cylinder_error_chain],
+            )
+        elif (
+            raw_level == "基础题"
+            and multi_rule_breadth
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "中等题",
+                "横向广度候选：多项非重复任务需切换多类化学规则",
+                rule="teacher_basic_to_medium_multi_rule_breadth_candidate",
+                evidence=[multi_rule_breadth],
             )
         elif (
             raw_level == "基础题"
@@ -3462,7 +3513,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result[
         "teacher_distribution_guard_writeback_blocked_reason"
     ] = (
-        "V4回放净负收益，规则仅保留候选审计："
+        "V4回放净负收益或独立回放不足，规则仅保留候选审计："
         + teacher_guard_writeback_blocked_rule
         if teacher_guard_writeback_blocked_rule
         else ""

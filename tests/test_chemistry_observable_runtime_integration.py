@@ -226,6 +226,83 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
             )
         )
 
+    def test_cross_unit_audit_ignores_negated_same_unit_phrase(
+        self,
+    ) -> None:
+        item = rating("基础题")
+        item["features"] = observable_v3_features()
+        item["features"].update(
+            {
+                "curriculum_topics": ["U2-2", "U7-1"],
+                "parallel_task_relation": "同一规则下多个对象",
+            }
+        )
+        item["reasoning"]["core_basis"] = (
+            "覆盖U2-2和U7-1两个不同单元的并列课题，"
+            "不构成共享模型。"
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(item, {})
+
+        self.assertEqual(
+            result["observable_metrics"]["curriculum_span_summary"],
+            "跨单元并列（U2-2、U7-1）",
+        )
+        self.assertFalse(
+            any(
+                "不同U前缀却写成同单元" in flag
+                for flag in result["feature_audit_flags"]
+            )
+        )
+
+    def test_multi_rule_breadth_is_candidate_only_with_writeback_on(
+        self,
+    ) -> None:
+        item = rating("基础题")
+        item["features"] = observable_v3_features()
+        item["features"].update(
+            {
+                "longest_solution_chain": ["分别完成各类规则应用"],
+                "task_groups": [
+                    {"task_type": "直接事实与概念", "count": 2},
+                    {"task_type": "化学用语", "count": 2},
+                ],
+                "rule_families": ["直接事实与概念", "化学用语"],
+                "curriculum_topics": ["U3-2", "U4-3"],
+                "parallel_task_relation": "不同规则的独立任务",
+                "reaction_structure": "无反应任务",
+                "representation_operations": [],
+                "evidence_operations": ["单证据直接匹配"],
+                "calculation_operations": [],
+            }
+        )
+        old_enabled = self.runtime.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS
+        old_writeback = (
+            self.runtime.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
+        )
+        try:
+            self.runtime.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = True
+            self.runtime.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = True
+            result = self.runtime.postprocess_chemistry_difficulty(item, {})
+        finally:
+            self.runtime.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS = old_enabled
+            self.runtime.CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = (
+                old_writeback
+            )
+
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "中等题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_basic_to_medium_multi_rule_breadth_candidate",
+        )
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+
     def test_observable_chain_drives_basic_to_medium_candidate(self) -> None:
         item = rating("基础题")
         item["features"]["longest_solution_chain"] = [
@@ -357,6 +434,7 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
             "跨单元并列",
             "跨单元耦合",
             "不同U前缀绝不能写成同单元",
+            "课程跨度正式摘要由程序从curriculum_topics派生",
         ):
             self.assertIn(anchor, prompt)
 
