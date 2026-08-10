@@ -192,7 +192,8 @@ def build_run_config(
         "seed": seed,
         "num": num,
         "feature_schema_version": junior_schema.FEATURE_SCHEMA_VERSION,
-        "postprocess_mode": "candidate_only_no_writeback",
+        "structured_output_mode": "forced_function_call_strict_json_schema",
+        "postprocess_mode": "deterministic_teacher_floor_writeback",
     }
 
 
@@ -562,6 +563,26 @@ def parse_model_response(response_text: str) -> Dict[str, Any]:
     return {}
 
 
+def extract_rating_from_response(result: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
+    """优先读取强制函数调用参数；普通文本仅作为兼容性失败证据。"""
+    output_text = ""
+    for item in result.get("output", []):
+        if (
+            item.get("type") == "function_call"
+            and item.get("name") == junior_schema.TOOL_NAME
+        ):
+            arguments = item.get("arguments", "")
+            if isinstance(arguments, dict):
+                return arguments, json.dumps(arguments, ensure_ascii=False)
+            if isinstance(arguments, str):
+                return parse_model_response(arguments), arguments
+        if item.get("type") == "message":
+            for content_item in item.get("content", []):
+                if content_item.get("type") == "output_text":
+                    output_text = content_item.get("text", "")
+    return parse_model_response(output_text), output_text
+
+
 async def call_model_with_cache(
     data: Dict[str, Any],
     session: aiohttp.ClientSession,
@@ -624,6 +645,12 @@ async def call_model_with_cache(
             "model": MODEL_NAME,
             "input": [{"role": "user", "content": request_content}],
             "thinking": {"type": "disabled"},
+            "tools": [junior_schema.rating_tool_definition()],
+            "tool_choice": {
+                "type": "function",
+                "name": junior_schema.TOOL_NAME,
+            },
+            "parallel_tool_calls": False,
         }
         if USE_CACHE:
             payload["previous_response_id"] = response_id
@@ -639,18 +666,11 @@ async def call_model_with_cache(
             ) as response:
                 if response.status == 200:
                     result = await response.json()
-                    output_text = ""
-                    if "output" in result:
-                        for item in result["output"]:
-                            if item.get("type") == "message" and "content" in item:
-                                for content_item in item["content"]:
-                                    if content_item.get("type") == "output_text":
-                                        output_text = content_item.get("text", "")
+                    parsed_result, output_text = extract_rating_from_response(result)
                     usage = result.get("usage", {})
                     prompt_tokens = usage.get("input_tokens", 0)
                     completion_tokens = usage.get("output_tokens", 0)
                     total_tokens = usage.get("total_tokens", 0)
-                    parsed_result = parse_model_response(output_text)
                     image_status["image_input_used"] = bool(selected_fields)
                     return (
                         parsed_result,

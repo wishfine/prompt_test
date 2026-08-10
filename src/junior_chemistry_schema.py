@@ -1,4 +1,4 @@
-"""初中化学教师口径特征契约与审计型后处理。"""
+"""初中化学教师口径特征契约、结构化输出 schema 与审计后处理。"""
 
 from __future__ import annotations
 
@@ -7,142 +7,118 @@ import re
 from pathlib import Path
 from typing import Any
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v4"
+
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v9"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
+TOOL_NAME = "submit_junior_chemistry_rating"
 
-LEVELS = {"送分题", "基础题", "中等题", "拔高题", "压轴题"}
-STEPS = {"1步", "2-3步", "4步及以上"}
-CALCULATION_STEPS = {"无", *STEPS}
-RELATIONS = {"单项任务", "多项独立", "前后依赖"}
-SCOPES = {"within_junior", "out_of_scope"}
+LEVELS = ("送分题", "基础题", "中等题", "拔高题", "压轴题")
+SCOPES = ("within_junior", "out_of_scope")
+LEVEL_INDEX = {level: index for index, level in enumerate(LEVELS)}
 
-ENUMS = {
-    "task_types": {
-        "直接识记", "概念辨析与应用", "性质与用途判断", "信息读取与整理",
-        "反应与转化分析", "实验操作与装置分析", "实验探究与方案评价",
-        "物质鉴别推断与除杂", "化学用语与方程式书写", "定量计算",
-        "解释与规范表达",
-    },
-    "information_processing": {
-        "文字材料提取", "实验装置图分析", "流程图分析", "表格数据比较",
-        "曲线读取", "图像分段分析", "微观示意图分析",
-        "原子结构示意图分析", "元素周期表信息读取",
-    },
-    "reaction_processes": {
-        "单一反应判断", "连续反应转化", "反应条件选择", "反应先后判断",
-        "过量或不足判断", "物质鉴别或推断", "除杂或分离",
-    },
-    "experiment_tasks": {
-        "基本操作判断", "装置选择", "装置作用分析", "装置连接顺序", "现象判断",
-        "原因解释", "控制变量", "根据现象得出结论", "根据结论设计操作",
-        "根据数据得出结论", "根据结论推断现象", "实验方案设计",
-        "实验方案评价", "实验改进", "误差分析", "试剂选择", "物质检验与鉴别",
-    },
-    "calculation_types": {
-        "化学方程式计算", "相对分子质量与元素质量计算", "溶质质量分数",
-        "反应后溶液质量", "反应后沉淀或气体质量", "含杂质计算",
-        "图像分段计算", "化合价计算", "溶解度相关计算", "其他课内定量计算",
-    },
-    "special_methods": {
-        "质量守恒", "元素守恒", "差量法", "极值法", "分情况计算", "多方程式联立",
-    },
-    "hidden_conditions": {
-        "前后对象要求", "反应条件", "过量或不足", "反应先后", "纯净或干燥要求",
-        "杂质或气体损失", "图像拐点或分段", "溶液状态或溶剂变化",
-    },
-    "interference_points": {
-        "易混概念", "选项多规则切换", "规范表述易错", "特例或边界",
-        "干扰数据", "体系质量变化易错",
-    },
-    "expression_requirements": {
-        "化学符号自主书写", "化学方程式自主书写", "实验现象规范描述",
-        "原因规范表达", "结论规范表达", "仪器或操作名称自主书写",
-        "试剂名称自主书写",
-    },
-    "unfamiliar_materials": {
-        "课内拓展物质且给足信息", "陌生物质信息推断", "陌生装置或材料信息提取",
-    },
-    "interdisciplinary_context": {"物理-化学", "生物-化学", "社会生活背景"},
-}
-
-# 只收录语义确定、不会改变题目难度判断的同义表达。
-# None 表示该值误放在当前字段，规范化时删除并留下审计记录。
-ENUM_ALIASES: dict[str, dict[str, str | None]] = {
-    "task_types": {
-        "概念辨析": "概念辨析与应用",
-        "信息提取": "信息读取与整理",
-        "性质用途判断": "性质与用途判断",
-        "化学用语书写": "化学用语与方程式书写",
-        "方程式书写配平": "化学用语与方程式书写",
-        "实验操作判断": "实验操作与装置分析",
-        "装置分析": "实验操作与装置分析",
-        "仪器识别": "实验操作与装置分析",
-        "装置选择": "实验操作与装置分析",
-        "装置作用分析": "实验操作与装置分析",
-        "现象判断与解释": "解释与规范表达",
-        "原因解释": "解释与规范表达",
-        "原因规范表达": "解释与规范表达",
-        "结论规范表达": "解释与规范表达",
-        "根据现象得出结论": "实验探究与方案评价",
-        "根据结论设计操作": "实验探究与方案评价",
-        "实验方案设计": "实验探究与方案评价",
-        "实验操作设计": "实验探究与方案评价",
-        "实验方案评价": "实验探究与方案评价",
-        "方案评价": "实验探究与方案评价",
-        "方案评价或改进": "实验探究与方案评价",
-        "控制变量": "实验探究与方案评价",
-        "误差分析": "实验探究与方案评价",
-        "实验误差分析": "实验探究与方案评价",
-        "物质推断": "物质鉴别推断与除杂",
-        "物质成分推断": "物质鉴别推断与除杂",
-        "物质鉴别": "物质鉴别推断与除杂",
-        "物质检验": "物质鉴别推断与除杂",
-        "物质鉴别或推断": "物质鉴别推断与除杂",
-        "除杂或分离": "物质鉴别推断与除杂",
-        "试剂选择": "物质鉴别推断与除杂",
-        "计算": "定量计算",
-        "化合价计算": "定量计算",
-        "相对分子质量与元素质量计算": "定量计算",
-        "溶解度应用": "定量计算",
-        "反应过程判断": "反应与转化分析",
-        "反应过程分析": "反应与转化分析",
-        "反应类型判断": "反应与转化分析",
-        "反应先后判断": "反应与转化分析",
-        "催化剂作用判断": "概念辨析与应用",
-        "曲线读取": "信息读取与整理",
-        "图像分段分析": "信息读取与整理",
-    },
-    "information_processing": {
-        "元素周期表初步": "元素周期表信息读取",
-    },
-    "experiment_tasks": {
-        "根据结论反推操作": "根据结论设计操作",
-        "根据数据得出结论": "根据数据得出结论",
-        "根据结论推断现象": "根据结论推断现象",
-        "物质鉴别或推断": "物质检验与鉴别",
-        "试剂选择": "试剂选择",
-        "根据结论规范表达": None,
-    },
-    "calculation_types": {
-        "反应后沉淀质量计算": "反应后沉淀或气体质量",
-    },
-    "hidden_conditions": {
-        "饱和溶液要求": "溶液状态或溶剂变化",
-        "饱和溶液不能再溶解原溶质": "溶液状态或溶剂变化",
-        "生石灰消耗溶剂水": "溶液状态或溶剂变化",
-        "元素守恒": None,
-    },
-    "interference_points": {
-        "反应前后固体质量变化对溶液的影响": "体系质量变化易错",
-    },
-    "expression_requirements": {
-        "仪器名称自主书写": "仪器或操作名称自主书写",
-        "仪器名称书写": "仪器或操作名称自主书写",
-        "操作名称规范填写": "仪器或操作名称自主书写",
-        "试剂名称规范书写": "试剂名称自主书写",
-        "化学用语自主书写": "化学符号自主书写",
-        "化学式自主书写": "化学符号自主书写",
-    },
+# 30 个细粒度核心特征均为单选枚举。顺序同时用于 Prompt 文档测试和 JSON Schema。
+# 具体知识点另由受控 topic_id 列表表达，避免把知识内容压成抽象标签。
+FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
+    "task_count": ("1项", "2-3项", "4项及以上"),
+    "knowledge_distribution": (
+        "单一知识点", "同知识点重复判断", "同单元不同知识点",
+        "跨单元不同知识点", "多单元综合",
+    ),
+    "chemical_object_distribution": (
+        "无明确化学对象", "单一化学对象", "同类多个化学对象",
+        "不同类多个化学对象", "多类化学对象综合",
+    ),
+    "step_count": (
+        "0步（直接识记）", "1步", "2-3步", "4-5步", "6步及以上",
+    ),
+    "task_relation": ("单项任务", "多项独立", "前后依赖", "多条任务链汇合"),
+    "solution_method": (
+        "直接识记或辨认", "一条规则直接应用", "多条规则分别判断",
+        "连续推导", "定性与定量联合",
+    ),
+    "classification_discussion": ("无", "单一情况讨论", "多情况分类讨论"),
+    "reverse_tracing": ("无", "有"),
+    "visual_content": (
+        "无图片信息", "仪器图", "基础装置图", "微观示意图", "数据表格",
+        "反应流程图", "工业流程图", "曲线图", "多组对比实验表格",
+        "多装置组合实验图", "多种图像综合",
+    ),
+    "visual_item_count": ("无图片", "1幅", "2-3幅", "4幅及以上"),
+    "visual_complexity": (
+        "无图片信息", "单一同类型图像", "多个同类型图像",
+        "多个不同类型图像", "复杂高难图像",
+    ),
+    "information_operation": (
+        "无需额外提取", "直接读取一个信息", "比较或整理多条信息",
+        "由图表变化推断", "图像拐点或分段分析", "多来源信息筛选联合",
+    ),
+    "reaction_count": ("0个", "1个", "2-3个", "4个及以上"),
+    "reaction_relation": (
+        "无反应关系", "单一反应", "多个反应并列", "多个反应连续",
+        "反应先后或过量不足", "分情况或竞争反应",
+    ),
+    "experiment_operation": (
+        "无", "仪器识别或名称", "基本操作或读数判断", "装置选择或连接",
+        "气体检验或验满", "试剂选择或物质检验", "多项实验操作联合",
+    ),
+    "experiment_analysis": (
+        "无", "实验现象判断", "装置作用或实验目的", "实验原因解释",
+        "控制变量", "根据现象或数据得出结论", "多个实验分析任务联合",
+    ),
+    "experiment_design": (
+        "无", "补充实验步骤或操作", "根据结论设计操作", "实验方案设计",
+        "实验方案评价", "实验改进", "多阶段探究设计",
+    ),
+    "error_analysis": (
+        "无", "量筒读数误差", "天平称量误差", "实验操作导致误差",
+        "装置或方案导致误差", "定量实验误差分析", "多种误差联合分析",
+    ),
+    "calculation_type": (
+        "无", "化合价或化学式计算", "相对分子质量或元素质量计算",
+        "化学方程式计算", "溶质质量分数或稀释计算", "溶解度计算",
+        "反应后气体沉淀固体质量", "反应后溶液或溶质质量",
+        "含杂质计算", "图像分段计算", "实验误差定量计算", "多类计算综合",
+    ),
+    "calculation_steps": ("无", "1步", "2-3步", "4步及以上"),
+    "calculation_structure": (
+        "无任何计算", "一步或口算", "单个化学方程式计算",
+        "多个化学反应计算", "含杂质多步质量分数",
+        "实验误差定量计算", "多模型综合计算",
+    ),
+    "special_method": (
+        "无", "质量守恒", "元素守恒", "差量法", "极值法",
+        "分情况计算", "多方程式联立", "循环反应计算", "多种特殊方法联合",
+    ),
+    "hidden_condition_count": ("0个", "1个", "2个", "3个及以上"),
+    "hidden_condition_type": (
+        "无", "前后对象要求", "反应条件", "过量或不足", "反应先后",
+        "物质或溶液状态", "纯净干燥或杂质", "气体水分或质量损失",
+        "图像拐点或分段", "剩余物或变质程度", "多类条件联合",
+    ),
+    "condition_relation": (
+        "无条件限制", "单一条件", "多个独立条件",
+        "多个关联条件", "多层嵌套条件",
+    ),
+    "interference_type": (
+        "无", "易混概念", "多个选项规则切换", "规范表述易错",
+        "干扰数据", "特例或边界", "体系质量关系易错",
+        "多种剩余情况或竞争解释",
+    ),
+    "expression_type": (
+        "无", "元素离子符号或化学式书写", "仪器操作或试剂名称书写",
+        "化学方程式书写", "实验现象或操作规范描述",
+        "原因或结论规范表达", "计算过程书写", "多类规范表达联合",
+    ),
+    "subjective_response": ("无", "有"),
+    "given_information": (
+        "题干未提供新增规则", "题干给出一条新事实或规则",
+        "题干给出多条新事实或规则", "题干给出陌生物质或反应资料",
+        "题干给出陌生装置流程或材料资料",
+    ),
+    "cross_subject": (
+        "无", "古文或文言理解", "物理知识参与", "生物知识参与",
+        "生产流程或工程信息参与", "多学科信息参与",
+    ),
 }
 
 
@@ -178,6 +154,63 @@ def curriculum_catalog_text() -> str:
     )
 
 
+def _object_schema(properties: dict[str, Any], required: tuple[str, ...] | list[str]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(required),
+        "additionalProperties": False,
+    }
+
+
+def rating_json_schema() -> dict[str, Any]:
+    """生成服务端约束和本地测试共用的唯一 JSON Schema。"""
+    topic_ids = tuple(load_curriculum_topics())
+    feature_properties: dict[str, Any] = {
+        "knowledge": _object_schema({
+            "topic_ids": {
+                "type": "array",
+                "items": {"type": "string", "enum": list(topic_ids)},
+            },
+        }, ("topic_ids",)),
+    }
+    for field, options in FEATURE_OPTIONS.items():
+        feature_properties[field] = {"type": "string", "enum": list(options)}
+    feature_properties["curriculum_scope"] = _object_schema({
+        "scope": {"type": "string", "enum": list(SCOPES)},
+        "extra_points": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+    }, ("scope", "extra_points"))
+
+    reasoning_fields = (
+        "knowledge_points", "solution_process", "main_difficulty_factors", "level_basis",
+    )
+    return _object_schema({
+        "features": _object_schema(
+            feature_properties,
+            ("knowledge", *FEATURE_OPTIONS.keys(), "curriculum_scope"),
+        ),
+        "reasoning": _object_schema(
+            {field: {"type": "string"} for field in reasoning_fields},
+            reasoning_fields,
+        ),
+        "difficulty_level": {"type": "string", "enum": list(LEVELS)},
+    }, ("features", "reasoning", "difficulty_level"))
+
+
+def rating_tool_definition() -> dict[str, Any]:
+    """Responses API 强制提交评级结果的函数工具定义。"""
+    return {
+        "type": "function",
+        "name": TOOL_NAME,
+        "description": "提交初中化学难度评级。所有特征必须直接选择受控枚举。",
+        "parameters": rating_json_schema(),
+        "strict": True,
+    }
+
+
 def _exact_dict(value: Any, expected: set[str], name: str) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != expected:
         actual = set(value) if isinstance(value, dict) else set()
@@ -188,284 +221,23 @@ def _exact_dict(value: Any, expected: set[str], name: str) -> dict[str, Any]:
     return value
 
 
-def _string_list(value: Any, name: str, *, required: bool = False) -> list[str]:
+def _string_list(value: Any, name: str) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise ChemistrySchemaError(f"{name}必须是字符串数组")
-    result = list(dict.fromkeys(item.strip() for item in value if item.strip()))
-    if required and not result:
-        raise ChemistrySchemaError(f"{name}不得为空")
-    return result
-
-
-def _enum_list(value: Any, name: str, enum_name: str) -> list[str]:
-    result = _string_list(value, name, required=True)
-    if result == ["无"]:
-        return result
-    if "无" in result:
-        raise ChemistrySchemaError(f"{name}的“无”不能与其他枚举并列")
-    invalid = [item for item in result if item not in ENUMS[enum_name]]
-    if invalid:
-        raise ChemistrySchemaError(f"{name}存在非法枚举: {invalid}")
-    return result
-
-
-def _has_any(items: list[str]) -> bool:
-    return items != ["无"]
-
-
-def _record_action(
-    actions: list[dict[str, Any]],
-    *,
-    path: str,
-    original: Any,
-    normalized: Any,
-    reason: str,
-) -> None:
-    if original == normalized:
-        return
-    actions.append({
-        "path": path,
-        "original": copy.deepcopy(original),
-        "normalized": copy.deepcopy(normalized),
-        "reason": reason,
-        "difficulty_level_changed": False,
-    })
-
-
-def _canonicalize_values(
-    value: Any,
-    *,
-    path: str,
-    enum_name: str,
-    actions: list[dict[str, Any]],
-) -> Any:
-    if not isinstance(value, list):
-        return value
-    aliases = ENUM_ALIASES.get(enum_name, {})
-    normalized: list[Any] = []
-    for item in value:
-        replacement = aliases.get(item, item)
-        if replacement is not None and replacement not in normalized:
-            normalized.append(replacement)
-    if "无" in normalized and len(normalized) > 1:
-        normalized = [item for item in normalized if item != "无"]
-    if not normalized:
-        normalized = ["无"]
-    _record_action(
-        actions,
-        path=path,
-        original=value,
-        normalized=normalized,
-        reason="受控枚举同义表达归一化",
-    )
-    return normalized
-
-
-def normalize_rating_contract(value: Any) -> tuple[Any, list[dict[str, Any]]]:
-    """只规范字段位置、枚举同义词和冗余标记，不修改难度等级。"""
-    normalized = copy.deepcopy(value)
-    actions: list[dict[str, Any]] = []
-    if not isinstance(normalized, dict):
-        return normalized, actions
-
-    features = normalized.get("features")
-    if isinstance(features, dict):
-        for field in ("question_context", "curriculum_scope"):
-            if field in normalized and field not in features:
-                original = normalized.pop(field)
-                features[field] = original
-                _record_action(
-                    actions,
-                    path=field,
-                    original="top_level",
-                    normalized=f"features.{field}",
-                    reason="固定字段位置归一化",
-                )
-
-        knowledge = features.get("knowledge")
-        if isinstance(knowledge, dict) and isinstance(knowledge.get("topic_ids"), list):
-            known_topics = load_curriculum_topics()
-            original_ids = knowledge["topic_ids"]
-            valid_ids = [topic_id for topic_id in original_ids if topic_id in known_topics]
-            if valid_ids and valid_ids != original_ids:
-                knowledge["topic_ids"] = list(dict.fromkeys(valid_ids))
-                _record_action(
-                    actions,
-                    path="features.knowledge.topic_ids",
-                    original=original_ids,
-                    normalized=knowledge["topic_ids"],
-                    reason="删除受控教材目录中不存在的topic_id；保留其余合法知识点",
-                )
-
-        solution = features.get("solution_process")
-        if isinstance(solution, dict):
-            solution["task_types"] = _canonicalize_values(
-                solution.get("task_types"),
-                path="features.solution_process.task_types",
-                enum_name="task_types",
-                actions=actions,
-            )
-        list_fields = (
-            ("information_processing", "information_processing"),
-            ("experiment_tasks", "experiment_tasks"),
-            ("expression_requirements", "expression_requirements"),
-        )
-        for field, enum_name in list_fields:
-            features[field] = _canonicalize_values(
-                features.get(field),
-                path=f"features.{field}",
-                enum_name=enum_name,
-                actions=actions,
-            )
-
-        reactions = features.get("reaction_processes")
-        if isinstance(reactions, dict):
-            reactions["processes"] = _canonicalize_values(
-                reactions.get("processes"),
-                path="features.reaction_processes.processes",
-                enum_name="reaction_processes",
-                actions=actions,
-            )
-            expected = (
-                isinstance(reactions.get("processes"), list)
-                and "反应条件选择" in reactions["processes"]
-            )
-            original = reactions.get("requires_condition_selection")
-            if isinstance(original, bool) and original != expected:
-                reactions["requires_condition_selection"] = expected
-                _record_action(
-                    actions,
-                    path="features.reaction_processes.requires_condition_selection",
-                    original=original,
-                    normalized=expected,
-                    reason="由反应条件选择枚举统一冗余布尔标记",
-                )
-
-        calculation = features.get("calculation")
-        if isinstance(calculation, dict):
-            calculation["types"] = _canonicalize_values(
-                calculation.get("types"),
-                path="features.calculation.types",
-                enum_name="calculation_types",
-                actions=actions,
-            )
-            calculation["special_methods"] = _canonicalize_values(
-                calculation.get("special_methods"),
-                path="features.calculation.special_methods",
-                enum_name="special_methods",
-                actions=actions,
-            )
-            task_types = solution.get("task_types") if isinstance(solution, dict) else None
-            signals_calculation = any((
-                calculation.get("has_calculation") is True,
-                calculation.get("calculation_steps") in STEPS,
-                _has_any(calculation.get("types")) if isinstance(calculation.get("types"), list) else False,
-                _has_any(calculation.get("special_methods")) if isinstance(calculation.get("special_methods"), list) else False,
-                isinstance(task_types, list) and "定量计算" in task_types,
-            ))
-            if isinstance(calculation.get("has_calculation"), bool) and calculation["has_calculation"] != signals_calculation:
-                original = calculation["has_calculation"]
-                calculation["has_calculation"] = signals_calculation
-                _record_action(
-                    actions,
-                    path="features.calculation.has_calculation",
-                    original=original,
-                    normalized=signals_calculation,
-                    reason="由计算任务、步数和类型统一冗余布尔标记",
-                )
-            if signals_calculation:
-                if isinstance(task_types, list) and "定量计算" not in task_types:
-                    original = list(task_types)
-                    task_types.append("定量计算")
-                    _record_action(
-                        actions,
-                        path="features.solution_process.task_types",
-                        original=original,
-                        normalized=task_types,
-                        reason="计算字段与一级任务类别一致化",
-                    )
-                if calculation.get("calculation_steps") == "无":
-                    calculation["calculation_steps"] = "1步"
-                    _record_action(
-                        actions,
-                        path="features.calculation.calculation_steps",
-                        original="无",
-                        normalized="1步",
-                        reason="存在明确计算任务时补足最低计算步数",
-                    )
-                if calculation.get("types") == ["无"]:
-                    calculation["types"] = ["其他课内定量计算"]
-                    _record_action(
-                        actions,
-                        path="features.calculation.types",
-                        original=["无"],
-                        normalized=["其他课内定量计算"],
-                        reason="存在明确计算任务但模型未细分计算类型",
-                    )
-
-        conditions = features.get("difficulty_conditions")
-        if isinstance(conditions, dict):
-            conditions["hidden_conditions"] = _canonicalize_values(
-                conditions.get("hidden_conditions"),
-                path="features.difficulty_conditions.hidden_conditions",
-                enum_name="hidden_conditions",
-                actions=actions,
-            )
-            conditions["interference_points"] = _canonicalize_values(
-                conditions.get("interference_points"),
-                path="features.difficulty_conditions.interference_points",
-                enum_name="interference_points",
-                actions=actions,
-            )
-
-        context = features.get("question_context")
-        if isinstance(context, dict):
-            for field, enum_name in (
-                ("unfamiliar_materials", "unfamiliar_materials"),
-                ("interdisciplinary_context", "interdisciplinary_context"),
-            ):
-                context[field] = _canonicalize_values(
-                    context.get(field),
-                    path=f"features.question_context.{field}",
-                    enum_name=enum_name,
-                    actions=actions,
-                )
-
-    reasoning = normalized.get("reasoning")
-    if isinstance(reasoning, dict):
-        extras = []
-        for field, label in (("why_not_lower", "为什么不更低"), ("why_not_higher", "为什么不更高")):
-            if str(reasoning.get(field, "")).strip():
-                extras.append(f"{label}：{str(reasoning.pop(field)).strip()}")
-        if extras and "level_basis" in reasoning:
-            original = reasoning["level_basis"]
-            reasoning["level_basis"] = "；".join([str(original).strip(), *extras])
-            _record_action(
-                actions,
-                path="reasoning.level_basis",
-                original=original,
-                normalized=reasoning["level_basis"],
-                reason="相邻档理由合并到固定reasoning字段",
-            )
-    return normalized, actions
+    stripped = [item.strip() for item in value if item.strip()]
+    if len(stripped) != len(set(stripped)):
+        raise ChemistrySchemaError(f"{name}不得包含重复值")
+    return stripped
 
 
 def validate_rating_contract(value: Any) -> dict[str, Any]:
+    """严格接受工具 schema 的原始输出；不猜测、不补词、不做近义映射。"""
     value = _exact_dict(value, {"features", "reasoning", "difficulty_level"}, "顶层")
     if value["difficulty_level"] not in LEVELS:
         raise ChemistrySchemaError("difficulty_level非法")
 
-    features = _exact_dict(
-        value["features"],
-        {
-            "knowledge", "solution_process", "information_processing",
-            "reaction_processes", "experiment_tasks", "calculation",
-            "difficulty_conditions", "expression_requirements",
-            "question_context", "curriculum_scope",
-        },
-        "features",
-    )
-
+    expected_features = {"knowledge", *FEATURE_OPTIONS.keys(), "curriculum_scope"}
+    features = _exact_dict(value["features"], expected_features, "features")
     knowledge = _exact_dict(features["knowledge"], {"topic_ids"}, "knowledge")
     topic_ids = _string_list(knowledge["topic_ids"], "knowledge.topic_ids")
     topics = load_curriculum_topics()
@@ -473,142 +245,39 @@ def validate_rating_contract(value: Any) -> dict[str, Any]:
     if unknown:
         raise ChemistrySchemaError(f"未收录topic_id: {unknown}")
 
-    solution = _exact_dict(
-        features["solution_process"],
-        {"step_count", "task_types", "key_steps", "task_relation"},
-        "solution_process",
-    )
-    if solution["step_count"] not in STEPS:
-        raise ChemistrySchemaError("solution_process.step_count枚举非法")
-    if solution["task_relation"] not in RELATIONS:
-        raise ChemistrySchemaError("solution_process.task_relation枚举非法")
-    task_types = _enum_list(solution["task_types"], "solution_process.task_types", "task_types")
-    key_steps = _string_list(solution["key_steps"], "solution_process.key_steps", required=True)
-    if task_types == ["无"]:
-        raise ChemistrySchemaError("solution_process.task_types不能为['无']")
-    if solution["task_relation"] == "单项任务" and len(task_types) != 1:
-        raise ChemistrySchemaError("单项任务只能有一个task_type")
+    validated_features: dict[str, Any] = {"knowledge": {"topic_ids": topic_ids}}
+    for field, options in FEATURE_OPTIONS.items():
+        raw = features[field]
+        if not isinstance(raw, str) or raw not in options:
+            raise ChemistrySchemaError(
+                f"features.{field}非法值{raw!r}；允许值={list(options)}"
+            )
+        validated_features[field] = raw
 
-    information = _enum_list(
-        features["information_processing"], "information_processing", "information_processing"
+    scope = _exact_dict(
+        features["curriculum_scope"], {"scope", "extra_points"}, "curriculum_scope"
     )
-    reactions = _exact_dict(
-        features["reaction_processes"],
-        {"processes", "requires_condition_selection"},
-        "reaction_processes",
-    )
-    reaction_items = _enum_list(
-        reactions["processes"], "reaction_processes.processes", "reaction_processes"
-    )
-    if not isinstance(reactions["requires_condition_selection"], bool):
-        raise ChemistrySchemaError("requires_condition_selection必须为布尔值")
-    if reactions["requires_condition_selection"] and "反应条件选择" not in reaction_items:
-        raise ChemistrySchemaError("需要选择反应条件时processes必须包含“反应条件选择”")
-    if not reactions["requires_condition_selection"] and "反应条件选择" in reaction_items:
-        raise ChemistrySchemaError("processes包含“反应条件选择”时布尔标记必须为true")
-
-    experiment_tasks = _enum_list(
-        features["experiment_tasks"], "experiment_tasks", "experiment_tasks"
-    )
-    calculation = _exact_dict(
-        features["calculation"],
-        {"has_calculation", "calculation_steps", "types", "special_methods"},
-        "calculation",
-    )
-    if not isinstance(calculation["has_calculation"], bool):
-        raise ChemistrySchemaError("calculation.has_calculation必须为布尔值")
-    if calculation["calculation_steps"] not in CALCULATION_STEPS:
-        raise ChemistrySchemaError("calculation.calculation_steps枚举非法")
-    calculation_types = _enum_list(calculation["types"], "calculation.types", "calculation_types")
-    special_methods = _enum_list(
-        calculation["special_methods"], "calculation.special_methods", "special_methods"
-    )
-    if calculation["has_calculation"]:
-        if calculation["calculation_steps"] == "无" or calculation_types == ["无"]:
-            raise ChemistrySchemaError("有计算时必须填写计算步数和计算类型")
-    elif calculation["calculation_steps"] != "无" or calculation_types != ["无"] or special_methods != ["无"]:
-        raise ChemistrySchemaError("无计算时calculation_steps必须为“无”，types和special_methods必须为['无']")
-    if calculation["has_calculation"] != ("定量计算" in task_types):
-        raise ChemistrySchemaError("has_calculation必须与task_types中的“定量计算”一致")
-
-    conditions = _exact_dict(
-        features["difficulty_conditions"],
-        {"hidden_conditions", "interference_points"},
-        "difficulty_conditions",
-    )
-    hidden_conditions = _enum_list(
-        conditions["hidden_conditions"], "difficulty_conditions.hidden_conditions", "hidden_conditions"
-    )
-    interference_points = _enum_list(
-        conditions["interference_points"], "difficulty_conditions.interference_points", "interference_points"
-    )
-    expression = _enum_list(
-        features["expression_requirements"], "expression_requirements", "expression_requirements"
-    )
-    context = _exact_dict(
-        features["question_context"],
-        {"unfamiliar_materials", "interdisciplinary_context"},
-        "question_context",
-    )
-    unfamiliar = _enum_list(
-        context["unfamiliar_materials"], "question_context.unfamiliar_materials", "unfamiliar_materials"
-    )
-    interdisciplinary = _enum_list(
-        context["interdisciplinary_context"],
-        "question_context.interdisciplinary_context",
-        "interdisciplinary_context",
-    )
-
-    scope = _exact_dict(features["curriculum_scope"], {"scope", "extra_points"}, "curriculum_scope")
     if scope["scope"] not in SCOPES:
         raise ChemistrySchemaError("curriculum_scope.scope非法")
     extra_points = _string_list(scope["extra_points"], "curriculum_scope.extra_points")
-    if scope["scope"] == "within_junior" and (extra_points or not topic_ids):
-        raise ChemistrySchemaError("within_junior必须有topic_ids且extra_points必须为空数组")
+    if scope["scope"] == "within_junior" and (not topic_ids or extra_points):
+        raise ChemistrySchemaError("within_junior必须选择topic_id且extra_points必须为空")
     if scope["scope"] == "out_of_scope" and not extra_points:
         raise ChemistrySchemaError("out_of_scope必须列出具体超纲内容")
+    validated_features["curriculum_scope"] = {
+        "scope": scope["scope"], "extra_points": extra_points,
+    }
 
-    reasoning = _exact_dict(
-        value["reasoning"],
-        {"knowledge_points", "solution_process", "main_difficulty_factors", "level_basis"},
-        "reasoning",
-    )
-    normalized_reasoning = {key: str(text).strip() for key, text in reasoning.items()}
+    reasoning_fields = {
+        "knowledge_points", "solution_process", "main_difficulty_factors", "level_basis",
+    }
+    reasoning = _exact_dict(value["reasoning"], reasoning_fields, "reasoning")
+    normalized_reasoning = {field: str(reasoning[field]).strip() for field in reasoning_fields}
     if any(not text for text in normalized_reasoning.values()):
         raise ChemistrySchemaError("reasoning字段不得为空")
 
     return {
-        "features": {
-            "knowledge": {"topic_ids": topic_ids},
-            "solution_process": {
-                "step_count": solution["step_count"],
-                "task_types": task_types,
-                "key_steps": key_steps,
-                "task_relation": solution["task_relation"],
-            },
-            "information_processing": information,
-            "reaction_processes": {
-                "processes": reaction_items,
-                "requires_condition_selection": reactions["requires_condition_selection"],
-            },
-            "experiment_tasks": experiment_tasks,
-            "calculation": {
-                "has_calculation": calculation["has_calculation"],
-                "calculation_steps": calculation["calculation_steps"],
-                "types": calculation_types,
-                "special_methods": special_methods,
-            },
-            "difficulty_conditions": {
-                "hidden_conditions": hidden_conditions,
-                "interference_points": interference_points,
-            },
-            "expression_requirements": expression,
-            "question_context": {
-                "unfamiliar_materials": unfamiliar,
-                "interdisciplinary_context": interdisciplinary,
-            },
-            "curriculum_scope": {"scope": scope["scope"], "extra_points": extra_points},
-        },
+        "features": validated_features,
         "reasoning": normalized_reasoning,
         "difficulty_level": value["difficulty_level"],
     }
@@ -624,75 +293,275 @@ def _candidate(rule: str, level: str, reason: str, evidence: dict[str, Any]) -> 
     }
 
 
+def _normalize_feature_consistency(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """只修复能由其他受控字段或topic_id唯一确定的枚举组合。"""
+    features = result["features"]
+    actions: list[dict[str, Any]] = []
+
+    def replace(field: str, final_value: str, reason: str) -> None:
+        original_value = features[field]
+        if original_value == final_value:
+            return
+        features[field] = final_value
+        actions.append({
+            "field": field,
+            "original_value": original_value,
+            "final_value": final_value,
+            "reason": reason,
+        })
+
+    knowledge = features["knowledge"]
+    if knowledge["knowledge_point_count"] <= 1:
+        if features["knowledge_distribution"] not in {
+            "单一知识点", "同知识点重复判断",
+        }:
+            replace("knowledge_distribution", "单一知识点", "按去重topic_id数量校正")
+    elif knowledge["unit_count"] == 1:
+        replace("knowledge_distribution", "同单元不同知识点", "按topic_id所属单元校正")
+    elif knowledge["unit_count"] == 2:
+        replace("knowledge_distribution", "跨单元不同知识点", "按topic_id所属单元校正")
+    else:
+        replace("knowledge_distribution", "多单元综合", "按topic_id所属单元校正")
+
+    if features["task_count"] == "1项":
+        replace("task_relation", "单项任务", "单项任务的关系唯一确定")
+    elif features["task_relation"] == "单项任务":
+        replace("task_relation", "多项独立", "多项任务不能标为单项任务")
+
+    if features["reaction_count"] == "0个":
+        replace("reaction_relation", "无反应关系", "零个反应时关系唯一确定")
+    elif features["reaction_relation"] == "无反应关系":
+        fallback = "单一反应" if features["reaction_count"] == "1个" else "多个反应并列"
+        replace("reaction_relation", fallback, "存在反应时不能标为无反应关系")
+
+    if features["visual_content"] == "无图片信息":
+        replace("visual_item_count", "无图片", "无图片信息时数量唯一确定")
+        replace("visual_complexity", "无图片信息", "无图片信息时复杂度唯一确定")
+    else:
+        if features["visual_item_count"] == "无图片":
+            replace("visual_item_count", "1幅", "存在图片内容时至少有1幅")
+        if features["visual_complexity"] == "无图片信息":
+            replace("visual_complexity", "单一同类型图像", "存在图片内容时不能标为无图片信息")
+        if (
+            features["visual_item_count"] in {"2-3幅", "4幅及以上"}
+            and features["visual_complexity"] == "单一同类型图像"
+        ):
+            replace("visual_complexity", "多个同类型图像", "多幅图片时不能标为单一图像")
+
+    if features["calculation_type"] == "无":
+        replace("calculation_steps", "无", "无计算时步骤唯一确定")
+        replace("calculation_structure", "无任何计算", "无计算时结构唯一确定")
+        replace("special_method", "无", "无计算时特殊方法唯一确定")
+    else:
+        if features["calculation_steps"] == "无":
+            replace("calculation_steps", "1步", "存在计算时至少有1步")
+        if features["calculation_structure"] == "无任何计算":
+            structure_by_type = {
+                "化学方程式计算": "单个化学方程式计算",
+                "含杂质计算": "含杂质多步质量分数",
+                "实验误差定量计算": "实验误差定量计算",
+                "多类计算综合": "多模型综合计算",
+            }
+            replace(
+                "calculation_structure",
+                structure_by_type.get(features["calculation_type"], "一步或口算"),
+                "存在计算时不能标为无任何计算",
+            )
+
+    if features["hidden_condition_count"] == "0个":
+        replace("hidden_condition_type", "无", "零个隐藏条件时类型唯一确定")
+        replace("condition_relation", "无条件限制", "零个隐藏条件时关系唯一确定")
+    elif features["condition_relation"] == "无条件限制":
+        fallback = (
+            "单一条件" if features["hidden_condition_count"] == "1个" else "多个独立条件"
+        )
+        replace("condition_relation", fallback, "存在隐藏条件时不能标为无条件限制")
+
+    replace(
+        "subjective_response",
+        "无" if features["expression_type"] == "无" else "有",
+        "是否主观作答由具体表达要求唯一确定",
+    )
+    return actions
+
+
 def _build_audit_candidates(result: dict[str, Any]) -> list[dict[str, Any]]:
     features = result["features"]
     knowledge = features["knowledge"]
-    solution = features["solution_process"]
-    calculation = features["calculation"]
     level = result["difficulty_level"]
     candidates: list[dict[str, Any]] = []
 
     if level == "送分题" and knowledge["unit_count"] >= 2:
         candidates.append(_candidate(
-            "K1_easy_cross_unit", "基础题", "送分题涉及跨单元知识，需复核是否低估知识切换负担。",
+            "K1_easy_cross_unit", "基础题",
+            "送分题涉及跨单元知识，需复核是否低估知识切换负担。",
             {"unit_count": knowledge["unit_count"], "topic_ids": knowledge["topic_ids"]},
         ))
     if level == "送分题" and knowledge["knowledge_point_count"] >= 2:
         candidates.append(_candidate(
-            "K2_easy_multiple_topics", "基础题", "送分题涉及多个去重知识点，需复核是否仍属于直接识记。",
-            {"knowledge_point_count": knowledge["knowledge_point_count"], "topic_ids": knowledge["topic_ids"]},
+            "K2_easy_multiple_topics", "基础题",
+            "送分题涉及多个去重知识点，需复核是否仍属于直接识记。",
+            {
+                "knowledge_point_count": knowledge["knowledge_point_count"],
+                "topic_ids": knowledge["topic_ids"],
+            },
         ))
-    if level in {"送分题", "基础题"} and knowledge["unit_count"] >= 3 and knowledge["knowledge_point_count"] >= 3:
+    if (
+        level in {"送分题", "基础题"}
+        and knowledge["unit_count"] >= 3
+        and features["task_count"] == "4项及以上"
+    ):
         candidates.append(_candidate(
-            "K3_multi_unit_composite", "中等题", "至少三个单元和三个知识点构成明显知识切换，需复核2/3档边界。",
-            {"unit_count": knowledge["unit_count"], "knowledge_point_count": knowledge["knowledge_point_count"]},
+            "K3_multi_unit_composite", "中等题",
+            "至少三个单元且整题包含四项以上任务，需复核2/3档边界。",
+            {
+                "unit_count": knowledge["unit_count"],
+                "task_count": features["task_count"],
+            },
         ))
 
-    nontrivial_experiment_tasks = {
-        "装置作用分析", "装置连接顺序", "原因解释", "控制变量",
-        "根据现象得出结论", "根据结论设计操作", "实验方案评价", "实验改进", "误差分析",
-    }
     nontrivial = {
-        "experiment": bool(
-            nontrivial_experiment_tasks.intersection(features["experiment_tasks"])
-        ),
-        "hidden_conditions": features["difficulty_conditions"]["hidden_conditions"] != ["无"],
-        "interference": features["difficulty_conditions"]["interference_points"] != ["无"],
-        "expression": features["expression_requirements"] != ["无"],
+        "experiment": features["experiment_analysis"] not in {"无", "实验现象判断"}
+        or features["experiment_design"] != "无",
+        "hidden_condition": features["hidden_condition_count"] != "0个",
+        "interference": features["interference_type"] != "无",
+        "expression": features["expression_type"] != "无",
     }
     if level == "送分题" and any(nontrivial.values()):
         candidates.append(_candidate(
-            "B1_easy_with_nontrivial_factor", "基础题", "送分题包含实验、隐藏条件、干扰或规范表达要求。",
+            "B1_easy_with_nontrivial_factor", "基础题",
+            "送分题包含隐藏条件、干扰、规范表达或非基础实验任务。",
             {key: value for key, value in nontrivial.items() if value},
         ))
-    if level == "基础题" and solution["task_relation"] != "单项任务" and len(solution["key_steps"]) >= 3:
-        candidates.append(_candidate(
-            "B2_basic_multiple_tasks", "中等题", "基础题包含至少三个实质任务，需复核整体任务负担。",
-            {"task_relation": solution["task_relation"], "key_steps": solution["key_steps"]},
-        ))
-
-    hard_experiment = {"根据结论设计操作", "实验方案评价", "实验改进", "误差分析"}
-    hard_calc = calculation["calculation_steps"] == "4步及以上" and calculation["special_methods"] != ["无"]
-    if level == "中等题" and (
-        bool(hard_experiment.intersection(features["experiment_tasks"])) or hard_calc
+    if (
+        level == "基础题"
+        and features["task_count"] == "4项及以上"
+        and features["task_relation"] == "多项独立"
     ):
         candidates.append(_candidate(
-            "H1_medium_decisive_task", "拔高题", "存在高阶实验任务或带特殊方法的长计算，需复核局部高难下限。",
-            {"experiment_tasks": features["experiment_tasks"], "calculation": calculation},
+            "B2_basic_multiple_tasks", "中等题",
+            "基础题包含四项以上独立任务，需复核整题知识切换负担。",
+            {
+                "task_count": features["task_count"],
+                "task_relation": features["task_relation"],
+            },
         ))
-    if level == "压轴题" and solution["task_relation"] != "前后依赖":
+
+    hard_experiment = (
+        features["experiment_design"] in {
+            "实验方案评价", "实验改进", "多阶段探究设计",
+        }
+        or features["error_analysis"] != "无"
+    )
+    hard_calculation = (
+        features["calculation_steps"] == "4步及以上"
+        and features["special_method"] != "无"
+    )
+    if level == "中等题" and (hard_experiment or hard_calculation):
         candidates.append(_candidate(
-            "F1_final_without_dependency", "拔高题", "压轴题未呈现前后依赖任务，需复核是否仅为高难特征堆叠。",
-            {"task_relation": solution["task_relation"], "step_count": solution["step_count"]},
+            "H1_medium_decisive_task", "拔高题",
+            "存在高阶实验或特殊计算模型，需复核局部高难下限。",
+            {
+                "experiment_design": features["experiment_design"],
+                "calculation_type": features["calculation_type"],
+                "special_method": features["special_method"],
+            },
+        ))
+    if level == "压轴题" and features["task_relation"] not in {
+        "前后依赖", "多条任务链汇合",
+    }:
+        candidates.append(_candidate(
+            "F1_final_without_dependency", "拔高题",
+            "压轴题未呈现前后依赖或多链汇合，需复核是否仅为高难特征堆叠。",
+            {
+                "task_relation": features["task_relation"],
+                "step_count": features["step_count"],
+            },
         ))
     return candidates
 
 
+def _plain_char_count(value: Any) -> int:
+    text = re.sub(r"<[^>]+>", "", str(value or ""))
+    return len(re.sub(r"\s+", "", text))
+
+
+def _count_options(value: Any) -> int:
+    if isinstance(value, (list, tuple, dict)):
+        return len(value)
+    text = str(value or "")
+    labels = re.findall(r"(?:^|\n|\s)([A-H])[\.．、:：)]\s*", text, flags=re.I)
+    return len(dict.fromkeys(label.upper() for label in labels))
+
+
+def _count_subquestions(data: dict[str, Any]) -> int:
+    structured = data.get("sub_questions")
+    structured_count = len(structured) if isinstance(structured, list) else 0
+    text = "\n".join(str(data.get(field, "") or "") for field in ("stem", "options"))
+    inline = re.findall(r"(?:^|\n|[；;。])\s*[（(](\d+)[）)]", text)
+    inline_count = len(dict.fromkeys(inline))
+    return max(structured_count, inline_count)
+
+
+def _count_stem_images(data: dict[str, Any]) -> int:
+    raw = data.get("stem_pic_url")
+    if isinstance(raw, (list, tuple)):
+        url_count = len([item for item in raw if str(item).strip()])
+    else:
+        url_count = len([
+            item for item in re.split(r"[,，;；\s]+", str(raw or "")) if item.strip()
+        ])
+    placeholder_count = len(re.findall(r"<image\b|\[图片\]|【图片】", str(data.get("stem", "") or ""), re.I))
+    return max(url_count, placeholder_count)
+
+
+def compute_question_statistics(data: dict[str, Any]) -> dict[str, Any]:
+    """计算无需模型判断的客观题面量，供审计和确定性边界规则使用。"""
+    stem_char_count = _plain_char_count(data.get("stem"))
+    if stem_char_count <= 60:
+        stem_length_band = "60字以内"
+    elif stem_char_count <= 100:
+        stem_length_band = "61-100字"
+    elif stem_char_count <= 300:
+        stem_length_band = "101-300字"
+    else:
+        stem_length_band = "300字以上"
+    option_count = _count_options(data.get("options"))
+    subquestion_count = _count_subquestions(data)
+    return {
+        "stem_char_count": stem_char_count,
+        "stem_length_band": stem_length_band,
+        "option_count": option_count,
+        "subquestion_count": subquestion_count,
+        "stem_image_count": _count_stem_images(data),
+        "question_item_count": max(option_count, subquestion_count, 1),
+    }
+
+
+def _writeback_floor(
+    result: dict[str, Any],
+    floor_level: str,
+    rule: str,
+    reason: str,
+    evidence: dict[str, Any],
+) -> None:
+    current_level = result["difficulty_level"]
+    if LEVEL_INDEX[current_level] >= LEVEL_INDEX[floor_level]:
+        return
+    result["difficulty_level"] = floor_level
+    result["postprocess_actions"].append({
+        "rule": rule,
+        "original_level": current_level,
+        "final_level": floor_level,
+        "reason": reason,
+        "evidence": evidence,
+        "difficulty_level_changed": True,
+    })
+
+
 def postprocess_chemistry_difficulty(value: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
-    """严格校验、补充可审计统计；不读取题库难度，不修改模型档位。"""
-    del data
-    normalized, normalization_actions = normalize_rating_contract(value)
-    result = validate_rating_contract(normalized)
+    """严格校验、计算客观题面量，并执行教师明确给出的最低档规则。"""
+    result = validate_rating_contract(copy.deepcopy(value))
     topics = load_curriculum_topics()
     topic_ids = result["features"]["knowledge"]["topic_ids"]
     points = [
@@ -712,17 +581,63 @@ def postprocess_chemistry_difficulty(value: dict[str, Any], data: dict[str, Any]
         "unit_count": len(unit_ids),
         "cross_unit": len(unit_ids) >= 2,
     }
-    solution = result["features"]["solution_process"]
-    solution["substantive_task_count"] = len(solution["key_steps"])
+    normalization_actions = _normalize_feature_consistency(result)
 
     original_level = result["difficulty_level"]
+    question_statistics = compute_question_statistics(data)
+    candidates = _build_audit_candidates(result)
+    result["postprocess_actions"] = []
+
+    if result["features"]["error_analysis"] != "无":
+        _writeback_floor(
+            result, "中等题", "T1_error_analysis_floor",
+            "教师规则：涉及实验误差分析时最低为中等题。",
+            {"error_analysis": result["features"]["error_analysis"]},
+        )
+    if question_statistics["stem_char_count"] > 100:
+        _writeback_floor(
+            result, "中等题", "T2_long_stem_floor",
+            "题干超过100字，已不符合送分题或基础题的题干长度边界。",
+            {"stem_char_count": question_statistics["stem_char_count"]},
+        )
+    elif question_statistics["stem_char_count"] > 60:
+        _writeback_floor(
+            result, "基础题", "T3_nonshort_stem_floor",
+            "题干超过60字，不符合送分题的题干长度边界。",
+            {"stem_char_count": question_statistics["stem_char_count"]},
+        )
+    if question_statistics["question_item_count"] >= 5:
+        _writeback_floor(
+            result, "基础题", "T4_many_items_floor",
+            "选项或小问达到5项，低档题至少升至基础题。",
+            {
+                "option_count": question_statistics["option_count"],
+                "subquestion_count": question_statistics["subquestion_count"],
+            },
+        )
+    if (
+        result["features"]["visual_item_count"] in {"2-3幅", "4幅及以上"}
+        or result["features"]["visual_complexity"] in {
+            "多个同类型图像", "多个不同类型图像", "复杂高难图像",
+        }
+    ):
+        _writeback_floor(
+            result, "基础题", "T5_multiple_visuals_floor",
+            "需要识别多个图像时不属于单一信息直接再现的送分题。",
+            {
+                "visual_item_count": result["features"]["visual_item_count"],
+                "visual_complexity": result["features"]["visual_complexity"],
+            },
+        )
+
+    final_level = result["difficulty_level"]
     result["feature_schema_version"] = FEATURE_SCHEMA_VERSION
     result["postprocess"] = {
         "original_level": original_level,
-        "final_level": original_level,
-        "writeback_applied": False,
-        "candidates": _build_audit_candidates(result),
-        "feature_normalization_actions": copy.deepcopy(normalization_actions),
+        "final_level": final_level,
+        "writeback_applied": final_level != original_level,
+        "question_statistics": question_statistics,
+        "candidates": candidates,
+        "feature_normalization_actions": normalization_actions,
     }
-    result["postprocess_actions"] = normalization_actions
     return result
