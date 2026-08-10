@@ -193,7 +193,7 @@ def build_run_config(
         "num": num,
         "feature_schema_version": junior_schema.FEATURE_SCHEMA_VERSION,
         "structured_output_mode": "forced_function_call_strict_json_schema",
-        "postprocess_mode": "multi_feature_upper_level_review_writeback",
+        "postprocess_mode": "multi_feature_pressure_path_review_writeback",
     }
 
 

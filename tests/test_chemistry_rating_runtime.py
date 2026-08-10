@@ -204,7 +204,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         value["features"]["step_count"] = "6步及以上"
         value["features"]["task_relation"] = "前后依赖"
         value["features"]["solution_method"] = "定性与定量联合"
-        value["features"]["information_operation"] = "图像拐点或分段分析"
+        value["features"]["information_operation"] = "多来源信息筛选联合"
         value["features"]["calculation_type"] = "多类计算综合"
         value["features"]["calculation_steps"] = "4步及以上"
         value["features"]["calculation_structure"] = "多个化学反应计算"
@@ -216,7 +216,68 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "压轴题")
         action = result["postprocess_actions"][-1]
         self.assertEqual(action["rule"], "R2_hard_to_final_multi_feature_review")
-        self.assertGreaterEqual(action["evidence"]["review_score"], 7)
+        self.assertIn(
+            "多来源信息、多反应计算与至少两个隐藏条件联合",
+            action["evidence"]["matched_paths"],
+        )
+
+    def test_hard_review_accepts_calibrated_pressure_paths(self):
+        cases = []
+
+        classification = rating("拔高题")
+        classification["features"].update({
+            "classification_discussion": "多情况分类讨论",
+            "calculation_type": "多类计算综合",
+            "calculation_steps": "4步及以上",
+            "calculation_structure": "多个化学反应计算",
+            "hidden_condition_count": "2个",
+            "hidden_condition_type": "过量或不足",
+            "condition_relation": "多个关联条件",
+        })
+        cases.append(classification)
+
+        continuous_reactions = rating("拔高题")
+        continuous_reactions["features"].update({
+            "reaction_count": "4个及以上",
+            "reaction_relation": "多个反应连续",
+            "calculation_type": "多类计算综合",
+            "calculation_steps": "4步及以上",
+            "calculation_structure": "多个化学反应计算",
+            "special_method": "差量法",
+        })
+        cases.append(continuous_reactions)
+
+        independent_comprehensive = rating("拔高题")
+        independent_comprehensive["features"].update({
+            "task_count": "4项及以上",
+            "task_relation": "多项独立",
+            "information_operation": "多来源信息筛选联合",
+            "calculation_type": "多类计算综合",
+            "calculation_steps": "4步及以上",
+            "calculation_structure": "多模型综合计算",
+        })
+        cases.append(independent_comprehensive)
+
+        for value in cases:
+            with self.subTest(features=value["features"]):
+                result = schema.postprocess_chemistry_difficulty(value, {})
+                self.assertEqual(result["difficulty_level"], "压轴题")
+                self.assertEqual(
+                    result["postprocess_actions"][-1]["rule"],
+                    "R2_hard_to_final_multi_feature_review",
+                )
+
+    def test_hard_review_does_not_promote_one_special_method(self):
+        value = rating("拔高题")
+        value["features"].update({
+            "calculation_type": "含杂质计算",
+            "calculation_steps": "4步及以上",
+            "calculation_structure": "含杂质多步质量分数",
+            "special_method": "极值法",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertFalse(result["postprocess"]["writeback_applied"])
 
     def test_upper_level_review_never_cascades_two_levels(self):
         value = rating("中等题", ["U05_T03", "U10_T03", "U09_T05"])
@@ -270,6 +331,9 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("不能因`跨单元不同知识点`或`多单元综合`自动升档", prompt)
         self.assertIn("普通选择题中的错误选项不算干扰", prompt)
         self.assertIn("题干字数、选项数、小问数、图片数只用于审计", prompt)
+        self.assertIn("6步及以上`和`多条任务链汇合`是常见表现，不是必要条件", prompt)
+        self.assertIn("【Case 64：多来源实验流程 + 多反应计算 + 多个隐藏条件】", prompt)
+        self.assertIn("【Case 67：多项独立但整题存在综合压轴负担】", prompt)
 
     def test_prompt_json_example_follows_runtime_contract(self):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")

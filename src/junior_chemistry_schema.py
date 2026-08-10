@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v11"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v12"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -523,43 +523,48 @@ def _build_upper_level_review_candidate(
             )
 
     if level == "拔高题":
-        weighted_anchors = {
-            "多条任务链汇合": features["task_relation"] == "多条任务链汇合",
-            "反应先后、过量不足或竞争反应": difficult_reaction,
-            "多层嵌套条件": features["condition_relation"] == "多层嵌套条件",
+        multi_reaction_calculation = features["calculation_structure"] in {
+            "多个化学反应计算", "多模型综合计算",
         }
-        review_triggers = {
-            **weighted_anchors,
-            "六步及以上解题过程": features["step_count"] == "6步及以上",
-            "图像分段或多来源信息联合": complex_information,
-            "决定建模的特殊方法": decisive_special_method,
+        multiple_hidden_conditions = features["hidden_condition_count"] in {
+            "2个", "3个及以上",
         }
-        supporting_evidence = {
-            "六步及以上解题过程": features["step_count"] == "6步及以上",
-            "图像分段或多来源信息联合": complex_information,
-            "决定建模的特殊方法": decisive_special_method,
-            "复杂计算结构": complex_calculation,
-            "四步及以上计算": features["calculation_steps"] == "4步及以上",
-            "任务前后依赖": features["task_relation"] == "前后依赖",
-            "复杂高难图像": features["visual_complexity"] == "复杂高难图像",
-            "多个实验分析任务": features["experiment_analysis"] == "多个实验分析任务联合",
-            "定性与定量联合": features["solution_method"] == "定性与定量联合",
-            "多个关联或嵌套条件": complex_condition,
+        multiple_reactions = features["reaction_count"] == "4个及以上"
+        continuous_reactions = features["reaction_relation"] == "多个反应连续"
+        classification_required = features["classification_discussion"] != "无"
+        pressure_paths = {
+            "多来源信息、多反应计算与至少两个隐藏条件联合": (
+                features["information_operation"] == "多来源信息筛选联合"
+                and multi_reaction_calculation
+                and multiple_hidden_conditions
+            ),
+            "单项任务内分类讨论、复杂计算与关联条件联合": (
+                features["task_relation"] == "单项任务"
+                and classification_required
+                and multi_reaction_calculation
+                and complex_condition
+            ),
+            "四个以上连续反应与决定建模的特殊方法联合": (
+                multiple_reactions
+                and continuous_reactions
+                and decisive_special_method
+            ),
+            "多项独立任务中包含多来源信息与多反应计算": (
+                features["task_relation"] == "多项独立"
+                and features["information_operation"] == "多来源信息筛选联合"
+                and multi_reaction_calculation
+            ),
         }
-        score = 2 * sum(weighted_anchors.values()) + sum(supporting_evidence.values())
-        if any(review_triggers.values()) and score >= 7:
+        matched_paths = [
+            name for name, active in pressure_paths.items() if active
+        ]
+        if matched_paths:
             return _candidate(
                 "R2_hard_to_final_multi_feature_review", "压轴题",
-                "压轴锚点触发复核，且阶段依赖、信息处理和计算等多类证据共同达到阈值。",
+                "命中经教师样本校准的压轴复核路径；每条路径都要求多个不同类型特征共同成立，不以题长、任务数或单一特殊方法机械升档。",
                 {
-                    "review_score": score,
-                    "required_score": 7,
-                    "trigger_evidence": [
-                        name for name, active in review_triggers.items() if active
-                    ],
-                    "supporting_evidence": [
-                        name for name, active in supporting_evidence.items() if active
-                    ],
+                    "matched_paths": matched_paths,
+                    "matched_path_count": len(matched_paths),
                 },
             )
     return None
