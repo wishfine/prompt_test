@@ -225,6 +225,7 @@ CALCULATION_OPERATIONS = {
     "直接比例",
     "单一方程式",
     "单一守恒",
+    "组分消元或组成不变量",
     "差量",
     "多反应定量关系",
     "联立",
@@ -244,6 +245,7 @@ SOLUTION_TOPOLOGIES = {
     "单线性常规链",
     "条件分支或范围筛选",
     "未知组成或量反推",
+    "未知组分消元或组成不变量",
     "双来源交叉验证",
     "多阶段反应网络",
 }
@@ -440,6 +442,32 @@ def normalize_observable_features(
                 canonical_values.append(canonical)
         record(field, values, canonical_values, "枚举近义归一与去重")
         normalized[field] = canonical_values
+
+    # 表征转换和定量计算是两个不同侧面。模型偶尔会把合法的表征枚举
+    # 写进 calculation_operations；这种串位可以无损修复，但不能凭空
+    # 猜测缺失的计算方法。若移动后定量任务没有计算操作，后续一致性
+    # 校验仍会要求模型重试。
+    representation_values = normalized.get("representation_operations")
+    calculation_values = normalized.get("calculation_operations")
+    if isinstance(representation_values, list) and isinstance(
+        calculation_values, list
+    ):
+        misplaced_values = [
+            value
+            for value in calculation_values
+            if value in REPRESENTATION_OPERATIONS
+        ]
+        for misplaced in misplaced_values:
+            calculation_values.remove(misplaced)
+            if misplaced not in representation_values:
+                representation_values.append(misplaced)
+            record(
+                "calculation_operations",
+                misplaced,
+                "representation_operations",
+                "表征转换值从计算字段移回表征字段",
+                force=True,
+            )
 
     conditions = normalized.get("condition_operations")
     evidence = normalized.get("evidence_operations")

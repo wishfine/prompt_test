@@ -287,10 +287,7 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(result["observable_metrics"]["longest_chain_steps"], 4)
         self.assertEqual(result["observable_metrics"]["effective_task_count"], 3)
-        self.assertEqual(
-            result["derived_core12_projection"]["reasoning_depth"],
-            "4-5层",
-        )
+        self.assertNotIn("derived_core12_projection", result)
         self.assertEqual(result["features"], original["features"])
 
     def test_schema_retry_message_does_not_request_legacy_core12(self) -> None:

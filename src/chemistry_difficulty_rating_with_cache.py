@@ -944,8 +944,8 @@ def project_observable_to_core12(
     """把可观测事实确定性投影为旧规则所需的内部兼容信号。
 
     该投影不回写到 ``features``，也不要求模型自报抽象结论。它只用于
-    复用已验证过的历史后处理，并在输出中以
-    ``derived_core12_projection`` 单独记录，便于逐题审计。
+    复用已验证过的历史后处理。该兼容投影只在进程内使用，不写入
+    生产输出，避免下游误以为它仍是模型需要填写的第二套特征。
     """
     features = validate_observable_features(observable_features)
     metrics = derive_observable_metrics(features)
@@ -1095,7 +1095,11 @@ def project_observable_to_core12(
         "多图表联合": "多图表耦合建模",
     }[features["graph_table_operation"]]
 
-    if calculation_ops & {"联立", "范围或分类计算"}:
+    if calculation_ops & {
+        "组分消元或组成不变量",
+        "联立",
+        "范围或分类计算",
+    }:
         calculation_model = "多重守恒、差量、联立或分类"
     elif (
         "差量" in calculation_ops
@@ -1189,12 +1193,19 @@ def observable_deep_quantitative_final_signal(
             in {
                 "条件分支或范围筛选",
                 "未知组成或量反推",
+                "未知组分消元或组成不变量",
                 "双来源交叉验证",
                 "多阶段反应网络",
             }
             and bool(
                 set(validated["calculation_operations"])
-                & {"差量", "多反应定量关系", "联立", "范围或分类计算"}
+                & {
+                    "组分消元或组成不变量",
+                    "差量",
+                    "多反应定量关系",
+                    "联立",
+                    "范围或分类计算",
+                }
             )
         )
     # 只对V3历史输出生效：V2历史文件缺少新增的
@@ -3110,9 +3121,6 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         schema_version = observable_feature_schema_version(model_features)
         rating_result["feature_schema_version"] = schema_version
         rating_result["observable_metrics"] = observable_metrics
-        rating_result["derived_core12_projection"] = copy.deepcopy(
-            features
-        )
         rating_result["postprocess_profile"] = (
             "chemistry_observable_v5_narrow_guard_v1"
             if schema_version == "chemistry_observable_v5"

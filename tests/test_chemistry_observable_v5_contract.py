@@ -185,6 +185,58 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
         self.assertEqual(validated["evidence_operations"], ["多证据共同成立"])
         self.assertTrue(actions)
 
+    def test_normalization_moves_representation_value_out_of_calculation_field(self) -> None:
+        invalid = current_features()
+        invalid["representation_operations"] = [
+            "化学方程式→定量关系",
+        ]
+        invalid["calculation_operations"] = [
+            "化学符号→定量关系",
+            "单一守恒",
+        ]
+
+        normalized, actions = self.features.normalize_observable_features(
+            invalid
+        )
+        validated = self.features.validate_observable_features(normalized)
+
+        self.assertEqual(
+            validated["representation_operations"],
+            ["化学方程式→定量关系", "化学符号→定量关系"],
+        )
+        self.assertEqual(validated["calculation_operations"], ["单一守恒"])
+        self.assertTrue(
+            any(
+                action.get("field") == "calculation_operations"
+                for action in actions
+            )
+        )
+
+    def test_unknown_component_invariant_is_a_valid_observable_structure(self) -> None:
+        item = current_features()
+        item["longest_solution_chain"] = [
+            "由酸的质量确定混合氧化物中的总氧量",
+            "利用元素守恒消去未知组分比例",
+            "将总氧量用于还原后的剩余固体计算",
+        ]
+        item["solution_topology"] = "未知组分消元或组成不变量"
+        item["calculation_operations"] = [
+            "单一守恒",
+            "组分消元或组成不变量",
+        ]
+
+        validated = self.runtime.validate_feature_contract(item)
+        projection = self.runtime.project_observable_to_core12(validated)
+
+        self.assertEqual(
+            validated["solution_topology"],
+            "未知组分消元或组成不变量",
+        )
+        self.assertEqual(
+            projection["calculation_model"],
+            "多重守恒、差量、联立或分类",
+        )
+
     def test_unknown_enum_still_fails_after_safe_normalization(self) -> None:
         invalid = current_features()
         invalid["representation_operations"] = ["看起来很难的转换"]
@@ -284,6 +336,49 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
         self.assertIn(
             'experiment_task_structure="多仪器或多条件比较"',
             prompt,
+        )
+
+    def test_prompt_separates_distinct_experiment_rules_and_invariant_elimination(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        for anchor in (
+            "同属实验操作与探究不等于使用同一具体规则",
+            "试剂作用、失败原因、性质用途和操作目的",
+            "未知组分消元或组成不变量",
+            "calculation_operations不得填写表征转换值",
+            "化学符号→定量关系属于representation_operations",
+        ):
+            self.assertIn(anchor, prompt)
+
+    def test_invariant_elimination_can_form_hard_to_final_audit_candidate(self) -> None:
+        item = rating("拔高题")
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "由酸的质量确定混合氧化物中的总氧量",
+                    "利用元素守恒消去未知组分比例",
+                    "将总氧量用于还原阶段",
+                    "计算还原前后的质量变化",
+                    "核验剩余固体质量与组分无关",
+                ],
+                "solution_topology": "未知组分消元或组成不变量",
+                "reaction_structure": "多个并列反应",
+                "calculation_operations": [
+                    "单一守恒",
+                    "组分消元或组成不变量",
+                ],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "未知比例的混合氧化物经酸溶和还原后求剩余质量。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_hard_to_final_deep_quantitative_chain",
         )
 
 
