@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v9"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v10"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -413,14 +413,18 @@ def _build_audit_candidates(result: dict[str, Any]) -> list[dict[str, Any]]:
         }
         or features["error_analysis"] != "无"
     )
-    hard_calculation = (
+    decisive_special_method = features["special_method"] in {
+        "差量法", "极值法", "分情况计算", "多方程式联立",
+        "循环反应计算", "多种特殊方法联合",
+    }
+    hard_calculation = decisive_special_method or (
         features["calculation_steps"] == "4步及以上"
         and features["special_method"] != "无"
     )
     if level == "中等题" and (hard_experiment or hard_calculation):
         candidates.append(_candidate(
             "H1_medium_decisive_task", "拔高题",
-            "存在高阶实验或特殊计算模型，需复核局部高难下限。",
+            "存在高阶实验或决定建模的特殊计算方法，需复核局部高难下限；不得仅因不足4步否决拔高。",
             {
                 "experiment_design": features["experiment_design"],
                 "calculation_type": features["calculation_type"],
@@ -432,7 +436,7 @@ def _build_audit_candidates(result: dict[str, Any]) -> list[dict[str, Any]]:
     }:
         candidates.append(_candidate(
             "F1_final_without_dependency", "拔高题",
-            "压轴题未呈现前后依赖或多链汇合，需复核是否仅为高难特征堆叠。",
+            "压轴题未呈现阶段间前后依赖，需复核是否仅为高难特征堆叠；一条高度依赖的主链也可形成压轴结构。",
             {
                 "task_relation": features["task_relation"],
                 "step_count": features["step_count"],
