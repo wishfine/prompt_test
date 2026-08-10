@@ -147,7 +147,7 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
 
         self.assertEqual(
             set(validated["features"]),
-            set(self.runtime.OBSERVABLE_FEATURE_FIELDS),
+            set(self.runtime.OBSERVABLE_V4_FEATURE_FIELDS),
         )
 
     def test_v4_does_not_emit_generic_core12_candidate(self) -> None:
@@ -538,12 +538,13 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
     def test_prompt_restores_detailed_boundary_calibration(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
         required_anchors = (
-            "同一熟悉分类规则检查四个候选项时，task_groups只记1个有效任务",
+            "同一规则只表示B不增加，不表示W必为1",
+            "不同化学命题或不同作答目标",
             "普通方案正误判断不等于方案评价",
             "中间量、纯算术和重复代入不单独增加最长链",
             "标准实验、常规计算与决定性卡点的边界",
             "工业流程、未知组成与守恒联立",
-            "熟悉类别的一条固定规则直接判断",
+            "同一命题的固定规则直接判断",
             "多规则综合填空的受控广度",
             "同深度不同耦合",
             "固定基团转换关系",

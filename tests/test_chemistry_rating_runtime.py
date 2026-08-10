@@ -1850,7 +1850,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "chemistry_core12_teacher_distribution_v4_targeted_production",
         )
 
-    def test_prompt_example_uses_observable_v4_contract(self) -> None:
+    def test_prompt_example_uses_observable_v5_contract(self) -> None:
         namespace = runpy.run_path(str(PROMPT_PATH))
         prefix = namespace["DIFFICULTY_RATING_PROMPT_PREFIX"]
         suffix = namespace["DIFFICULTY_RATING_PROMPT_SUFFIX"]
@@ -1860,7 +1860,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
             self.assertIn(f'"{field}"', prefix)
         for legacy_field in chemistry.FEATURE_DEFAULTS:
             self.assertNotIn(f'"{legacy_field}"', prefix)
-        self.assertIn("严格填写19项可观测特征", suffix)
+        self.assertIn("严格填写17项可观测特征", suffix)
         self.assertIn("纯算术、机械配平、重复代入", prefix)
         self.assertIn("四个独立选项不等于四步", prefix)
         self.assertIn("程序会从特征中派生以下指标", prefix)
