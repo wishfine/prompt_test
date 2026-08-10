@@ -7,7 +7,7 @@
 调整一个相邻档；只有基于题干客观结构的严重低估安全底线，才允许将
 明显的连续反应核验从送分题直接托底到中等题。
 
-化学正式输出使用19个可从题目核验的任务与操作特征；历史Core-12
+化学正式输出使用17个可从题目核验的任务与操作特征；历史Core-12
 只保留兼容读取和确定性内部投影，不再要求模型直接填写抽象难度摘要。
 """
 
@@ -776,6 +776,50 @@ def normalize_features(features: Dict[str, Any]) -> Dict[str, Any]:
 
 class ChemistrySchemaError(ValueError):
     """模型输出不满足 Core-12 生产契约。"""
+
+
+def build_schema_repair_feedback(
+    error: Exception,
+    invalid_candidate: Dict[str, Any],
+) -> str:
+    """给重试模型提供可执行的定点修复信息和上一版 JSON。
+
+    无缓存调用不会自动携带上一次模型输出。若只返回一句校验错误，
+    模型往往会从头生成并重复同一个字段串位。这里明确区分两个实验
+    字段，并附上待修复对象，让重试真正执行局部编辑。
+    """
+    error_text = str(error)
+    hints = [f"上次输出未通过化学特征schema：{error_text}"]
+    if "experiment_operation" in error_text:
+        hints.append(
+            "experiment_operation描述做了什么实验认知操作，只能从："
+            "无、基础操作或读数、变量控制、现象解释、数据归纳、"
+            "方案设计、方案评价或补充实验、多阶段定量探究 中选择。"
+        )
+    if (
+        "experiment_task_structure" in error_text
+        or "多仪器或多条件比较" in error_text
+    ):
+        hints.append(
+            "experiment_task_structure描述实验任务怎样组织，只能从："
+            "无实验判断、名称或单点规范匹配、多仪器或多条件比较、"
+            "操作偏差因果链、控制变量或数据归纳、方案设计或评价 中选择。"
+        )
+    serialized = json.dumps(
+        invalid_candidate,
+        ensure_ascii=False,
+        indent=2,
+    )
+    if len(serialized) > 16000:
+        serialized = serialized[:16000] + "\n...（已截断）"
+    hints.extend(
+        [
+            "请以以下上次JSON为底稿，只修复字段、枚举和一致性错误；"
+            "不要改变题目事实或为了通过校验而抬高/压低等级。",
+            serialized,
+        ]
+    )
+    return "\n".join(hints)
 
 
 def is_observable_feature_contract(features: Any) -> bool:
@@ -4165,7 +4209,10 @@ async def process_single_question(
                             f"schema校验重试耗尽({MAX_SCHEMA_RETRIES}): {exc}"
                         ) from exc
                     schema_retry_count += 1
-                    repair_feedback = f"上次输出未通过化学特征schema：{exc}"
+                    repair_feedback = build_schema_repair_feedback(
+                        exc,
+                        candidate,
+                    )
                     continue
 
                 output_data = make_output_base(data)

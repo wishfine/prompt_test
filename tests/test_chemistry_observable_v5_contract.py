@@ -104,6 +104,37 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
             "chemistry_observable_v5",
         )
 
+    def test_cross_field_experiment_enum_reports_the_correct_destination(self) -> None:
+        invalid = current_features()
+        invalid["experiment_operation"] = "多仪器或多条件比较"
+        invalid["experiment_task_structure"] = "多仪器或多条件比较"
+
+        with self.assertRaisesRegex(
+            self.runtime.ChemistrySchemaError,
+            "该值属于experiment_task_structure",
+        ):
+            self.runtime.validate_feature_contract(invalid)
+
+    def test_schema_repair_feedback_includes_invalid_json_and_field_hint(self) -> None:
+        invalid_rating = rating()
+        invalid_rating["features"]["experiment_operation"] = (
+            "多仪器或多条件比较"
+        )
+        error = self.runtime.ChemistrySchemaError(
+            "experiment_operation不在合法枚举中: '多仪器或多条件比较'；"
+            "该值属于experiment_task_structure"
+        )
+
+        feedback = self.runtime.build_schema_repair_feedback(
+            error,
+            invalid_rating,
+        )
+
+        self.assertIn("该值属于experiment_task_structure", feedback)
+        self.assertIn('"experiment_operation": "多仪器或多条件比较"', feedback)
+        self.assertIn("experiment_operation描述做了什么实验认知操作", feedback)
+        self.assertIn("experiment_task_structure描述实验任务怎样组织", feedback)
+
     def test_historical_nineteen_field_v4_remains_readable(self) -> None:
         historical = copy.deepcopy(current_features())
         historical["direct_retrieval_task_count"] = 1
@@ -139,6 +170,33 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
         self.assertIn("不同化学命题或不同作答目标", prompt)
         self.assertIn("同一规则只表示B不增加", prompt)
         self.assertIn("独立选项不增加D", prompt)
+
+    def test_prompt_decouples_task_count_from_easy_level(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("W只记录任务量事实，不设置最低难度", prompt)
+        self.assertIn("W=4仍可判为送分题", prompt)
+        self.assertIn("固定分类规则", prompt)
+
+    def test_prompt_keeps_dense_linear_chain_as_hard_candidate(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("高密度线性综合链", prompt)
+        self.assertIn("方法熟悉或主线线性不能单独否决拔高", prompt)
+
+    def test_prompt_separates_experiment_operation_and_structure(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("experiment_operation回答“实际做了什么操作”", prompt)
+        self.assertIn("experiment_task_structure回答“任务怎样组织”", prompt)
+        self.assertIn(
+            'experiment_operation="基础操作或读数"',
+            prompt,
+        )
+        self.assertIn(
+            'experiment_task_structure="多仪器或多条件比较"',
+            prompt,
+        )
 
 
 if __name__ == "__main__":

@@ -284,7 +284,27 @@ def _validate_single_enum(
 ) -> str:
     value = features[field]
     if not isinstance(value, str) or value not in allowed:
-        raise ValueError(f"{field}不在合法枚举中: {value!r}")
+        cross_field_hint = ""
+        if (
+            field == "experiment_operation"
+            and value in EXPERIMENT_TASK_STRUCTURES
+        ):
+            cross_field_hint = (
+                "；该值属于experiment_task_structure，"
+                "experiment_operation必须改填实际执行的实验操作"
+            )
+        elif (
+            field == "experiment_task_structure"
+            and value in EXPERIMENT_OPERATIONS
+        ):
+            cross_field_hint = (
+                "；该值属于experiment_operation，"
+                "experiment_task_structure必须改填实验任务的组织结构"
+            )
+        raise ValueError(
+            f"{field}不在合法枚举中: {value!r}{cross_field_hint}；"
+            f"允许值={sorted(allowed)}"
+        )
     return value
 
 
