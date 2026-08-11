@@ -140,20 +140,33 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
             },
         )
 
-    def test_v11_prompt_uses_legacy_rule_families_supported_by_runtime(self) -> None:
+    def test_prompt_exposes_only_the_concrete_rule_family_enum(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "实际需要切换的回答规则族数组，枚举与task_type相同",
-            prompt,
-        )
-        self.assertNotIn(
             "`rule_families`不再复刻task_type",
             prompt,
         )
-        self.assertIn('"图表与数据"', prompt)
-        self.assertIn('"性质与反应判断"', prompt)
-        self.assertIn('"定量计算"', prompt)
+        for family in self.features.RULE_FAMILIES:
+            self.assertIn(f"- {family}", prompt)
+        self.assertNotIn(
+            "实际需要切换的回答规则族数组，枚举与task_type相同",
+            prompt,
+        )
+
+    def test_prompt_prevents_observed_retry_field_drift(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        for instruction in (
+            "控制变量只能填入experiment_operation",
+            "排除候选只能填入evidence_operations",
+            "拐点、平台或分段只能填入graph_table_operation",
+            "操作偏差只能填入error_analysis_operation",
+            "单一比例必须写成直接比例",
+            "化学方程式不是task_type",
+            "task_groups.count必须是1到20的整数",
+        ):
+            self.assertIn(instruction, prompt)
 
     def test_legacy_coarse_rule_families_normalize_without_retry(self) -> None:
         item = current_features()
