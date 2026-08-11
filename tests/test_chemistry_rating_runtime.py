@@ -465,15 +465,10 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("不能因`跨单元不同知识点`或`多单元综合`自动升档", prompt)
         self.assertIn("普通选择题中的错误选项不算干扰", prompt)
         self.assertIn("题干字数、选项数、小问数、图片数只用于审计", prompt)
-        self.assertIn("6步及以上`和`多条任务链汇合`是常见表现，不是必要条件", prompt)
-        self.assertIn("【Case 64：多来源实验流程 + 多反应计算 + 多个隐藏条件】", prompt)
-        self.assertIn("`step_count=1步`只表示最长单项任务较短，不能否决中等题", prompt)
-        self.assertNotIn("没有连续多步任务，因此判为基础题", prompt)
-        self.assertIn("【Case 67：多项独立综合任务通常保持拔高】", prompt)
-        self.assertIn("【Case 68：2—3步图像守恒仍可达到拔高】", prompt)
-        self.assertIn("【Case 72：多问独立不能抵消其中的压轴任务】", prompt)
-        self.assertIn("步骤数只记录最长连续操作，不是拔高题准入门槛", prompt)
-        self.assertIn("禁止使用“没有多条任务链汇合”", prompt)
+        self.assertIn("多个高难环节强耦合，前一步结果决定后一步所用模型", prompt)
+        self.assertIn("通常6步以上或多条任务链汇合", prompt)
+        self.assertIn("【Case 63：单一高难实验或计算 vs 多类型高难任务耦合】", prompt)
+        self.assertNotIn("【Case 64", prompt)
         self.assertIn("必须按指定的严格JSON Schema输出一个完整对象", prompt)
         self.assertNotIn("必须通过指定函数提交", prompt)
         self.assertIn("calculation_structure", prompt)
@@ -484,37 +479,6 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         decoder = json.JSONDecoder()
         example, _ = decoder.raw_decode(prompt[start:])
         schema.validate_rating_contract(example)
-
-    def test_ab_prompt_variants_follow_current_runtime_contract(self):
-        prompt_names = (
-            "初中化学难度打标提示词_rerun6_baseline.txt",
-            "初中化学难度打标提示词_improved_narrow_exceptions.txt",
-        )
-        decoder = json.JSONDecoder()
-        for prompt_name in prompt_names:
-            with self.subTest(prompt=prompt_name):
-                prompt = (ROOT / "prompts" / prompt_name).read_text(encoding="utf-8")
-                self.assertEqual(prompt.count("## 输入题目信息"), 1)
-                self.assertIn("必须按指定的严格JSON Schema输出一个完整对象", prompt)
-                self.assertNotIn("必须通过指定函数提交", prompt)
-                for field, options in schema.FEATURE_OPTIONS.items():
-                    self.assertIn(field, prompt)
-                    for value in options:
-                        self.assertIn(value, prompt)
-                start = prompt.index('\n{\n  "features"') + 1
-                example, _ = decoder.raw_decode(prompt[start:])
-                schema.validate_rating_contract(example)
-
-    def test_improved_prompt_limits_later_rules_to_narrow_exceptions(self):
-        prompt = (
-            ROOT / "prompts" / "初中化学难度打标提示词_improved_narrow_exceptions.txt"
-        ).read_text(encoding="utf-8")
-        self.assertIn("主边界优先，窄例外复核", prompt)
-        self.assertIn("一步任务进入中等只允许一条窄例外", prompt)
-        self.assertIn("2—3步进入拔高只允许以下窄例外之一", prompt)
-        self.assertIn("4—5步或单项任务进入压轴只允许以下窄例外之一", prompt)
-        self.assertIn("反向约束：判断压轴时只查看“最难的一个小问”", prompt)
-        self.assertIn("若只命中部分条件，是否已回到常规主边界", prompt)
 
     def test_runtime_uses_prompt_json_with_local_strict_schema_and_no_retry(self):
         runtime = (ROOT / "src" / "chemistry_difficulty_rating_with_cache.py").read_text(
