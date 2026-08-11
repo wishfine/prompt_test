@@ -308,6 +308,18 @@ class ChemistryRuntimeTests(unittest.TestCase):
             ["high", "high"],
         )
 
+        chemistry.CHEMISTRY_IMAGE_DETAIL = "xhigh"
+        xhigh_detail_content = chemistry.build_user_content(visual, selected)
+        xhigh_detail_images = [
+            item
+            for item in xhigh_detail_content
+            if item.get("type") == "input_image"
+        ]
+        self.assertEqual(
+            [item.get("detail") for item in xhigh_detail_images],
+            ["xhigh", "xhigh"],
+        )
+
     def test_missing_analysis_can_request_analysis_image(self) -> None:
         chemistry.CHEMISTRY_IMAGE_MODE = "auto"
         row = {

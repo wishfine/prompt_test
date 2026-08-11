@@ -188,10 +188,16 @@ CHEMISTRY_IMAGE_DETAIL = os.getenv(
     "CHEMISTRY_IMAGE_DETAIL",
     "default",
 ).strip().lower()
-if CHEMISTRY_IMAGE_DETAIL not in {"default", "auto", "low", "high"}:
+if CHEMISTRY_IMAGE_DETAIL not in {
+    "default",
+    "auto",
+    "low",
+    "high",
+    "xhigh",
+}:
     raise ValueError(
         f"不支持的 CHEMISTRY_IMAGE_DETAIL={CHEMISTRY_IMAGE_DETAIL!r}；"
-        "可选值：default, auto, low, high"
+        "可选值：default, auto, low, high, xhigh（实验值）"
     )
 MAX_SCHEMA_RETRIES = int(os.getenv("CHEMISTRY_SCHEMA_RETRIES", "3"))
 
