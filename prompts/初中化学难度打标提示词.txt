@@ -703,9 +703,9 @@ reaction_count为0个时必须选无反应关系。
 只能是：`无`、`1步`、`2-3步`、`4步及以上`
 
 #### 21. calculation_structure
-只能是：`无任何计算`、`一步或口算`、`单个化学方程式计算`、`多个化学反应计算`、`含杂质多步质量分数`、`实验误差定量计算`、`多模型综合计算`
+只能是：`无任何计算`、`一步或口算`、`多步常规计算`、`单个化学方程式计算`、`多个化学反应计算`、`含杂质多步质量分数`、`实验误差定量计算`、`多模型综合计算`
 
-`calculation_type=无`时，calculation_steps必须为无，calculation_structure必须为无任何计算。
+`calculation_type=无`时，calculation_steps必须为无，calculation_structure必须为无任何计算。化学式、元素质量、溶质质量分数等不涉及化学反应的常规计算，1步时选`一步或口算`，2步及以上时选`多步常规计算`；不得为了表示“多步”误选`多个化学反应计算`或`含杂质多步质量分数`。
 
 #### 22. special_method
 只能是：`无`、`质量守恒`、`元素守恒`、`差量法`、`极值法`、`分情况计算`、`多方程式联立`、`循环反应计算`、`多种特殊方法联合`
@@ -774,7 +774,7 @@ reaction_count为0个时必须选无反应关系。
 
 ## 五、输出要求
 
-必须按指定的严格JSON Schema输出一个完整对象。除reasoning和curriculum_scope.extra_points外，不得生成自由文本特征。不要输出Markdown代码围栏或额外说明。
+必须按指定的严格JSON Schema输出一个完整对象。除reasoning和curriculum_scope.extra_points外，不得生成自由文本特征。不要输出Markdown代码围栏、思考过程或额外说明。reasoning需要引用词语时使用中文引号“”，不得在JSON字符串内部直接写未转义的英文双引号。
 
 {
   "features": {

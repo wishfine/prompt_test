@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v19"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v20"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -81,7 +82,7 @@ FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
     ),
     "calculation_steps": ("无", "1步", "2-3步", "4步及以上"),
     "calculation_structure": (
-        "无任何计算", "一步或口算", "单个化学方程式计算",
+        "无任何计算", "一步或口算", "多步常规计算", "单个化学方程式计算",
         "多个化学反应计算", "含杂质多步质量分数",
         "实验误差定量计算", "多模型综合计算",
     ),
@@ -148,6 +149,9 @@ FEATURE_ALIASES: dict[str, dict[str, str]] = {
     "calculation_structure": {
         "无": "无任何计算",
         "口算": "一步或口算",
+        "多个化学式计算": "多步常规计算",
+        "多步化学式计算": "多步常规计算",
+        "多项常规计算": "多步常规计算",
         "一个化学方程式计算": "单个化学方程式计算",
         "多反应计算": "多个化学反应计算",
         "多个反应计算": "多个化学反应计算",
@@ -169,6 +173,89 @@ FEATURE_ALIASES: dict[str, dict[str, str]] = {
 
 class ChemistrySchemaError(ValueError):
     """模型输出不满足初中化学严格契约。"""
+
+
+def _repair_missing_reasoning_quotes(text: str) -> str:
+    fields = (
+        "knowledge_points", "solution_process",
+        "main_difficulty_factors", "level_basis",
+    )
+    next_fields = "|".join((*fields, "difficulty_level"))
+    for field in fields:
+        pattern = re.compile(
+            rf'("{field}"\s*:\s*)([^"\s].*?)(?=,\s*"(?:{next_fields})"\s*:)',
+            flags=re.S,
+        )
+
+        def add_quotes(match: re.Match[str]) -> str:
+            value = match.group(2).strip()
+            if value.endswith('"'):
+                value = value[:-1].rstrip()
+            return f'{match.group(1)}"{value}"'
+
+        text = pattern.sub(add_quotes, text, count=1)
+    return text
+
+
+def _escape_unescaped_json_quotes(text: str) -> str:
+    """仅转义JSON字符串内部的裸双引号，不改字段和值。"""
+    output: list[str] = []
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text):
+        if not in_string:
+            output.append(char)
+            if char == '"':
+                in_string = True
+            continue
+        if escaped:
+            output.append(char)
+            escaped = False
+            continue
+        if char == "\\":
+            output.append(char)
+            escaped = True
+            continue
+        if char != '"':
+            output.append(char)
+            continue
+        following = text[index + 1:]
+        next_nonspace = next((item for item in following if not item.isspace()), "")
+        if next_nonspace in {"", ":", ",", "}", "]"}:
+            output.append(char)
+            in_string = False
+        else:
+            output.append('\\"')
+    return "".join(output)
+
+
+def parse_model_json_text(text: str) -> tuple[dict[str, Any], str]:
+    """恢复完整对象中的引号错误或思考前缀；不补字段、不猜特征。"""
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        parsed = None
+    if isinstance(parsed, dict):
+        return parsed, "strict"
+
+    starts = [index for index, char in enumerate(str(text or "")) if char == "{"]
+    decoder = json.JSONDecoder()
+    for start in reversed(starts):
+        candidate = str(text)[start:]
+        candidate = _repair_missing_reasoning_quotes(candidate)
+        candidate = _escape_unescaped_json_quotes(candidate)
+        try:
+            recovered, end = decoder.raw_decode(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(recovered, dict):
+            continue
+        if not {"features", "reasoning", "difficulty_level"}.issubset(recovered):
+            continue
+        if candidate[end:].strip():
+            continue
+        return recovered, "local_recovered"
+    return {}, "failed"
 
 
 def load_curriculum_topics() -> dict[str, dict[str, str]]:
@@ -709,9 +796,16 @@ def _normalize_feature_consistency(result: dict[str, Any]) -> list[dict[str, Any
                 "实验误差定量计算": "实验误差定量计算",
                 "多类计算综合": "多模型综合计算",
             }
+            fallback = structure_by_type.get(features["calculation_type"])
+            if fallback is None:
+                fallback = (
+                    "一步或口算"
+                    if features["calculation_steps"] == "1步"
+                    else "多步常规计算"
+                )
             replace(
                 "calculation_structure",
-                structure_by_type.get(features["calculation_type"], "一步或口算"),
+                fallback,
                 "存在计算时不能标为无任何计算",
             )
 

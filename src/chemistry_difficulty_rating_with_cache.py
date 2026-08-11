@@ -525,8 +525,10 @@ def build_user_content(
     return content
 
 
-def extract_rating_from_response(result: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
-    """读取完整结构化 JSON；不得把截断内容修补成部分预测。"""
+def extract_rating_from_response(
+    result: Dict[str, Any],
+) -> Tuple[Dict[str, Any], str, str]:
+    """读取完整JSON；只恢复完整对象中的确定性引号或前缀问题。"""
     output_text = ""
     for item in result.get("output", []):
         if (
@@ -535,22 +537,16 @@ def extract_rating_from_response(result: Dict[str, Any]) -> Tuple[Dict[str, Any]
         ):
             arguments = item.get("arguments", "")
             if isinstance(arguments, dict):
-                return arguments, json.dumps(arguments, ensure_ascii=False)
+                return arguments, json.dumps(arguments, ensure_ascii=False), "strict"
             if isinstance(arguments, str):
-                try:
-                    parsed = json.loads(arguments)
-                except json.JSONDecodeError:
-                    return {}, arguments
-                return (parsed if isinstance(parsed, dict) else {}), arguments
+                parsed, mode = junior_schema.parse_model_json_text(arguments)
+                return parsed, arguments, mode
         if item.get("type") == "message":
             for content_item in item.get("content", []):
                 if content_item.get("type") == "output_text":
                     output_text = content_item.get("text", "")
-    try:
-        parsed = json.loads(output_text)
-    except (json.JSONDecodeError, TypeError):
-        return {}, output_text
-    return (parsed if isinstance(parsed, dict) else {}), output_text
+    parsed, mode = junior_schema.parse_model_json_text(output_text)
+    return parsed, output_text, mode
 
 
 async def call_model_with_cache(
@@ -588,6 +584,7 @@ async def call_model_with_cache(
         "response_incomplete_reason": "",
         "response_output_item_statuses": [],
         "structured_output_json_complete": False,
+        "json_parse_mode": "failed",
         "token_usage_consistent": True,
         "token_anomaly_flags": [],
     }
@@ -637,7 +634,7 @@ async def call_model_with_cache(
             ) as response:
                 if response.status == 200:
                     result = await response.json()
-                    parsed_result, output_text = extract_rating_from_response(result)
+                    parsed_result, output_text, parse_mode = extract_rating_from_response(result)
                     usage = result.get("usage", {})
                     prompt_tokens = usage.get("input_tokens", 0)
                     completion_tokens = usage.get("output_tokens", 0)
@@ -655,14 +652,11 @@ async def call_model_with_cache(
                         for item in result.get("output", [])
                         if isinstance(item, dict)
                     ]
-                    try:
-                        decoded_output = json.loads(output_text)
-                        output_is_complete = isinstance(decoded_output, dict)
-                    except (json.JSONDecodeError, TypeError):
-                        output_is_complete = False
+                    output_is_complete = bool(parsed_result)
                     image_status["structured_output_json_complete"] = (
                         output_is_complete
                     )
+                    image_status["json_parse_mode"] = parse_mode
                     image_status["token_usage_consistent"] = (
                         total_tokens == prompt_tokens + completion_tokens
                     )

@@ -162,6 +162,52 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             "反应后气体沉淀固体质量",
         )
 
+    def test_complete_json_with_unescaped_reasoning_quotes_is_recovered(self):
+        raw = json.dumps(rating("送分题"), ensure_ascii=False)
+        malformed = raw.replace(
+            "完成一步判断。", '使用"是否生成新物质"规则完成判断。'
+        )
+        parsed, mode = schema.parse_model_json_text(malformed)
+        self.assertEqual(mode, "local_recovered")
+        self.assertEqual(parsed["difficulty_level"], "送分题")
+        self.assertIn('"是否生成新物质"', parsed["reasoning"]["solution_process"])
+
+    def test_complete_json_with_missing_reasoning_quote_is_recovered(self):
+        raw = json.dumps(rating("中等题"), ensure_ascii=False)
+        malformed = raw.replace(
+            '"solution_process": "完成一步判断。"',
+            '"solution_process":完成一步判断。"',
+        )
+        parsed, mode = schema.parse_model_json_text(malformed)
+        self.assertEqual(mode, "local_recovered")
+        self.assertEqual(parsed["reasoning"]["solution_process"], "完成一步判断。")
+
+    def test_thinking_prefix_before_complete_json_is_ignored(self):
+        raw = json.dumps(rating("基础题"), ensure_ascii=False)
+        parsed, mode = schema.parse_model_json_text(
+            "内部分析文本不应进入结果。<think_end>" + raw
+        )
+        self.assertEqual(mode, "local_recovered")
+        self.assertEqual(parsed["difficulty_level"], "基础题")
+
+    def test_truncated_json_is_not_repaired(self):
+        raw = json.dumps(rating("基础题"), ensure_ascii=False)
+        parsed, mode = schema.parse_model_json_text(raw[:-20])
+        self.assertEqual(parsed, {})
+        self.assertEqual(mode, "failed")
+
+    def test_nonreaction_multistep_calculation_has_own_structure(self):
+        value = rating("中等题", ["U04_T06"])
+        value["features"].update({
+            "calculation_type": "相对分子质量或元素质量计算",
+            "calculation_steps": "2-3步",
+            "calculation_structure": "无任何计算",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(
+            result["features"]["calculation_structure"], "多步常规计算"
+        )
+
     def test_cross_field_value_is_normalized_without_retry(self):
         value = rating("拔高题")
         value["features"]["calculation_type"] = "多个化学反应计算"
@@ -759,7 +805,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn('output_data["feature_normalization_actions"]', runtime)
         self.assertNotIn("MAX_SCHEMA_RETRIES", runtime)
         self.assertNotIn("repair_feedback", runtime)
-        self.assertIn("parsed = json.loads(output_text)", runtime)
+        self.assertIn("junior_schema.parse_model_json_text", runtime)
         self.assertNotIn("json_repair", runtime)
         self.assertIn('"structured_output_json_complete": False', runtime)
         self.assertIn('"token_anomaly_flags": []', runtime)
