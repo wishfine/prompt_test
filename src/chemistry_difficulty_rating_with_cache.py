@@ -179,7 +179,7 @@ def build_run_config(
         "seed": seed,
         "num": num,
         "feature_schema_version": junior_schema.FEATURE_SCHEMA_VERSION,
-        "structured_output_mode": "response_text_strict_json_schema",
+        "structured_output_mode": "prompt_json_local_strict_schema",
         "postprocess_mode": "teacher_factor_boundary_review_writeback_v2",
     }
 
@@ -619,7 +619,6 @@ async def call_model_with_cache(
             "model": MODEL_NAME,
             "input": [{"role": "user", "content": request_content}],
             "thinking": {"type": "disabled"},
-            "text": {"format": junior_schema.rating_response_format()},
         }
         if USE_CACHE:
             payload["previous_response_id"] = response_id

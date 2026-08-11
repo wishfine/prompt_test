@@ -367,10 +367,6 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("2幅", schema.FEATURE_OPTIONS["visual_item_count"])
         self.assertIn("3幅", schema.FEATURE_OPTIONS["visual_item_count"])
         self.assertNotIn("2-3幅", schema.FEATURE_OPTIONS["visual_item_count"])
-        response_format = schema.rating_response_format()
-        self.assertEqual(response_format["type"], "json_schema")
-        self.assertTrue(response_format["strict"])
-        self.assertEqual(response_format["schema"], schema.rating_json_schema())
 
     def test_prompt_documents_every_runtime_enum(self):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
@@ -402,14 +398,12 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         example, _ = decoder.raw_decode(prompt[start:])
         schema.validate_rating_contract(example)
 
-    def test_runtime_uses_cache_compatible_strict_json_and_keeps_no_retry(self):
+    def test_runtime_uses_prompt_json_with_local_strict_schema_and_no_retry(self):
         runtime = (ROOT / "src" / "chemistry_difficulty_rating_with_cache.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn(
-            '"text": {"format": junior_schema.rating_response_format()}',
-            runtime,
-        )
+        self.assertIn('"structured_output_mode": "prompt_json_local_strict_schema"', runtime)
+        self.assertNotIn('"text": {"format":', runtime)
         self.assertNotIn('"tools": [junior_schema.rating_tool_definition()]', runtime)
         self.assertNotIn('"parallel_tool_calls": False', runtime)
         self.assertIn("for _single_http_attempt in range(1)", runtime)
