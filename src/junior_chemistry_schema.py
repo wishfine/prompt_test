@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v18"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v19"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -451,6 +451,86 @@ def canonicalize_feature_value(
     return FEATURE_DEFAULTS[field], "无法唯一映射，使用该字段中性默认值"
 
 
+def _canonicalize_topic_ids(
+    raw_knowledge: Any,
+    reasoning: Any,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """只在知识点文字能唯一支持时修复模型臆造或串值的topic_id。"""
+    if not isinstance(raw_knowledge, dict):
+        raise ChemistrySchemaError("knowledge必须是对象")
+    raw_ids = raw_knowledge.get("topic_ids")
+    if isinstance(raw_ids, str):
+        raw_ids = [raw_ids]
+    if not isinstance(raw_ids, list):
+        raise ChemistrySchemaError("knowledge.topic_ids必须是数组")
+
+    topics = load_curriculum_topics()
+    reasoning_text = " ".join(
+        str(item or "")
+        for item in (reasoning.values() if isinstance(reasoning, dict) else ())
+    )
+    final_ids = [
+        str(raw_id).strip()
+        for raw_id in raw_ids
+        if str(raw_id).strip() in topics
+    ]
+    actions: list[dict[str, Any]] = []
+    for raw_id in raw_ids:
+        text = str(raw_id or "").strip()
+        if text in topics:
+            continue
+
+        embedded = [topic_id for topic_id in topics if topic_id in text]
+        if len(embedded) == 1:
+            final_ids.append(embedded[0])
+            actions.append({
+                "field": "knowledge.topic_ids",
+                "original_value": text,
+                "final_value": embedded[0],
+                "reason": "从串值中提取唯一合法topic_id",
+            })
+            continue
+
+        unit_match = re.match(r"^(U\d{2})_T\d+", text)
+        unit_hint = unit_match.group(1) if unit_match else ""
+        context = f"{text} {reasoning_text}"
+        scored: list[tuple[int, str]] = []
+        for topic_id, topic in topics.items():
+            if unit_hint and topic["unit_id"] != unit_hint:
+                continue
+            names = [topic["topic_name"], *re.split(r"[；;、]", topic["aliases"])]
+            matches = [
+                name.strip()
+                for name in names
+                if len(name.strip()) >= 3 and name.strip() in context
+            ]
+            if matches:
+                scored.append((max(len(name) for name in matches), topic_id))
+        scored.sort(reverse=True)
+        if scored and (len(scored) == 1 or scored[0][0] > scored[1][0]):
+            mapped = scored[0][1]
+            final_ids.append(mapped)
+            actions.append({
+                "field": "knowledge.topic_ids",
+                "original_value": text,
+                "final_value": mapped,
+                "reason": "依据知识点说明与受控目录唯一匹配",
+            })
+            continue
+
+        if final_ids:
+            actions.append({
+                "field": "knowledge.topic_ids",
+                "original_value": text,
+                "final_value": None,
+                "reason": "删除无法唯一映射的额外topic_id；保留其他合法知识点",
+            })
+            continue
+        raise ChemistrySchemaError(f"未收录且无法唯一映射topic_id: {text!r}")
+
+    return list(dict.fromkeys(final_ids)), actions
+
+
 def normalize_rating_contract(value: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """规范模型枚举与字段集合；不修改模型给出的难度等级。"""
     if not isinstance(value, dict):
@@ -462,6 +542,12 @@ def normalize_rating_contract(value: Any) -> tuple[dict[str, Any], list[dict[str
     source = normalized["features"]
     actions: list[dict[str, Any]] = []
     expected = {"knowledge", *FEATURE_OPTIONS.keys(), "curriculum_scope"}
+
+    topic_ids, topic_actions = _canonicalize_topic_ids(
+        source.get("knowledge"), normalized.get("reasoning")
+    )
+    source["knowledge"] = {"topic_ids": topic_ids}
+    actions.extend(topic_actions)
 
     for field in sorted(set(source) - expected):
         actions.append({
@@ -770,27 +856,19 @@ def _build_upper_level_review_candidate(
     if level == "送分题":
         teacher_sensitive_interference = (
             features["interference_type"] in {"特例或边界", "多个选项规则切换"}
-            or (
-                features["interference_type"] == "易混概念"
-                and features["chemical_object_distribution"]
-                in {"不同类多个化学对象", "多类化学对象综合"}
-            )
+            and features["solution_method"] == "多条规则分别判断"
         )
         multiple_combustion_facts = (
             features["experiment_analysis"] == "实验现象判断"
             and features["chemical_object_distribution"]
             in {"同类多个化学对象", "不同类多个化学对象", "多类化学对象综合"}
-        )
-        multiple_life_signs = (
-            features["visual_content"] == "生活标识图"
-            and features["visual_item_count"] == "4幅及以上"
+            and features["solution_method"] == "多条规则分别判断"
         )
         foundation_paths = {
             "不同类化学对象间存在教师明确关注的易混概念或规则切换": (
                 teacher_sensitive_interference
             ),
             "需要分别调用多个物质的燃烧现象事实": multiple_combustion_facts,
-            "需要核对四幅以上生活标识与名称是否对应": multiple_life_signs,
         }
         matched_paths = [
             name for name, active in foundation_paths.items() if active

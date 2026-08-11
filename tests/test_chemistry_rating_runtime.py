@@ -178,6 +178,22 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertTrue(any(action["field"] == "calculation_type" for action in actions))
         self.assertEqual(result["difficulty_level"], "拔高题")
 
+    def test_unknown_topic_id_is_recovered_only_from_unique_knowledge_text(self):
+        value = rating("中等题", ["U05_T05"])
+        value["reasoning"]["knowledge_points"] = "本题考查质量守恒定律。"
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(
+            result["features"]["knowledge"]["topic_ids"], ["U05_T01"]
+        )
+        actions = result["postprocess"]["feature_normalization_actions"]
+        self.assertTrue(any(action["field"] == "knowledge.topic_ids" for action in actions))
+
+    def test_unknown_topic_id_without_unique_evidence_still_fails(self):
+        value = rating("中等题", ["U05_T99"])
+        value["reasoning"]["knowledge_points"] = "本题涉及化学知识。"
+        with self.assertRaisesRegex(schema.ChemistrySchemaError, "无法唯一映射"):
+            schema.postprocess_chemistry_difficulty(value, {})
+
     def test_normalization_never_erases_explicit_high_difficulty_evidence(self):
         value = rating("拔高题")
         value["features"].update({
@@ -226,21 +242,16 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         material_confusion["features"].update({
             "chemical_object_distribution": "不同类多个化学对象",
             "step_count": "1步",
-            "solution_method": "一条规则直接应用",
-            "interference_type": "易混概念",
+            "solution_method": "多条规则分别判断",
+            "interference_type": "多个选项规则切换",
         })
         combustion_facts = rating("送分题", ["U02_T03"])
         combustion_facts["features"].update({
             "chemical_object_distribution": "同类多个化学对象",
             "experiment_analysis": "实验现象判断",
+            "solution_method": "多条规则分别判断",
         })
-        life_signs = rating("送分题", ["U11_T03"])
-        life_signs["features"].update({
-            "visual_content": "生活标识图",
-            "visual_item_count": "4幅及以上",
-            "visual_complexity": "多个同类型图像",
-        })
-        for value in (material_confusion, combustion_facts, life_signs):
+        for value in (material_confusion, combustion_facts):
             with self.subTest(features=value["features"]):
                 result = schema.postprocess_chemistry_difficulty(value, {})
                 self.assertEqual(result["difficulty_level"], "基础题")
@@ -274,7 +285,8 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         )
         self.assertEqual(result["features"]["visual_content"], "生活标识图")
         self.assertEqual(result["features"]["visual_item_count"], "4幅及以上")
-        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(result["difficulty_level"], "送分题")
+        self.assertFalse(result["postprocess"]["writeback_applied"])
 
     def test_every_model_feature_finishes_in_its_own_enum(self):
         value = rating("基础题")
@@ -699,12 +711,13 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("多个高难环节共同决定答案", prompt)
         self.assertIn("4-5步", prompt)
         self.assertIn("不能单独否决压轴题", prompt)
-        self.assertIn("【Case 20：氧分子与含氧物质】", prompt)
-        self.assertIn("【Case 24：材料类别的生活常识干扰】", prompt)
-        self.assertIn("【Case 41：石青分阶段受热】", prompt)
-        self.assertIn("【Case 46：锌与两种盐溶液反应后的滤液滤渣】", prompt)
-        self.assertIn("【Case 74：单一高难实验或计算 vs 多类型高难任务耦合】", prompt)
-        self.assertNotIn("【Case 75", prompt)
+        self.assertIn("【Case 21：氧分子与含氧物质】", prompt)
+        self.assertIn("【Case 25：材料类别的生活常识干扰】", prompt)
+        self.assertIn("【Case 46：石青分阶段受热】", prompt)
+        self.assertIn("【Case 51：锌与两种盐溶液反应后的滤液滤渣】", prompt)
+        self.assertIn("【Case 79：单一高难实验或计算 vs 多类型高难任务耦合】", prompt)
+        self.assertIn("【Case 41：装置作用、顺序、改进与计算联合】", prompt)
+        self.assertNotIn("【Case 80", prompt)
         self.assertIn("禁止借用相邻字段的枚举", prompt)
         self.assertIn("必须按指定的严格JSON Schema输出一个完整对象", prompt)
         self.assertNotIn("必须通过指定函数提交", prompt)
