@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v17"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v18"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -39,7 +39,7 @@ FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
     "classification_discussion": ("无", "单一情况讨论", "多情况分类讨论"),
     "reverse_tracing": ("无", "有"),
     "visual_content": (
-        "无图片信息", "仪器图", "基础装置图", "微观示意图", "数据表格",
+        "无图片信息", "生活标识图", "仪器图", "基础装置图", "微观示意图", "数据表格",
         "反应流程图", "工业流程图", "曲线图", "多组对比实验表格",
         "多装置组合实验图", "多种图像综合",
     ),
@@ -646,6 +646,33 @@ def _normalize_feature_consistency(result: dict[str, Any]) -> list[dict[str, Any
     return actions
 
 
+def _apply_question_evidence_corrections(
+    result: dict[str, Any], data: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """仅用题面可直接确认的事实，阻止模型把实际题图清成“无图片”。"""
+    features = result["features"]
+    text = "\n".join(
+        str(data.get(field, "") or "") for field in ("stem", "options")
+    )
+    has_image = bool(data.get("image_input_used")) or "<image>" in text or any(
+        data.get(field) for field in ("stem_pic_url", "options_pic_url")
+    )
+    if not (
+        has_image
+        and features["visual_content"] == "无图片信息"
+        and any(keyword in text for keyword in ("标识", "标志", "图标"))
+    ):
+        return []
+    original = features["visual_content"]
+    features["visual_content"] = "生活标识图"
+    return [{
+        "field": "visual_content",
+        "original_value": original,
+        "final_value": "生活标识图",
+        "reason": "题面明确包含需要辨认的生活标识图，禁止把实际图片清成无图片信息",
+    }]
+
+
 def _build_audit_candidates(result: dict[str, Any]) -> list[dict[str, Any]]:
     features = result["features"]
     knowledge = features["knowledge"]
@@ -739,6 +766,44 @@ def _build_upper_level_review_candidate(
     high_error_analysis = features["error_analysis"] in {
         "定量实验误差分析", "多种误差联合分析",
     }
+
+    if level == "送分题":
+        teacher_sensitive_interference = (
+            features["interference_type"] in {"特例或边界", "多个选项规则切换"}
+            or (
+                features["interference_type"] == "易混概念"
+                and features["chemical_object_distribution"]
+                in {"不同类多个化学对象", "多类化学对象综合"}
+            )
+        )
+        multiple_combustion_facts = (
+            features["experiment_analysis"] == "实验现象判断"
+            and features["chemical_object_distribution"]
+            in {"同类多个化学对象", "不同类多个化学对象", "多类化学对象综合"}
+        )
+        multiple_life_signs = (
+            features["visual_content"] == "生活标识图"
+            and features["visual_item_count"] == "4幅及以上"
+        )
+        foundation_paths = {
+            "不同类化学对象间存在教师明确关注的易混概念或规则切换": (
+                teacher_sensitive_interference
+            ),
+            "需要分别调用多个物质的燃烧现象事实": multiple_combustion_facts,
+            "需要核对四幅以上生活标识与名称是否对应": multiple_life_signs,
+        }
+        matched_paths = [
+            name for name, active in foundation_paths.items() if active
+        ]
+        if matched_paths:
+            return _candidate(
+                "S1_giveaway_to_foundation_teacher_anchor", "基础题",
+                "命中教师明确使用的1/2档边界；难度来自具体易混概念、多个物质事实或多幅标识核对，不由选项数量机械升档。",
+                {
+                    "matched_paths": matched_paths,
+                    "matched_path_count": len(matched_paths),
+                },
+            )
 
     if level == "基础题":
         has_visual_analysis = features["visual_complexity"] != "无图片信息"
@@ -893,23 +958,33 @@ def _build_upper_level_review_candidate(
         composition_calculation = features["calculation_type"] in {
             "含杂质计算", "多类计算综合",
         }
-        composition_condition = features["hidden_condition_type"] in {
-            "物质或溶液状态", "纯净干燥或杂质", "气体水分或质量损失",
-            "剩余物或变质程度", "多类条件联合",
-        }
+        decisive_coupling_evidence = (
+            features["given_information"] == "题干给出多条新事实或规则"
+            or features["interference_type"] == "多种剩余情况或竞争解释"
+            or features["error_analysis"] in {
+                "装置或方案导致误差", "定量实验误差分析", "多种误差联合分析",
+            }
+        )
+        staged_experiment_validation = (
+            features["experiment_analysis"] == "多个实验分析任务联合"
+            and features["error_analysis"] in {
+                "装置或方案导致误差", "定量实验误差分析", "多种误差联合分析",
+            }
+        )
         shared_composition_evidence = (
-            composition_condition
-            or classification_required
-            or (
-                features["task_count"] == "4项及以上"
-                and features["task_relation"] == "前后依赖"
-                and features["experiment_analysis"] == "无"
+            (
+                continuous_reactions
+                and features["calculation_structure"] == "多个化学反应计算"
             )
             or (
-                features["cross_subject"] == "物理知识参与"
-                and features["information_operation"] == "多来源信息筛选联合"
+                features["experiment_analysis"] == "多个实验分析任务联合"
+                and features["error_analysis"] in {
+                    "装置或方案导致误差", "多种误差联合分析",
+                }
+                and features["calculation_structure"] in {
+                    "含杂质多步质量分数", "多模型综合计算",
+                }
             )
-            or features["special_method"] == "多种特殊方法联合"
         )
         pressure_paths = {
             "多来源信息、四个以上反应与关联条件形成整题综合压力": (
@@ -917,6 +992,7 @@ def _build_upper_level_review_candidate(
                 and multiple_reactions
                 and complex_condition
                 and features["step_count"] in {"4-5步", "6步及以上"}
+                and decisive_coupling_evidence
             ),
             "四个以上反应与真实误差分析共同构成实验定量综合": (
                 multiple_reactions
@@ -927,12 +1003,14 @@ def _build_upper_level_review_candidate(
                 and multi_reaction_calculation
                 and multiple_hidden_conditions
                 and dependent_tasks
+                and decisive_coupling_evidence
             ),
             "单项任务内分类讨论、复杂计算与关联条件联合": (
                 features["task_relation"] == "单项任务"
                 and classification_required
                 and complex_calculation
                 and complex_condition
+                and features["reverse_tracing"] == "有"
             ),
             "四个以上连续反应与决定建模的特殊方法联合": (
                 multiple_reactions
@@ -947,6 +1025,7 @@ def _build_upper_level_review_candidate(
                 and complex_calculation
                 and complex_condition
                 and features["task_relation"] != "多项独立"
+                and staged_experiment_validation
             ),
             "同一复杂体系中用2-3个反应和守恒反推组成或纯度": (
                 four_or_more_steps
@@ -971,17 +1050,6 @@ def _build_upper_level_review_candidate(
                 and features["special_method"] != "无"
                 and complex_condition
                 and system_or_remainder_risk
-            ),
-            "多个实验结果共同排除剩余物并完成逆向检验": (
-                four_or_more_steps
-                and two_or_three_reactions
-                and sequential_or_competing_reactions
-                and complex_condition
-                and features["interference_type"] == "多种剩余情况或竞争解释"
-                and features["reverse_tracing"] == "有"
-                and features["experiment_analysis"] == "多个实验分析任务联合"
-                and features["experiment_design"] == "无"
-                and different_chemical_objects
             ),
             "由最终现象和质量关系共同判断反应先后及剩余物": (
                 four_or_more_steps
@@ -1112,8 +1180,11 @@ def postprocess_chemistry_difficulty(value: dict[str, Any], data: dict[str, Any]
         "unit_count": len(unit_ids),
         "cross_unit": len(unit_ids) >= 2,
     }
+    question_evidence_actions = _apply_question_evidence_corrections(result, data)
     normalization_actions = (
-        model_normalization_actions + _normalize_feature_consistency(result)
+        model_normalization_actions
+        + question_evidence_actions
+        + _normalize_feature_consistency(result)
     )
 
     original_level = result["difficulty_level"]

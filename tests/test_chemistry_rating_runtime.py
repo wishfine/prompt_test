@@ -221,6 +221,61 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertEqual(result["features"]["hidden_condition_count"], "2个")
         self.assertEqual(result["features"]["condition_relation"], "多个关联条件")
 
+    def test_giveaway_review_uses_only_concrete_teacher_anchors(self):
+        material_confusion = rating("送分题", ["U11_T02"])
+        material_confusion["features"].update({
+            "chemical_object_distribution": "不同类多个化学对象",
+            "step_count": "1步",
+            "solution_method": "一条规则直接应用",
+            "interference_type": "易混概念",
+        })
+        combustion_facts = rating("送分题", ["U02_T03"])
+        combustion_facts["features"].update({
+            "chemical_object_distribution": "同类多个化学对象",
+            "experiment_analysis": "实验现象判断",
+        })
+        life_signs = rating("送分题", ["U11_T03"])
+        life_signs["features"].update({
+            "visual_content": "生活标识图",
+            "visual_item_count": "4幅及以上",
+            "visual_complexity": "多个同类型图像",
+        })
+        for value in (material_confusion, combustion_facts, life_signs):
+            with self.subTest(features=value["features"]):
+                result = schema.postprocess_chemistry_difficulty(value, {})
+                self.assertEqual(result["difficulty_level"], "基础题")
+                self.assertEqual(
+                    result["postprocess_actions"][-1]["rule"],
+                    "S1_giveaway_to_foundation_teacher_anchor",
+                )
+
+        simple_classification = rating("送分题", ["U11_T02"])
+        simple_classification["features"].update({
+            "chemical_object_distribution": "同类多个化学对象",
+            "interference_type": "易混概念",
+        })
+        unchanged = schema.postprocess_chemistry_difficulty(simple_classification, {})
+        self.assertEqual(unchanged["difficulty_level"], "送分题")
+
+    def test_question_image_evidence_preserves_life_sign_features(self):
+        value = rating("送分题", ["U11_T03"])
+        value["features"].update({
+            "visual_content": "无图片信息",
+            "visual_item_count": "4幅及以上",
+            "visual_complexity": "多个同类型图像",
+        })
+        result = schema.postprocess_chemistry_difficulty(
+            value,
+            {
+                "stem": "下列常见标识错误的是（ ）<image>",
+                "options": "节能标志；节水标志；禁止带火种；有毒品",
+                "image_input_used": True,
+            },
+        )
+        self.assertEqual(result["features"]["visual_content"], "生活标识图")
+        self.assertEqual(result["features"]["visual_item_count"], "4幅及以上")
+        self.assertEqual(result["difficulty_level"], "基础题")
+
     def test_every_model_feature_finishes_in_its_own_enum(self):
         value = rating("基础题")
         for field in schema.FEATURE_OPTIONS:
@@ -363,6 +418,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         value["features"]["hidden_condition_count"] = "2个"
         value["features"]["hidden_condition_type"] = "多类条件联合"
         value["features"]["condition_relation"] = "多个关联条件"
+        value["features"]["given_information"] = "题干给出多条新事实或规则"
         result = schema.postprocess_chemistry_difficulty(value, {})
         self.assertEqual(result["difficulty_level"], "压轴题")
         action = result["postprocess_actions"][-1]
@@ -378,6 +434,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         classification = rating("拔高题")
         classification["features"].update({
             "classification_discussion": "多情况分类讨论",
+            "reverse_tracing": "有",
             "calculation_type": "多类计算综合",
             "calculation_steps": "4步及以上",
             "hidden_condition_count": "2个",
@@ -390,6 +447,8 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         continuous_reactions["features"].update({
             "reaction_count": "4个及以上",
             "reaction_relation": "多个反应连续",
+            "experiment_analysis": "多个实验分析任务联合",
+            "error_analysis": "装置或方案导致误差",
             "calculation_type": "多类计算综合",
             "calculation_steps": "4步及以上",
             "special_method": "差量法",
@@ -412,6 +471,8 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             "information_operation": "图像拐点或分段分析",
             "reaction_count": "2-3个",
             "reaction_relation": "多个反应连续",
+            "experiment_analysis": "多个实验分析任务联合",
+            "error_analysis": "装置或方案导致误差",
             "calculation_type": "多类计算综合",
             "calculation_steps": "4步及以上",
             "calculation_structure": "多个化学反应计算",
@@ -458,10 +519,9 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         expected_paths = (
             "分阶段图像或多来源数据中判断2-3个连续反应并完成关联计算",
             "同一复杂体系中用2-3个反应和守恒反推组成或纯度",
-            "多个实验结果共同排除剩余物并完成逆向检验",
         )
         for value, expected_path in zip(
-            (staged_graph, shared_composition, qualitative_remainder),
+            (staged_graph, shared_composition),
             expected_paths,
         ):
             with self.subTest(expected_path=expected_path):
@@ -470,6 +530,67 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
                 action = result["postprocess_actions"][-1]
                 self.assertIn(expected_path, action["evidence"]["matched_paths"])
                 self.assertIn("未被当作单项否决条件", action["reason"])
+
+        qualitative_result = schema.postprocess_chemistry_difficulty(
+            qualitative_remainder, {}
+        )
+        self.assertEqual(qualitative_result["difficulty_level"], "拔高题")
+        self.assertEqual(qualitative_result["postprocess_actions"], [])
+
+    def test_hard_review_rejects_broad_feature_accumulation(self):
+        classification_without_reverse = rating("拔高题")
+        classification_without_reverse["features"].update({
+            "classification_discussion": "单一情况讨论",
+            "calculation_type": "多类计算综合",
+            "calculation_steps": "4步及以上",
+            "calculation_structure": "多个化学反应计算",
+            "special_method": "极值法",
+            "hidden_condition_count": "2个",
+            "hidden_condition_type": "过量或不足",
+            "condition_relation": "多个关联条件",
+        })
+        broad_multi_source = rating("拔高题")
+        broad_multi_source["features"].update({
+            "task_count": "4项及以上",
+            "task_relation": "前后依赖",
+            "step_count": "4-5步",
+            "information_operation": "多来源信息筛选联合",
+            "reaction_count": "4个及以上",
+            "reaction_relation": "多个反应连续",
+            "calculation_type": "多类计算综合",
+            "calculation_steps": "4步及以上",
+            "calculation_structure": "多个化学反应计算",
+            "hidden_condition_count": "2个",
+            "hidden_condition_type": "反应条件",
+            "condition_relation": "多个关联条件",
+            "interference_type": "体系质量关系易错",
+        })
+        staged_without_validation = rating("拔高题")
+        staged_without_validation["features"].update({
+            "task_count": "4项及以上",
+            "task_relation": "前后依赖",
+            "step_count": "4-5步",
+            "information_operation": "多来源信息筛选联合",
+            "reaction_count": "2-3个",
+            "reaction_relation": "多个反应连续",
+            "calculation_type": "含杂质计算",
+            "calculation_steps": "4步及以上",
+            "calculation_structure": "含杂质多步质量分数",
+            "special_method": "元素守恒",
+            "hidden_condition_count": "2个",
+            "hidden_condition_type": "过量或不足",
+            "condition_relation": "多个关联条件",
+            "interference_type": "体系质量关系易错",
+        })
+        for value in (
+            classification_without_reverse,
+            broad_multi_source,
+            staged_without_validation,
+        ):
+            with self.subTest(features=value["features"]):
+                result = schema.postprocess_chemistry_difficulty(value, {})
+                self.assertEqual(result["difficulty_level"], "拔高题")
+                self.assertEqual(result["postprocess_actions"], [])
 
     def test_hard_review_accepts_single_chain_and_independent_final_paths(self):
         multi_source = rating("拔高题")
@@ -483,6 +604,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             "hidden_condition_count": "2个",
             "hidden_condition_type": "多类条件联合",
             "condition_relation": "多个关联条件",
+            "given_information": "题干给出多条新事实或规则",
         })
         result = schema.postprocess_chemistry_difficulty(multi_source, {})
         self.assertEqual(result["difficulty_level"], "压轴题")
@@ -577,10 +699,12 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("多个高难环节共同决定答案", prompt)
         self.assertIn("4-5步", prompt)
         self.assertIn("不能单独否决压轴题", prompt)
-        self.assertIn("【Case 36：石青分阶段受热】", prompt)
-        self.assertIn("【Case 41：锌与两种盐溶液反应后的滤液滤渣】", prompt)
-        self.assertIn("【Case 69：单一高难实验或计算 vs 多类型高难任务耦合】", prompt)
-        self.assertNotIn("【Case 70", prompt)
+        self.assertIn("【Case 20：氧分子与含氧物质】", prompt)
+        self.assertIn("【Case 24：材料类别的生活常识干扰】", prompt)
+        self.assertIn("【Case 41：石青分阶段受热】", prompt)
+        self.assertIn("【Case 46：锌与两种盐溶液反应后的滤液滤渣】", prompt)
+        self.assertIn("【Case 74：单一高难实验或计算 vs 多类型高难任务耦合】", prompt)
+        self.assertNotIn("【Case 75", prompt)
         self.assertIn("禁止借用相邻字段的枚举", prompt)
         self.assertIn("必须按指定的严格JSON Schema输出一个完整对象", prompt)
         self.assertNotIn("必须通过指定函数提交", prompt)
