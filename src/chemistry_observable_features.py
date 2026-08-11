@@ -126,7 +126,25 @@ TASK_TYPES = {
     "新信息应用",
 }
 
-RULE_FAMILIES = set(TASK_TYPES)
+# rule_families不再复刻task_groups的粗任务类型，而是记录学生实际
+# 切换的回答规则。保持单字段、有限枚举，避免重新引入V6的额外字段
+# 和Schema负担；旧九类输出会在归一层确定性映射到下列新枚举。
+RULE_FAMILIES = {
+    "教材事实直接匹配",
+    "分类或概念辨析",
+    "化学用语书写",
+    "化学用语含义辨析",
+    "性质用途或现象判断",
+    "反应关系或条件判断",
+    "实验操作规范",
+    "作用目的或原因解释",
+    "异常失败或误差诊断",
+    "图表读取或数据归纳",
+    "证据推断或鉴别除杂",
+    "定量关系与计算",
+    "方案设计或评价",
+    "新信息迁移",
+}
 
 RESPONSE_OPERATIONS = {
     "教材事实或名称直接匹配",
@@ -324,8 +342,38 @@ TASK_TYPE_ALIASES = {
     "微观粒子表征": "化学用语",
     "微观粒子与符号转换": "化学用语",
     "化学式推断": "化学用语",
+    "化学方程式": "化学用语",
+    "条件筛选": "性质与反应判断",
+    "性质与应用推断": "性质与反应判断",
     "反应条件与速率分析": "性质与反应判断",
     "方案评价": "方案设计与评价",
+}
+
+RULE_FAMILY_ALIASES = {
+    # 历史V2-V6粗规则族：只用于无损回放，新Prompt不再输出这些值。
+    "直接事实与概念": "教材事实直接匹配",
+    "化学用语": "化学用语书写",
+    "性质与反应判断": "性质用途或现象判断",
+    "实验操作与探究": "实验操作规范",
+    "图表与数据": "图表读取或数据归纳",
+    "证据推断": "证据推断或鉴别除杂",
+    "定量计算": "定量关系与计算",
+    "方案设计与评价": "方案设计或评价",
+    "新信息应用": "新信息迁移",
+    # 模型常见近义表达。
+    "教材事实或名称直接匹配": "教材事实直接匹配",
+    "分类标准应用": "分类或概念辨析",
+    "完整命题正误辨析": "分类或概念辨析",
+    "化学用语含义解释": "化学用语含义辨析",
+    "性质用途或现象解释": "性质用途或现象判断",
+    "反应条件判断": "反应关系或条件判断",
+    "实验作用或目的解释": "作用目的或原因解释",
+    "规范原因表达": "作用目的或原因解释",
+    "异常或失败原因诊断": "异常失败或误差诊断",
+    "误差分析": "异常失败或误差诊断",
+    "图表读取或归纳": "图表读取或数据归纳",
+    "证据推断或物质鉴别": "证据推断或鉴别除杂",
+    "定量计算": "定量关系与计算",
 }
 
 ENUM_VALUE_ALIASES = {
@@ -343,6 +391,8 @@ ENUM_VALUE_ALIASES = {
     },
     "evidence_operations": {
         "双来源交叉验证": "多证据共同成立",
+        "排除干扰物质": "排除一个候选",
+        "排除干扰候选解释": "排除多个候选解释",
     },
     "condition_operations": {
         "条件对比": "条件切换",
@@ -351,12 +401,16 @@ ENUM_VALUE_ALIASES = {
     "experiment_operation": {
         "方案设计与评价": "方案评价或补充实验",
         "方案评价": "方案评价或补充实验",
+        "方案设计或补充实验": "方案评价或补充实验",
     },
     "experiment_task_structure": {
         "数据归纳": "控制变量或数据归纳",
     },
     "solution_topology": {
         "范围或边界筛选": "条件分支或范围筛选",
+    },
+    "calculation_operations": {
+        "单一比例": "直接比例",
     },
 }
 
@@ -401,6 +455,13 @@ def _canonical_task_type(value: Any) -> str:
     if any(word in clean for word in ("反应条件", "反应速率")):
         return "性质与反应判断"
     return clean
+
+
+def _canonical_rule_family(value: Any) -> str:
+    clean = _clean_enum_text(value)
+    if clean in RULE_FAMILIES:
+        return clean
+    return RULE_FAMILY_ALIASES.get(clean, clean)
 
 
 def _canonical_enum_value(field: str, value: Any) -> str:
@@ -474,6 +535,15 @@ def normalize_observable_features(
             new_type = _canonical_task_type(old_type)
             record("task_groups.task_type", old_type, new_type, "任务类型近义归一")
             count = group.get("count")
+            if isinstance(count, str) and count.strip().isdigit():
+                converted_count = int(count.strip())
+                record(
+                    "task_groups.count",
+                    count,
+                    converted_count,
+                    "数字字符串转整数",
+                )
+                count = converted_count
             if (
                 new_type in positions
                 and isinstance(count, int)
@@ -491,7 +561,7 @@ def normalize_observable_features(
         old_values = normalized["rule_families"]
         new_values: List[str] = []
         for value in old_values:
-            canonical = _canonical_task_type(value)
+            canonical = _canonical_rule_family(value)
             if canonical not in new_values:
                 new_values.append(canonical)
         record("rule_families", old_values, new_values, "规则族近义归一与去重")
@@ -568,6 +638,96 @@ def normalize_observable_features(
                 "条件操作字段串位修复",
                 force=True,
             )
+
+        evidence_moves = {
+            "排除一个候选": "排除一个候选",
+            "排除干扰物质": "排除一个候选",
+            "排除干扰候选解释": "排除多个候选解释",
+        }
+        for misplaced, target in evidence_moves.items():
+            if misplaced not in conditions:
+                continue
+            conditions.remove(misplaced)
+            if target not in evidence:
+                evidence.append(target)
+            record(
+                "condition_operations→evidence_operations",
+                misplaced,
+                target,
+                "候选排除操作字段串位修复",
+                force=True,
+            )
+
+        if any(value in conditions for value in ("控制变量", "变量控制")):
+            conditions[:] = [
+                value
+                for value in conditions
+                if value not in {"控制变量", "变量控制"}
+            ]
+            if normalized.get("experiment_operation") in {None, "无"}:
+                normalized["experiment_operation"] = "变量控制"
+            record(
+                "condition_operations→experiment_operation",
+                "控制变量",
+                "变量控制",
+                "控制变量操作字段串位修复",
+                force=True,
+            )
+
+        error_moves = {
+            "操作偏差": "操作偏差到最终结果方向",
+            "操作偏差到最终结果方向": "操作偏差到最终结果方向",
+            "读数偏差到实际量判断": "读数偏差到实际量判断",
+        }
+        for misplaced, target in error_moves.items():
+            if misplaced not in conditions:
+                continue
+            conditions.remove(misplaced)
+            if normalized.get("error_analysis_operation") in {
+                None,
+                "无误差分析",
+            }:
+                normalized["error_analysis_operation"] = target
+            record(
+                "condition_operations→error_analysis_operation",
+                misplaced,
+                target,
+                "误差操作字段串位修复",
+                force=True,
+            )
+
+        for misplaced in ("分段", "拐点平台或分段"):
+            if misplaced not in conditions:
+                continue
+            conditions.remove(misplaced)
+            if normalized.get("graph_table_operation") in {None, "无"}:
+                normalized["graph_table_operation"] = "拐点平台或分段"
+            record(
+                "condition_operations→graph_table_operation",
+                misplaced,
+                "拐点平台或分段",
+                "图表分段操作字段串位修复",
+                force=True,
+            )
+
+    raw_experiment_operation = normalized.get("experiment_operation")
+    if raw_experiment_operation in {
+        "操作偏差因果链",
+        "操作偏差到最终结果方向",
+        "读数偏差到实际量判断",
+    }:
+        if raw_experiment_operation == "操作偏差因果链":
+            normalized["experiment_task_structure"] = "操作偏差因果链"
+        else:
+            normalized["error_analysis_operation"] = raw_experiment_operation
+            normalized["experiment_task_structure"] = "操作偏差因果链"
+        normalized["experiment_operation"] = "基础操作或读数"
+        record(
+            "experiment_operation",
+            raw_experiment_operation,
+            "基础操作或读数",
+            "误差结构值移回对应字段",
+        )
 
     for field in (
         "parallel_task_relation",

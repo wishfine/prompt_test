@@ -36,9 +36,9 @@ def valid_features() -> dict:
             {"task_type": "定量计算", "count": 2},
         ],
         "rule_families": [
-            "图表与数据",
-            "性质与反应判断",
-            "定量计算",
+            "图表读取或数据归纳",
+            "反应关系或条件判断",
+            "定量关系与计算",
         ],
         "curriculum_units": ["U5", "U9"],
         "reaction_structure": "单一反应",

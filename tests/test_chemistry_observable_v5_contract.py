@@ -119,6 +119,148 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
             self.features.OBSERVABLE_FEATURE_FIELDS,
         )
 
+    def test_rule_families_are_concrete_answer_operations(self) -> None:
+        self.assertEqual(
+            self.features.RULE_FAMILIES,
+            {
+                "教材事实直接匹配",
+                "分类或概念辨析",
+                "化学用语书写",
+                "化学用语含义辨析",
+                "性质用途或现象判断",
+                "反应关系或条件判断",
+                "实验操作规范",
+                "作用目的或原因解释",
+                "异常失败或误差诊断",
+                "图表读取或数据归纳",
+                "证据推断或鉴别除杂",
+                "定量关系与计算",
+                "方案设计或评价",
+                "新信息迁移",
+            },
+        )
+
+    def test_prompt_exposes_only_the_concrete_rule_family_enum(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "`rule_families`不再复刻task_type",
+            prompt,
+        )
+        for family in self.features.RULE_FAMILIES:
+            self.assertIn(f"- {family}", prompt)
+        self.assertNotIn(
+            "实际需要切换的回答规则族数组，枚举与task_type相同",
+            prompt,
+        )
+
+    def test_prompt_prevents_observed_retry_field_drift(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        for instruction in (
+            "控制变量只能填入experiment_operation",
+            "排除候选只能填入evidence_operations",
+            "拐点、平台或分段只能填入graph_table_operation",
+            "操作偏差只能填入error_analysis_operation",
+            "单一比例必须写成直接比例",
+            "化学方程式不是task_type",
+            "task_groups.count必须是1到20的整数",
+        ):
+            self.assertIn(instruction, prompt)
+
+    def test_legacy_coarse_rule_families_normalize_without_retry(self) -> None:
+        item = current_features()
+        item["rule_families"] = [
+            "直接事实与概念",
+            "化学用语",
+            "性质与反应判断",
+            "实验操作与探究",
+            "图表与数据",
+            "证据推断",
+            "定量计算",
+            "方案设计与评价",
+            "新信息应用",
+        ]
+
+        normalized, actions = self.features.normalize_observable_features(
+            item
+        )
+        validated = self.features.validate_observable_features(normalized)
+
+        self.assertEqual(
+            validated["rule_families"],
+            [
+                "教材事实直接匹配",
+                "化学用语书写",
+                "性质用途或现象判断",
+                "实验操作规范",
+                "图表读取或数据归纳",
+                "证据推断或鉴别除杂",
+                "定量关系与计算",
+                "方案设计或评价",
+                "新信息迁移",
+            ],
+        )
+        self.assertTrue(
+            any(action["field"] == "rule_families" for action in actions)
+        )
+
+    def test_normalization_repairs_observed_cross_field_enum_drift(self) -> None:
+        item = current_features()
+        item["rule_families"] = ["图表读取或数据归纳", "定量关系与计算"]
+        item["condition_operations"] = [
+            "控制变量",
+            "排除一个候选",
+            "操作偏差到最终结果方向",
+            "拐点平台或分段",
+        ]
+        item["evidence_operations"] = ["多证据共同成立"]
+        item["experiment_operation"] = "无"
+        item["graph_table_operation"] = "无"
+        item["error_analysis_operation"] = "无误差分析"
+        item["calculation_operations"] = ["单一比例"]
+
+        normalized, actions = self.features.normalize_observable_features(
+            item
+        )
+        validated = self.features.validate_observable_features(normalized)
+
+        self.assertEqual(validated["condition_operations"], [])
+        self.assertEqual(validated["experiment_operation"], "变量控制")
+        self.assertEqual(
+            validated["evidence_operations"],
+            ["多证据共同成立", "排除一个候选"],
+        )
+        self.assertEqual(
+            validated["error_analysis_operation"],
+            "操作偏差到最终结果方向",
+        )
+        self.assertEqual(
+            validated["graph_table_operation"],
+            "拐点平台或分段",
+        )
+        self.assertEqual(validated["calculation_operations"], ["直接比例"])
+        self.assertTrue(actions)
+
+    def test_normalization_repairs_observed_task_and_count_variants(self) -> None:
+        item = current_features()
+        item["rule_families"] = ["反应关系或条件判断"]
+        item["task_groups"] = [
+            {"task_type": "化学方程式", "count": "2"},
+            {"task_type": "性质与应用推断", "count": 1},
+        ]
+
+        normalized, _ = self.features.normalize_observable_features(item)
+        validated = self.features.validate_observable_features(normalized)
+
+        self.assertEqual(
+            validated["task_groups"],
+            [
+                {"task_type": "化学用语", "count": 2},
+                {"task_type": "性质与反应判断", "count": 1},
+            ],
+        )
+
     def test_historical_v6_contract_remains_readable(self) -> None:
         validated = self.runtime.validate_feature_contract(current_features())
 
@@ -288,7 +430,10 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
             validated["task_groups"],
             [{"task_type": "实验操作与探究", "count": 2}],
         )
-        self.assertEqual(validated["rule_families"], ["实验操作与探究"])
+        self.assertEqual(
+            validated["rule_families"],
+            ["异常失败或误差诊断"],
+        )
         self.assertEqual(
             validated["representation_operations"],
             ["宏观对象→化学符号", "化学符号→定量关系"],
