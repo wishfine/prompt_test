@@ -41,6 +41,7 @@ try:
     from chemistry_observable_features import (
         OBSERVABLE_FEATURE_FIELDS,
         OBSERVABLE_V6_FEATURE_FIELDS,
+        OBSERVABLE_V8_FEATURE_FIELDS,
         OBSERVABLE_V7_FEATURE_FIELDS,
         OBSERVABLE_V5_FEATURE_FIELDS,
         OBSERVABLE_V4_FEATURE_FIELDS,
@@ -55,6 +56,7 @@ except ModuleNotFoundError:
     from src.chemistry_observable_features import (
         OBSERVABLE_FEATURE_FIELDS,
         OBSERVABLE_V6_FEATURE_FIELDS,
+        OBSERVABLE_V8_FEATURE_FIELDS,
         OBSERVABLE_V7_FEATURE_FIELDS,
         OBSERVABLE_V5_FEATURE_FIELDS,
         OBSERVABLE_V4_FEATURE_FIELDS,
@@ -871,6 +873,7 @@ def is_observable_feature_contract(features: Any) -> bool:
         isinstance(features, dict)
         and frozenset(features)
         in {
+            frozenset(OBSERVABLE_V8_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
             frozenset(OBSERVABLE_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
@@ -888,6 +891,7 @@ def looks_like_observable_feature_contract(features: Any) -> bool:
         return False
     known = (
         set(OBSERVABLE_FEATURE_FIELDS)
+        | set(OBSERVABLE_V8_FEATURE_FIELDS)
         | set(OBSERVABLE_V7_FEATURE_FIELDS)
         | set(OBSERVABLE_V6_FEATURE_FIELDS)
         | {
@@ -898,6 +902,8 @@ def looks_like_observable_feature_contract(features: Any) -> bool:
 
 
 def observable_feature_schema_version(features: Dict[str, Any]) -> str:
+    if set(features) == set(OBSERVABLE_V8_FEATURE_FIELDS):
+        return "chemistry_observable_v8"
     if set(features) == set(OBSERVABLE_V7_FEATURE_FIELDS):
         return "chemistry_observable_v7"
     if set(features) == set(OBSERVABLE_V6_FEATURE_FIELDS):
@@ -1233,6 +1239,7 @@ def observable_deep_quantitative_final_signal(
         else frozenset()
     )
     if feature_keys in {
+        frozenset(OBSERVABLE_V8_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
         frozenset(OBSERVABLE_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
@@ -1332,6 +1339,7 @@ def observable_dense_multiquestion_final_signal(
         return False
     feature_keys = frozenset(features)
     if feature_keys not in {
+        frozenset(OBSERVABLE_V8_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
         frozenset(OBSERVABLE_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
@@ -1376,6 +1384,7 @@ def observable_qualitative_evidence_final_signal(
         return False
     feature_keys = frozenset(features)
     if feature_keys not in {
+        frozenset(OBSERVABLE_V8_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
         frozenset(OBSERVABLE_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
@@ -1869,6 +1878,7 @@ def observable_multi_rule_multitopic_medium_signal(
     """
     if frozenset(model_features) not in {
         frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V8_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
     }:
         return None
@@ -1896,6 +1906,7 @@ def observable_parallel_reaction_multitopic_medium_candidate_signal(
     """
     if frozenset(model_features) not in {
         frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V8_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
     }:
         return None
@@ -1923,6 +1934,7 @@ def observable_high_density_evidence_hard_signal(
     """
     if frozenset(model_features) not in {
         frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V8_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
     }:
         return None
@@ -2189,6 +2201,7 @@ def observable_shared_new_information_signal(
         not isinstance(model_features, dict)
         or frozenset(model_features)
         not in {
+            frozenset(OBSERVABLE_V8_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
             frozenset(OBSERVABLE_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
@@ -3532,21 +3545,25 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         rating_result["feature_schema_version"] = schema_version
         rating_result["observable_metrics"] = observable_metrics
         rating_result["postprocess_profile"] = (
-            "chemistry_observable_v7_audit_only_narrow_guard_v1"
-            if schema_version == "chemistry_observable_v7"
+            "chemistry_observable_v8_fine_curriculum_audit_only_v1"
+            if schema_version == "chemistry_observable_v8"
             else (
-                "chemistry_observable_v6_narrow_guard_v1"
-                if schema_version == "chemistry_observable_v6"
+                "chemistry_observable_v7_audit_only_narrow_guard_v1"
+                if schema_version == "chemistry_observable_v7"
                 else (
-                    "chemistry_observable_v5_narrow_guard_v1"
-                    if schema_version == "chemistry_observable_v5"
+                    "chemistry_observable_v6_narrow_guard_v1"
+                    if schema_version == "chemistry_observable_v6"
                     else (
-                        "chemistry_observable_v4_narrow_guard_v1"
-                        if schema_version == "chemistry_observable_v4"
+                        "chemistry_observable_v5_narrow_guard_v1"
+                        if schema_version == "chemistry_observable_v5"
                         else (
-                            "chemistry_observable_v3_teacher_calibrated_v2"
-                            if schema_version == "chemistry_observable_v3"
-                            else "chemistry_observable_v2_teacher_distribution_v2_safe"
+                            "chemistry_observable_v4_narrow_guard_v1"
+                            if schema_version == "chemistry_observable_v4"
+                            else (
+                                "chemistry_observable_v3_teacher_calibrated_v2"
+                                if schema_version == "chemistry_observable_v3"
+                                else "chemistry_observable_v2_teacher_distribution_v2_safe"
+                            )
                         )
                     )
                 )
@@ -3713,6 +3730,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         candidate_result.get("postprocess_trace", [])
     )
     if schema_version in {
+        "chemistry_observable_v8",
         "chemistry_observable_v7",
         "chemistry_observable_v6",
         "chemistry_observable_v5",
@@ -3817,6 +3835,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             and (
                 schema_version
                 not in {
+                    "chemistry_observable_v8",
                     "chemistry_observable_v7",
                     "chemistry_observable_v6",
                     "chemistry_observable_v5",
@@ -3972,6 +3991,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             and observable_contract
             and schema_version
             in {
+                "chemistry_observable_v8",
                 "chemistry_observable_v7",
                 "chemistry_observable_v6",
                 "chemistry_observable_v5",
@@ -4080,6 +4100,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 observable_shared_new_information_signal(model_features)
                 if schema_version
                 in {
+                    "chemistry_observable_v8",
                     "chemistry_observable_v7",
                     "chemistry_observable_v6",
                     "chemistry_observable_v5",
@@ -4102,6 +4123,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         + model_features["new_information_operation"]
                         if schema_version
                         in {
+                            "chemistry_observable_v8",
                             "chemistry_observable_v7",
                             "chemistry_observable_v6",
                             "chemistry_observable_v5",
@@ -4115,6 +4137,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         + model_features["parallel_task_relation"]
                         if schema_version
                         in {
+                            "chemistry_observable_v8",
                             "chemistry_observable_v7",
                             "chemistry_observable_v6",
                             "chemistry_observable_v5",
@@ -4126,6 +4149,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         "解题拓扑=" + model_features["solution_topology"]
                         if schema_version
                         in {
+                            "chemistry_observable_v8",
                             "chemistry_observable_v7",
                             "chemistry_observable_v6",
                             "chemistry_observable_v5",
