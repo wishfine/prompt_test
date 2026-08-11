@@ -54,6 +54,13 @@ def current_features() -> dict:
     }
 
 
+def stable_v5_features() -> dict:
+    features = current_features()
+    features.pop("response_operations")
+    features.pop("cross_subject_operations")
+    return features
+
+
 def rating(level: str = "中等题") -> dict:
     coarse_by_level = {
         "送分题": "送分/基础区间（1-2档）",
@@ -357,6 +364,144 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
         )
         self.assertFalse(
             result["teacher_distribution_guard_writeback_applied"]
+        )
+
+    def test_v5_multi_rule_multitopic_boundary_writes_basic_to_medium(
+        self,
+    ) -> None:
+        item = rating("基础题")
+        item["features"] = stable_v5_features()
+        item["features"].update(
+            {
+                "task_groups": [
+                    {"task_type": "性质与反应判断", "count": 2},
+                    {"task_type": "化学用语", "count": 2},
+                ],
+                "rule_families": [
+                    "性质用途或现象判断",
+                    "反应关系或条件判断",
+                    "化学用语书写",
+                ],
+                "curriculum_topics": ["U1-2", "U4-3"],
+                "parallel_task_relation": "不同规则的独立任务",
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(item, {})
+
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_basic_to_medium_multi_rule_multitopic",
+        )
+        self.assertTrue(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+
+    def test_v5_multi_rule_multitopic_boundary_requires_every_threshold(
+        self,
+    ) -> None:
+        features = stable_v5_features()
+        features.update(
+            {
+                "task_groups": [
+                    {"task_type": "性质与反应判断", "count": 2},
+                    {"task_type": "化学用语", "count": 2},
+                ],
+                "rule_families": [
+                    "性质用途或现象判断",
+                    "反应关系或条件判断",
+                    "化学用语书写",
+                ],
+                "curriculum_topics": ["U1-2", "U4-3"],
+            }
+        )
+        variants = {
+            "W不足": {
+                "task_groups": [
+                    {"task_type": "性质与反应判断", "count": 1},
+                    {"task_type": "化学用语", "count": 2},
+                ]
+            },
+            "B不足": {
+                "rule_families": [
+                    "性质用途或现象判断",
+                    "化学用语书写",
+                ]
+            },
+            "T不足": {"curriculum_topics": ["U1-2"]},
+        }
+
+        for label, changes in variants.items():
+            candidate = copy.deepcopy(features)
+            candidate.update(changes)
+            with self.subTest(label=label):
+                self.assertIsNone(
+                    self.runtime.observable_multi_rule_multitopic_medium_signal(
+                        candidate
+                    )
+                )
+
+    def test_v5_high_density_evidence_writes_medium_to_hard(self) -> None:
+        item = rating("中等题")
+        item["features"] = stable_v5_features()
+        item["features"].update(
+            {
+                "rule_families": [
+                    "反应关系或条件判断",
+                    "实验操作规范",
+                    "作用目的或原因解释",
+                    "图表读取或数据归纳",
+                    "证据推断或鉴别除杂",
+                    "定量关系与计算",
+                ],
+                "evidence_operations": ["多证据共同成立"],
+                "calculation_operations": ["单一方程式"],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(item, {})
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_medium_to_hard_high_density_evidence",
+        )
+        self.assertTrue(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+
+    def test_v5_high_density_evidence_requires_six_rules_and_joint_evidence(
+        self,
+    ) -> None:
+        features = stable_v5_features()
+        features.update(
+            {
+                "rule_families": [
+                    "反应关系或条件判断",
+                    "实验操作规范",
+                    "作用目的或原因解释",
+                    "图表读取或数据归纳",
+                    "证据推断或鉴别除杂",
+                    "定量关系与计算",
+                ],
+                "evidence_operations": ["多证据共同成立"],
+            }
+        )
+        five_rules = copy.deepcopy(features)
+        five_rules["rule_families"] = five_rules["rule_families"][:5]
+        no_joint_evidence = copy.deepcopy(features)
+        no_joint_evidence["evidence_operations"] = ["单证据直接匹配"]
+
+        self.assertIsNone(
+            self.runtime.observable_high_density_evidence_hard_signal(
+                five_rules
+            )
+        )
+        self.assertIsNone(
+            self.runtime.observable_high_density_evidence_hard_signal(
+                no_joint_evidence
+            )
         )
 
     def test_program_derives_text_length_and_explicit_subquestion_count(self) -> None:

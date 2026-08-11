@@ -1775,6 +1775,57 @@ def observable_multi_rule_breadth_signal(
     )
 
 
+def observable_multi_rule_multitopic_medium_signal(
+    model_features: Dict[str, Any],
+) -> Optional[str]:
+    """V5下窄化的“基础→中等”多规则跨课题信号。
+
+    只接受正式 V5 十七项契约，并同时要求至少四项任务、
+    三类具体回答规则和两个课题。这是 V13/V14 回放中保持
+    净正的交集；题长、小问数或单纯跨课题都不能单独触发。
+    """
+    if frozenset(model_features) != frozenset(
+        OBSERVABLE_V5_FEATURE_FIELDS
+    ):
+        return None
+    metrics = derive_observable_metrics(model_features)
+    if not (
+        metrics["effective_task_count"] >= 4
+        and metrics["rule_family_count"] >= 3
+        and metrics["curriculum_topic_count"] >= 2
+    ):
+        return None
+    return (
+        "至少四项非重复任务横跨两个课题，"
+        "且需切换至少三类具体回答规则"
+    )
+
+
+def observable_high_density_evidence_hard_signal(
+    model_features: Dict[str, Any],
+) -> Optional[str]:
+    """V5下窄化的“中等→拔高”高密度证据信号。
+
+    六类以上具体回答规则只有在多证据必须共同成立时才形成
+    拔高下限；任一条件缺失都不写回。
+    """
+    if frozenset(model_features) != frozenset(
+        OBSERVABLE_V5_FEATURE_FIELDS
+    ):
+        return None
+    metrics = derive_observable_metrics(model_features)
+    if not (
+        metrics["rule_family_count"] >= 6
+        and "多证据共同成立"
+        in model_features.get("evidence_operations", [])
+    ):
+        return None
+    return (
+        "至少六类具体回答规则共同参与，"
+        "且多条证据需联合才能成立"
+    )
+
+
 def measuring_cylinder_error_chain_signal(
     data: Dict[str, Any],
 ) -> Optional[str]:
@@ -3588,6 +3639,16 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     multi_rule_breadth = observable_multi_rule_breadth_signal(
         model_features
     ) if observable_contract else None
+    multi_rule_multitopic_medium = (
+        observable_multi_rule_multitopic_medium_signal(model_features)
+        if observable_contract
+        else None
+    )
+    high_density_evidence_hard = (
+        observable_high_density_evidence_hard_signal(model_features)
+        if observable_contract
+        else None
+    )
     reaction_floor = reaction_validation_floor_signal(data)
     if teacher_guard_active:
         if (
@@ -3681,6 +3742,17 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 "结构边界窄校准：量筒俯仰视需完成示数—实际体积—误差方向连续推导",
                 rule="teacher_basic_to_medium_measuring_cylinder_error_chain",
                 evidence=[measuring_cylinder_error_chain],
+            )
+        elif (
+            raw_level == "基础题"
+            and multi_rule_multitopic_medium
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "中等题",
+                "结构边界窄校准：多项非重复任务跨课题切换多类具体回答规则",
+                rule="teacher_basic_to_medium_multi_rule_multitopic",
+                evidence=[multi_rule_multitopic_medium],
             )
         elif (
             raw_level == "基础题"
@@ -3781,6 +3853,17 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         model_features["longest_solution_chain"]
                     ),
                 ],
+            )
+        elif (
+            raw_level == "中等题"
+            and high_density_evidence_hard
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "拔高题",
+                "结构边界窄校准：高密度回答规则与多证据联合形成综合分析链",
+                rule="teacher_medium_to_hard_high_density_evidence",
+                evidence=[high_density_evidence_hard],
             )
         elif (
             raw_level == "中等题"
