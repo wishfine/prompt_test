@@ -603,6 +603,40 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "拔高题")
         self.assertEqual(result["postprocess_actions"], [])
 
+    def test_deep_guard_blocks_low_density_two_conservation_chain(self) -> None:
+        item = hard_rating()
+        item["features"].update(
+            {
+                "task_groups": [
+                    {"task_type": "定量计算", "count": 4},
+                ],
+                "rule_families": ["定量计算", "性质与反应判断"],
+                "solution_topology": "未知组成或量反推",
+                "reaction_structure": "产物进入后一反应",
+                "condition_operations": [],
+                "evidence_operations": [],
+                "experiment_operation": "无",
+                "experiment_task_structure": "无实验判断",
+                "graph_table_operation": "无",
+                "calculation_operations": ["单一守恒", "联立"],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {
+                "stem": "沿同一条清晰主线完成两次守恒计算。",
+                "sub_questions": [
+                    {"stem": "任务1"},
+                    {"stem": "任务2"},
+                    {"stem": "任务3"},
+                ],
+            },
+        )
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["postprocess_actions"], [])
+
     def test_narrow_final_rule_accepts_safe_historical_enum_aliases(self) -> None:
         item = hard_rating()
         item["features"]["task_groups"].append(

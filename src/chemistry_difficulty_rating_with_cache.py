@@ -1189,7 +1189,8 @@ def observable_deep_quantitative_final_signal(
     前后依赖的化学决策，存在分支、反推、组分消元、交叉验证或
     多阶段网络拓扑，并包含差量、多反应定量、联立或范围分类中的
     至少一项。该审计信号与Prompt的单主线反应路径互补；题干长、
-    工业背景、多图或多小问都不在触发条件中。
+    工业背景、多图或多小问都不在触发条件中。若只是低任务密度、
+    无条件/证据/图表/实验支撑的两次守恒或联立链，则保留拔高题。
     """
     # V5/V4优先使用题目可观察的主模型拓扑；V3仍按历史语义回放。V2
     # 缺少新增的并列任务、视觉和误差事实，不在回放时改变其语义。
@@ -1205,9 +1206,31 @@ def observable_deep_quantitative_final_signal(
         frozenset(OBSERVABLE_V4_FEATURE_FIELDS),
     }:
         validated = validate_observable_features(features)
+        metrics = derive_observable_metrics(validated)
+        advanced_calculations = set(
+            validated["calculation_operations"]
+        ) & {
+            "组分消元或组成不变量",
+            "差量",
+            "多反应定量关系",
+            "联立",
+            "范围或分类计算",
+        }
+        low_density_two_conservation_chain = bool(
+            validated["solution_topology"] == "未知组成或量反推"
+            and validated["reaction_structure"] == "产物进入后一反应"
+            and len(advanced_calculations) == 1
+            and metrics["effective_task_count"] <= 4
+            and len(validated["rule_families"]) <= 2
+            and not validated["condition_operations"]
+            and not validated["evidence_operations"]
+            and validated["experiment_operation"] == "无"
+            and validated["graph_table_operation"] == "无"
+        )
         return bool(
             len(validated["longest_solution_chain"]) >= 5
             and validated["reaction_structure"] != "无反应任务"
+            and not low_density_two_conservation_chain
             and validated["solution_topology"]
             in {
                 "条件分支或范围筛选",
@@ -1216,16 +1239,7 @@ def observable_deep_quantitative_final_signal(
                 "双来源交叉验证",
                 "多阶段反应网络",
             }
-            and bool(
-                set(validated["calculation_operations"])
-                & {
-                    "组分消元或组成不变量",
-                    "差量",
-                    "多反应定量关系",
-                    "联立",
-                    "范围或分类计算",
-                }
-            )
+            and bool(advanced_calculations)
         )
     # 只对V3历史输出生效：V2历史文件缺少新增的
     # 并列任务、视觉和误差事实，不在回放时改变其语义。
