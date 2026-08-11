@@ -4,7 +4,8 @@
 “约束复杂度”等难度摘要，而是记录任务、规则、课程单元和具体
 化学操作。正式模型输出恢复为稳定的 V5 十七项；V6 增加的具体
 作答操作和跨学科依赖仅保留历史读取能力，不再要求模型填写。
-V2/V3/V4/V6 仍可严格读取，用于历史回放。
+V7 仅在独立 A/B Prompt 中增加两个单选审计字段，不参与自动改档；
+V2/V3/V4/V6/V7 均可严格读取，用于实验和历史回放。
 """
 
 from __future__ import annotations
@@ -110,6 +111,12 @@ OBSERVABLE_V6_FEATURE_FIELDS = (
     "new_information_operation",
 )
 
+OBSERVABLE_V7_FEATURE_FIELDS = (
+    *OBSERVABLE_V5_FEATURE_FIELDS,
+    "interference_type",
+    "expression_type",
+)
+
 # 正式模型输出使用稳定的 V5 十七项。V6 十九项只用于历史回放，
 # 避免新增枚举继续增加 Schema 重试并干扰五档边界判断。
 OBSERVABLE_FEATURE_FIELDS = OBSERVABLE_V5_FEATURE_FIELDS
@@ -169,6 +176,28 @@ CROSS_SUBJECT_OPERATIONS = {
     "物理过程或物理量关系",
     "生物过程或健康机制",
     "数学函数、几何或统计模型",
+}
+
+INTERFERENCE_TYPES = {
+    "无",
+    "易混概念",
+    "多个选项规则切换",
+    "规范表述易错",
+    "干扰数据",
+    "特例或边界",
+    "体系质量关系易错",
+    "多种剩余情况或竞争解释",
+}
+
+EXPRESSION_TYPES = {
+    "无",
+    "元素离子符号或化学式书写",
+    "仪器操作或试剂名称书写",
+    "化学方程式书写",
+    "实验现象或操作规范描述",
+    "原因或结论规范表达",
+    "计算过程书写",
+    "多类规范表达联合",
 }
 CURRICULUM_UNITS = {f"U{i}" for i in range(1, 12)}
 
@@ -420,6 +449,8 @@ OBSERVABLE_ENUM_VALUES_BY_FIELD = {
     "response_operations": RESPONSE_OPERATIONS,
     "curriculum_topics": CURRICULUM_TOPICS,
     "cross_subject_operations": CROSS_SUBJECT_OPERATIONS,
+    "interference_type": INTERFERENCE_TYPES,
+    "expression_type": EXPRESSION_TYPES,
     "parallel_task_relation": PARALLEL_TASK_RELATIONS,
     "solution_topology": SOLUTION_TOPOLOGIES,
     "reaction_structure": REACTION_STRUCTURES,
@@ -900,7 +931,7 @@ def _validate_single_enum(
 
 
 def validate_observable_features(features: Any) -> Dict[str, Any]:
-    """严格校验正式 V5，并兼容读取历史 V6/V4/V3/V2。
+    """严格校验正式 V5，并兼容读取审计 V7 和历史版本。
 
     校验器不静默补默认值：缺字段、多字段或枚举错误均直接
     拒绝，便于重试提示精确修正。
@@ -908,17 +939,19 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
     if not isinstance(features, dict):
         raise ValueError("features必须是JSON对象")
     actual = set(features)
+    v7_expected = set(OBSERVABLE_V7_FEATURE_FIELDS)
     v6_expected = set(OBSERVABLE_V6_FEATURE_FIELDS)
     v5_expected = set(OBSERVABLE_FEATURE_FIELDS)
     v4_expected = set(OBSERVABLE_V4_FEATURE_FIELDS)
     v3_expected = set(OBSERVABLE_V3_FEATURE_FIELDS)
     v2_expected = set(OBSERVABLE_V2_FEATURE_FIELDS)
+    is_v7 = actual == v7_expected
     is_v6 = actual == v6_expected
     is_v5 = actual == v5_expected
     is_v4 = actual == v4_expected
     is_v3 = actual == v3_expected
     is_v2 = actual == v2_expected
-    if not (is_v6 or is_v5 or is_v4 or is_v3 or is_v2):
+    if not (is_v7 or is_v6 or is_v5 or is_v4 or is_v3 or is_v2):
         missing = sorted(v5_expected - actual)
         extra = sorted(actual - v5_expected)
         raise ValueError(
@@ -987,7 +1020,7 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
             raise ValueError(
                 "任务性质计数必须恰好覆盖task_groups中的全部有效任务"
             )
-    if is_v6 or is_v5 or is_v4:
+    if is_v7 or is_v6 or is_v5 or is_v4:
         _validate_single_enum(
             validated,
             "solution_topology",
@@ -1018,7 +1051,18 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
             CROSS_SUBJECT_OPERATIONS,
             allow_empty=True,
         )
-    if is_v3 or is_v4 or is_v5 or is_v6:
+    if is_v7:
+        _validate_single_enum(
+            validated,
+            "interference_type",
+            INTERFERENCE_TYPES,
+        )
+        _validate_single_enum(
+            validated,
+            "expression_type",
+            EXPRESSION_TYPES,
+        )
+    if is_v3 or is_v4 or is_v5 or is_v6 or is_v7:
         _validate_unique_enum_list(
             validated,
             "curriculum_topics",
@@ -1246,6 +1290,8 @@ def derive_observable_metrics(
         "cross_subject_operation_count": len(
             validated.get("cross_subject_operations", [])
         ),
+        "interference_type": validated.get("interference_type"),
+        "expression_type": validated.get("expression_type"),
         "curriculum_topic_count": topic_count,
         "curriculum_unit_count": len(curriculum_units),
         "curriculum_span_type": curriculum_span_type,

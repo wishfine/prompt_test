@@ -41,6 +41,7 @@ try:
     from chemistry_observable_features import (
         OBSERVABLE_FEATURE_FIELDS,
         OBSERVABLE_V6_FEATURE_FIELDS,
+        OBSERVABLE_V7_FEATURE_FIELDS,
         OBSERVABLE_V5_FEATURE_FIELDS,
         OBSERVABLE_V4_FEATURE_FIELDS,
         OBSERVABLE_V3_FEATURE_FIELDS,
@@ -54,6 +55,7 @@ except ModuleNotFoundError:
     from src.chemistry_observable_features import (
         OBSERVABLE_FEATURE_FIELDS,
         OBSERVABLE_V6_FEATURE_FIELDS,
+        OBSERVABLE_V7_FEATURE_FIELDS,
         OBSERVABLE_V5_FEATURE_FIELDS,
         OBSERVABLE_V4_FEATURE_FIELDS,
         OBSERVABLE_V3_FEATURE_FIELDS,
@@ -246,6 +248,29 @@ def load_prompt_config(prompt_path: str) -> None:
 
     with open(prompt_path, "r", encoding="utf-8") as f:
         content = f.read()
+
+    # A/B Prompt 可以在首行引用冻结基线，再追加窄审计协议。这样基线
+    # 文件保持字节级不变，也避免复制数百行后发生两份 Prompt 漂移。
+    include_match = re.match(r"^@include\s+(.+?)\s*(?:\r?\n|$)", content)
+    if include_match:
+        include_name = include_match.group(1).strip()
+        include_path = Path(prompt_path).resolve().parent / include_name
+        appendix = content[include_match.end():].strip()
+        load_prompt_config(str(include_path))
+        if not appendix:
+            raise ValueError("@include审计Prompt必须包含追加协议")
+        marker = "## 输入题目信息"
+        if marker not in DIFFICULTY_RATING_PROMPT_PREFIX:
+            raise ValueError("被引用Prompt缺少输入题目信息标志")
+        DIFFICULTY_RATING_PROMPT_PREFIX = (
+            DIFFICULTY_RATING_PROMPT_PREFIX.replace(
+                marker,
+                appendix + "\n\n" + marker,
+                1,
+            )
+        )
+        print(f"成功加载冻结基线并追加审计协议: {include_name}")
+        return
 
     # 优先兼容物理/数学已有 Python 变量结构
     try:
@@ -846,6 +871,7 @@ def is_observable_feature_contract(features: Any) -> bool:
         isinstance(features, dict)
         and frozenset(features)
         in {
+            frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
             frozenset(OBSERVABLE_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
@@ -862,6 +888,7 @@ def looks_like_observable_feature_contract(features: Any) -> bool:
         return False
     known = (
         set(OBSERVABLE_FEATURE_FIELDS)
+        | set(OBSERVABLE_V7_FEATURE_FIELDS)
         | set(OBSERVABLE_V6_FEATURE_FIELDS)
         | {
         "new_ininformation_operation",
@@ -871,6 +898,8 @@ def looks_like_observable_feature_contract(features: Any) -> bool:
 
 
 def observable_feature_schema_version(features: Dict[str, Any]) -> str:
+    if set(features) == set(OBSERVABLE_V7_FEATURE_FIELDS):
+        return "chemistry_observable_v7"
     if set(features) == set(OBSERVABLE_V6_FEATURE_FIELDS):
         return "chemistry_observable_v6"
     if set(features) == set(OBSERVABLE_FEATURE_FIELDS):
@@ -1204,6 +1233,7 @@ def observable_deep_quantitative_final_signal(
         else frozenset()
     )
     if feature_keys in {
+        frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
         frozenset(OBSERVABLE_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
@@ -1302,6 +1332,7 @@ def observable_dense_multiquestion_final_signal(
         return False
     feature_keys = frozenset(features)
     if feature_keys not in {
+        frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
         frozenset(OBSERVABLE_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
@@ -1345,6 +1376,7 @@ def observable_qualitative_evidence_final_signal(
         return False
     feature_keys = frozenset(features)
     if feature_keys not in {
+        frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
         frozenset(OBSERVABLE_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
         frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
@@ -1566,7 +1598,7 @@ def visible_text(data: Dict[str, Any], include_analysis: bool = False) -> str:
     return "\n".join(parts)
 
 
-def derive_question_structure_metrics(data: Dict[str, Any]) -> Dict[str, int]:
+def derive_question_structure_metrics(data: Dict[str, Any]) -> Dict[str, Any]:
     """由结构化题面确定性统计字数和显式设问数。
 
     只统计题干、选项和子题题面，不读取解析、图片URL或标签。结构化
@@ -1596,9 +1628,29 @@ def derive_question_structure_metrics(data: Dict[str, Any]) -> Dict[str, int]:
         )
         explicit_subquestion_count = max(1, len(markers))
 
+    if question_text_char_count <= 60:
+        question_text_length_band = "60字及以下"
+    elif question_text_char_count <= 100:
+        question_text_length_band = "61-100字"
+    elif question_text_char_count <= 300:
+        question_text_length_band = "101-300字"
+    else:
+        question_text_length_band = "300字以上"
+
+    option_count = count_choice_options(data)
+    stem_image_count = len(extract_image_urls(data.get("stem_pic_url")))
+
     return {
         "question_text_char_count": question_text_char_count,
+        "question_text_length_band": question_text_length_band,
         "explicit_subquestion_count": explicit_subquestion_count,
+        "option_count": option_count,
+        "stem_image_count": stem_image_count,
+        "question_item_count": max(
+            option_count,
+            explicit_subquestion_count,
+            1,
+        ),
     }
 
 
@@ -1611,6 +1663,36 @@ def count_choice_options(data: Dict[str, Any]) -> int:
             options,
         )
     )
+
+
+def derive_response_diagnostics(
+    *,
+    raw_text: str,
+    candidate: Dict[str, Any],
+    prompt_tokens: int,
+    completion_tokens: int,
+    total_tokens: int,
+) -> Dict[str, Any]:
+    """生成不参与判级的请求完整性与Token审计信息。"""
+    json_complete = bool(candidate) and bool(str(raw_text or "").strip())
+    token_usage_consistent = bool(
+        total_tokens <= 0
+        or total_tokens == prompt_tokens + completion_tokens
+    )
+    flags: List[str] = []
+    if not json_complete:
+        flags.append("structured_output_missing_or_incomplete")
+    if not token_usage_consistent:
+        flags.append("token_sum_mismatch")
+    return {
+        "response_status": "complete" if json_complete else "incomplete",
+        "response_incomplete_reason": (
+            "" if json_complete else "模型返回空对象或JSON解析不完整"
+        ),
+        "structured_output_json_complete": json_complete,
+        "token_usage_consistent": token_usage_consistent,
+        "token_anomaly_flags": flags,
+    }
 
 
 def count_reaction_arrows(text: str) -> int:
@@ -1785,9 +1867,10 @@ def observable_multi_rule_multitopic_medium_signal(
     三类具体回答规则和两个课题。这是 V13/V14 回放中保持
     净正的交集；题长、小问数或单纯跨课题都不能单独触发。
     """
-    if frozenset(model_features) != frozenset(
-        OBSERVABLE_V5_FEATURE_FIELDS
-    ):
+    if frozenset(model_features) not in {
+        frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
+    }:
         return None
     metrics = derive_observable_metrics(model_features)
     if not (
@@ -1811,9 +1894,10 @@ def observable_parallel_reaction_multitopic_medium_candidate_signal(
     回答规则且存在多个并列反应时均有小幅净收益，但精度不足以
     自动写回。因此该信号只生成候选动作，不能改变最终等级。
     """
-    if frozenset(model_features) != frozenset(
-        OBSERVABLE_V5_FEATURE_FIELDS
-    ):
+    if frozenset(model_features) not in {
+        frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
+    }:
         return None
     metrics = derive_observable_metrics(model_features)
     if not (
@@ -1837,9 +1921,10 @@ def observable_high_density_evidence_hard_signal(
     六类以上具体回答规则只有在多证据必须共同成立时才形成
     拔高下限；任一条件缺失都不写回。
     """
-    if frozenset(model_features) != frozenset(
-        OBSERVABLE_V5_FEATURE_FIELDS
-    ):
+    if frozenset(model_features) not in {
+        frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
+    }:
         return None
     metrics = derive_observable_metrics(model_features)
     if not (
@@ -2104,6 +2189,7 @@ def observable_shared_new_information_signal(
         not isinstance(model_features, dict)
         or frozenset(model_features)
         not in {
+            frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
             frozenset(OBSERVABLE_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
@@ -3446,18 +3532,22 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         rating_result["feature_schema_version"] = schema_version
         rating_result["observable_metrics"] = observable_metrics
         rating_result["postprocess_profile"] = (
-            "chemistry_observable_v6_narrow_guard_v1"
-            if schema_version == "chemistry_observable_v6"
+            "chemistry_observable_v7_audit_only_narrow_guard_v1"
+            if schema_version == "chemistry_observable_v7"
             else (
-                "chemistry_observable_v5_narrow_guard_v1"
-                if schema_version == "chemistry_observable_v5"
+                "chemistry_observable_v6_narrow_guard_v1"
+                if schema_version == "chemistry_observable_v6"
                 else (
-                    "chemistry_observable_v4_narrow_guard_v1"
-                    if schema_version == "chemistry_observable_v4"
+                    "chemistry_observable_v5_narrow_guard_v1"
+                    if schema_version == "chemistry_observable_v5"
                     else (
-                        "chemistry_observable_v3_teacher_calibrated_v2"
-                        if schema_version == "chemistry_observable_v3"
-                        else "chemistry_observable_v2_teacher_distribution_v2_safe"
+                        "chemistry_observable_v4_narrow_guard_v1"
+                        if schema_version == "chemistry_observable_v4"
+                        else (
+                            "chemistry_observable_v3_teacher_calibrated_v2"
+                            if schema_version == "chemistry_observable_v3"
+                            else "chemistry_observable_v2_teacher_distribution_v2_safe"
+                        )
                     )
                 )
             )
@@ -3623,6 +3713,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         candidate_result.get("postprocess_trace", [])
     )
     if schema_version in {
+        "chemistry_observable_v7",
         "chemistry_observable_v6",
         "chemistry_observable_v5",
         "chemistry_observable_v4",
@@ -3726,6 +3817,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             and (
                 schema_version
                 not in {
+                    "chemistry_observable_v7",
                     "chemistry_observable_v6",
                     "chemistry_observable_v5",
                     "chemistry_observable_v4",
@@ -3880,6 +3972,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             and observable_contract
             and schema_version
             in {
+                "chemistry_observable_v7",
                 "chemistry_observable_v6",
                 "chemistry_observable_v5",
                 "chemistry_observable_v4",
@@ -3987,6 +4080,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 observable_shared_new_information_signal(model_features)
                 if schema_version
                 in {
+                    "chemistry_observable_v7",
                     "chemistry_observable_v6",
                     "chemistry_observable_v5",
                     "chemistry_observable_v4",
@@ -4008,6 +4102,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         + model_features["new_information_operation"]
                         if schema_version
                         in {
+                            "chemistry_observable_v7",
                             "chemistry_observable_v6",
                             "chemistry_observable_v5",
                             "chemistry_observable_v4",
@@ -4020,6 +4115,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         + model_features["parallel_task_relation"]
                         if schema_version
                         in {
+                            "chemistry_observable_v7",
                             "chemistry_observable_v6",
                             "chemistry_observable_v5",
                             "chemistry_observable_v4",
@@ -4030,6 +4126,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         "解题拓扑=" + model_features["solution_topology"]
                         if schema_version
                         in {
+                            "chemistry_observable_v7",
                             "chemistry_observable_v6",
                             "chemistry_observable_v5",
                             "chemistry_observable_v4",
@@ -4733,6 +4830,7 @@ async def process_single_question(
         total_completion_tokens = 0
         total_tokens = 0
         schema_retry_count = 0
+        model_request_count = 0
         schema_errors: List[str] = []
         repair_feedback = ""
         raw_result: Dict[str, Any] = {}
@@ -4755,6 +4853,9 @@ async def process_single_question(
                     retries,
                     timeout_sec,
                     repair_feedback=repair_feedback,
+                )
+                model_request_count += 1 + int(
+                    image_status.get("http_retry_count", 0) or 0
                 )
                 raw_result = copy.deepcopy(candidate)
                 total_time += time_use
@@ -4803,6 +4904,16 @@ async def process_single_question(
                 output_data["api_prompt_tokens"] = total_prompt_tokens
                 output_data["api_completion_tokens"] = total_completion_tokens
                 output_data["api_total_tokens"] = total_tokens
+                output_data["model_request_count"] = model_request_count
+                output_data.update(
+                    derive_response_diagnostics(
+                        raw_text=raw_text,
+                        candidate=raw_result,
+                        prompt_tokens=total_prompt_tokens,
+                        completion_tokens=total_completion_tokens,
+                        total_tokens=total_tokens,
+                    )
+                )
                 output_data.update(image_status)
                 output_data["schema_retry_count"] = schema_retry_count
                 output_data["schema_validation_errors"] = schema_errors
@@ -4824,6 +4935,19 @@ async def process_single_question(
                     "explicit_subquestion_count": image_status.get(
                         "explicit_subquestion_count",
                         1,
+                    ),
+                    "option_count": image_status.get("option_count", 0),
+                    "stem_image_count": image_status.get(
+                        "stem_image_count",
+                        0,
+                    ),
+                    "question_item_count": image_status.get(
+                        "question_item_count",
+                        1,
+                    ),
+                    "question_text_length_band": image_status.get(
+                        "question_text_length_band",
+                        "60字及以下",
                     ),
                 }
                 async with FILE_LOCK:
