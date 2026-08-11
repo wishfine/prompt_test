@@ -94,7 +94,9 @@ CACHE_GET_LOCK = Lock()
 
 CACHE_EXPIRE_DAYS = 6
 CACHE_EXPIRE_SECONDS = CACHE_EXPIRE_DAYS * 24 * 3600
-CACHE_FILE_PATH = "chemistry_prompt_cache.json"
+CACHE_FILE_PATH = os.getenv(
+    "CHEMISTRY_CACHE_FILE_PATH", "chemistry_prompt_cache.json"
+)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PROMPT_PATH = (
     PROJECT_ROOT / "prompts" / "初中化学难度打标提示词.txt"

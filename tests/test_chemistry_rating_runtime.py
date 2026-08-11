@@ -485,6 +485,37 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         example, _ = decoder.raw_decode(prompt[start:])
         schema.validate_rating_contract(example)
 
+    def test_ab_prompt_variants_follow_current_runtime_contract(self):
+        prompt_names = (
+            "初中化学难度打标提示词_rerun6_baseline.txt",
+            "初中化学难度打标提示词_improved_narrow_exceptions.txt",
+        )
+        decoder = json.JSONDecoder()
+        for prompt_name in prompt_names:
+            with self.subTest(prompt=prompt_name):
+                prompt = (ROOT / "prompts" / prompt_name).read_text(encoding="utf-8")
+                self.assertEqual(prompt.count("## 输入题目信息"), 1)
+                self.assertIn("必须按指定的严格JSON Schema输出一个完整对象", prompt)
+                self.assertNotIn("必须通过指定函数提交", prompt)
+                for field, options in schema.FEATURE_OPTIONS.items():
+                    self.assertIn(field, prompt)
+                    for value in options:
+                        self.assertIn(value, prompt)
+                start = prompt.index('\n{\n  "features"') + 1
+                example, _ = decoder.raw_decode(prompt[start:])
+                schema.validate_rating_contract(example)
+
+    def test_improved_prompt_limits_later_rules_to_narrow_exceptions(self):
+        prompt = (
+            ROOT / "prompts" / "初中化学难度打标提示词_improved_narrow_exceptions.txt"
+        ).read_text(encoding="utf-8")
+        self.assertIn("主边界优先，窄例外复核", prompt)
+        self.assertIn("一步任务进入中等只允许一条窄例外", prompt)
+        self.assertIn("2—3步进入拔高只允许以下窄例外之一", prompt)
+        self.assertIn("4—5步或单项任务进入压轴只允许以下窄例外之一", prompt)
+        self.assertIn("反向约束：判断压轴时只查看“最难的一个小问”", prompt)
+        self.assertIn("若只命中部分条件，是否已回到常规主边界", prompt)
+
     def test_runtime_uses_prompt_json_with_local_strict_schema_and_no_retry(self):
         runtime = (ROOT / "src" / "chemistry_difficulty_rating_with_cache.py").read_text(
             encoding="utf-8"
@@ -503,6 +534,13 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("for q in to_process[1:]", runtime)
         self.assertIn('return "model_validation_error"', runtime)
         self.assertIn('preflight_status == "request_error"', runtime)
+
+    def test_runtime_supports_isolated_prompt_cache_files_for_ab_runs(self):
+        runtime = (ROOT / "src" / "chemistry_difficulty_rating_with_cache.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"CHEMISTRY_CACHE_FILE_PATH"', runtime)
+        self.assertIn('"chemistry_prompt_cache.json"', runtime)
         self.assertIn("第一题未通过本地Schema", runtime)
         self.assertIn('output_data["feature_normalization_actions"]', runtime)
         self.assertNotIn("MAX_SCHEMA_RETRIES", runtime)
