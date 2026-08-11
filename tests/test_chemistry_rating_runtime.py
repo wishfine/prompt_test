@@ -69,6 +69,7 @@ def valid_rating(level: str = "中等题") -> dict:
 class ChemistryRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.old_image_mode = chemistry.CHEMISTRY_IMAGE_MODE
+        self.old_image_detail = chemistry.CHEMISTRY_IMAGE_DETAIL
         self.old_writeback = getattr(
             chemistry,
             "CHEMISTRY_ENABLE_LEVEL_WRITEBACK",
@@ -104,6 +105,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         chemistry.CHEMISTRY_IMAGE_MODE = self.old_image_mode
+        chemistry.CHEMISTRY_IMAGE_DETAIL = self.old_image_detail
         chemistry.CHEMISTRY_ENABLE_LEVEL_WRITEBACK = (
             self.old_writeback
         )
@@ -261,6 +263,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
 
     def test_auto_image_mode_uses_visual_reference_only(self) -> None:
         chemistry.CHEMISTRY_IMAGE_MODE = "auto"
+        chemistry.CHEMISTRY_IMAGE_DETAIL = "default"
         ordinary = {
             "stem": "下列说法正确的是",
             "analysis": "根据教材结论可知答案。",
@@ -291,6 +294,18 @@ class ChemistryRuntimeTests(unittest.TestCase):
                 "https://example.com/1.png",
                 "https://example.com/2.png",
             ],
+        )
+
+        chemistry.CHEMISTRY_IMAGE_DETAIL = "high"
+        high_detail_content = chemistry.build_user_content(visual, selected)
+        high_detail_images = [
+            item
+            for item in high_detail_content
+            if item.get("type") == "input_image"
+        ]
+        self.assertEqual(
+            [item.get("detail") for item in high_detail_images],
+            ["high", "high"],
         )
 
     def test_missing_analysis_can_request_analysis_image(self) -> None:

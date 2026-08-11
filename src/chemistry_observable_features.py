@@ -4,27 +4,13 @@
 “约束复杂度”等难度摘要，而是记录任务、规则、课程单元和具体
 化学操作。正式模型输出恢复为稳定的 V5 十七项；V6 增加的具体
 作答操作和跨学科依赖仅保留历史读取能力，不再要求模型填写。
-V7 仅在独立 A/B Prompt 中增加两个单选审计字段，不参与自动改档；
-V2/V3/V4/V6/V7 均可严格读取，用于实验和历史回放。
+V2/V3/V4/V6 仍可严格读取，用于历史回放。
 """
 
 from __future__ import annotations
 
 import copy
 from typing import Any, Dict, Iterable, List
-
-try:
-    from chemistry_curriculum_catalog import (
-        FINE_CURRICULUM_TOPIC_IDS,
-        FINE_CURRICULUM_TOPIC_TO_COARSE,
-        fine_topic_unit,
-    )
-except ModuleNotFoundError:
-    from src.chemistry_curriculum_catalog import (
-        FINE_CURRICULUM_TOPIC_IDS,
-        FINE_CURRICULUM_TOPIC_TO_COARSE,
-        fine_topic_unit,
-    )
 
 
 OBSERVABLE_V2_FEATURE_FIELDS = (
@@ -124,33 +110,6 @@ OBSERVABLE_V6_FEATURE_FIELDS = (
     "new_information_operation",
 )
 
-OBSERVABLE_V7_FEATURE_FIELDS = (
-    *OBSERVABLE_V5_FEATURE_FIELDS,
-    "interference_type",
-    "expression_type",
-)
-
-# V8只在独立A/B Prompt中记录58项细课题和具体超纲项。
-# 它不替换现有29项curriculum_topics，也不改变默认V5合同。
-OBSERVABLE_V8_FEATURE_FIELDS = (
-    *OBSERVABLE_V5_FEATURE_FIELDS,
-    "fine_curriculum_topics",
-    "out_of_scope_items",
-)
-
-# V9是模型侧课程审计合同：模型只选择58项细知识点，不再同时猜测
-# 29项粗课题。curriculum_topics由程序依据目录映射确定性生成，进入
-# 后处理前还原成内部V8形态，保证既有生产规则不需要读取两套课程字段。
-OBSERVABLE_V9_MODEL_FEATURE_FIELDS = (
-    *(
-        field
-        for field in OBSERVABLE_V5_FEATURE_FIELDS
-        if field != "curriculum_topics"
-    ),
-    "fine_curriculum_topics",
-    "out_of_scope_items",
-)
-
 # 正式模型输出使用稳定的 V5 十七项。V6 十九项只用于历史回放，
 # 避免新增枚举继续增加 Schema 重试并干扰五档边界判断。
 OBSERVABLE_FEATURE_FIELDS = OBSERVABLE_V5_FEATURE_FIELDS
@@ -210,28 +169,6 @@ CROSS_SUBJECT_OPERATIONS = {
     "物理过程或物理量关系",
     "生物过程或健康机制",
     "数学函数、几何或统计模型",
-}
-
-INTERFERENCE_TYPES = {
-    "无",
-    "易混概念",
-    "多个选项规则切换",
-    "规范表述易错",
-    "干扰数据",
-    "特例或边界",
-    "体系质量关系易错",
-    "多种剩余情况或竞争解释",
-}
-
-EXPRESSION_TYPES = {
-    "无",
-    "元素离子符号或化学式书写",
-    "仪器操作或试剂名称书写",
-    "化学方程式书写",
-    "实验现象或操作规范描述",
-    "原因或结论规范表达",
-    "计算过程书写",
-    "多类规范表达联合",
 }
 CURRICULUM_UNITS = {f"U{i}" for i in range(1, 12)}
 
@@ -483,8 +420,6 @@ OBSERVABLE_ENUM_VALUES_BY_FIELD = {
     "response_operations": RESPONSE_OPERATIONS,
     "curriculum_topics": CURRICULUM_TOPICS,
     "cross_subject_operations": CROSS_SUBJECT_OPERATIONS,
-    "interference_type": INTERFERENCE_TYPES,
-    "expression_type": EXPRESSION_TYPES,
     "parallel_task_relation": PARALLEL_TASK_RELATIONS,
     "solution_topology": SOLUTION_TOPOLOGIES,
     "reaction_structure": REACTION_STRUCTURES,
@@ -498,7 +433,6 @@ OBSERVABLE_ENUM_VALUES_BY_FIELD = {
     "error_analysis_operation": ERROR_ANALYSIS_OPERATIONS,
     "calculation_operations": CALCULATION_OPERATIONS,
     "new_information_operation": NEW_INFORMATION_OPERATIONS,
-    "fine_curriculum_topics": FINE_CURRICULUM_TOPIC_IDS,
 }
 
 
@@ -552,16 +486,6 @@ def _canonical_curriculum_topic(value: Any) -> Any:
             f"{code}（{name}）",
         }:
             return code
-    return clean
-
-
-def _canonical_fine_curriculum_topic(value: Any) -> Any:
-    clean = _clean_enum_text(value)
-    if clean in FINE_CURRICULUM_TOPIC_IDS:
-        return clean
-    for topic_id in FINE_CURRICULUM_TOPIC_IDS:
-        if clean.startswith(topic_id):
-            return topic_id
     return clean
 
 
@@ -836,27 +760,7 @@ def normalize_observable_features(
         )
         normalized["curriculum_topics"] = canonical_topics
 
-    fine_topics = normalized.get("fine_curriculum_topics")
-    if isinstance(fine_topics, list):
-        canonical_fine_topics = [
-            _canonical_fine_curriculum_topic(value)
-            for value in fine_topics
-        ]
-        record(
-            "fine_curriculum_topics",
-            fine_topics,
-            canonical_fine_topics,
-            "剥离细粒度课题名称后缀",
-        )
-        normalized["fine_curriculum_topics"] = canonical_fine_topics
-
-    for field in (
-        "curriculum_topics",
-        "fine_curriculum_topics",
-        "out_of_scope_items",
-        "curriculum_units",
-        "longest_solution_chain",
-    ):
+    for field in ("curriculum_topics", "curriculum_units", "longest_solution_chain"):
         values = normalized.get(field)
         if not isinstance(values, list):
             continue
@@ -964,37 +868,6 @@ def _validate_unique_enum_list(
     return value
 
 
-def _validate_unique_short_text_list(
-    features: Dict[str, Any],
-    field: str,
-    *,
-    allow_empty: bool,
-    max_items: int = 8,
-    max_item_length: int = 40,
-) -> List[str]:
-    value = features[field]
-    if not isinstance(value, list):
-        raise ValueError(f"{field}必须是数组")
-    if not allow_empty and not value:
-        raise ValueError(f"{field}不能为空")
-    if len(value) > max_items:
-        raise ValueError(f"{field}最多包含{max_items}项")
-    if any(
-        not isinstance(item, str)
-        or not item.strip()
-        or len(item.strip()) > max_item_length
-        for item in value
-    ):
-        raise ValueError(
-            f"{field}每项必须是1到{max_item_length}字的字符串"
-        )
-    cleaned = [item.strip() for item in value]
-    if len(cleaned) != len(set(cleaned)):
-        raise ValueError(f"{field}存在重复值")
-    features[field] = cleaned
-    return cleaned
-
-
 def _validate_single_enum(
     features: Dict[str, Any],
     field: str,
@@ -1027,7 +900,7 @@ def _validate_single_enum(
 
 
 def validate_observable_features(features: Any) -> Dict[str, Any]:
-    """严格校验正式 V5，并兼容读取审计 V7 和历史版本。
+    """严格校验正式 V5，并兼容读取历史 V6/V4/V3/V2。
 
     校验器不静默补默认值：缺字段、多字段或枚举错误均直接
     拒绝，便于重试提示精确修正。
@@ -1035,32 +908,17 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
     if not isinstance(features, dict):
         raise ValueError("features必须是JSON对象")
     actual = set(features)
-    v9_model_expected = set(OBSERVABLE_V9_MODEL_FEATURE_FIELDS)
-    v8_expected = set(OBSERVABLE_V8_FEATURE_FIELDS)
-    v7_expected = set(OBSERVABLE_V7_FEATURE_FIELDS)
     v6_expected = set(OBSERVABLE_V6_FEATURE_FIELDS)
     v5_expected = set(OBSERVABLE_FEATURE_FIELDS)
     v4_expected = set(OBSERVABLE_V4_FEATURE_FIELDS)
     v3_expected = set(OBSERVABLE_V3_FEATURE_FIELDS)
     v2_expected = set(OBSERVABLE_V2_FEATURE_FIELDS)
-    is_v9_model = actual == v9_model_expected
-    is_v8 = actual == v8_expected
-    is_v7 = actual == v7_expected
     is_v6 = actual == v6_expected
     is_v5 = actual == v5_expected
     is_v4 = actual == v4_expected
     is_v3 = actual == v3_expected
     is_v2 = actual == v2_expected
-    if not (
-        is_v9_model
-        or is_v8
-        or is_v7
-        or is_v6
-        or is_v5
-        or is_v4
-        or is_v3
-        or is_v2
-    ):
+    if not (is_v6 or is_v5 or is_v4 or is_v3 or is_v2):
         missing = sorted(v5_expected - actual)
         extra = sorted(actual - v5_expected)
         raise ValueError(
@@ -1129,7 +987,7 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
             raise ValueError(
                 "任务性质计数必须恰好覆盖task_groups中的全部有效任务"
             )
-    if is_v9_model or is_v8 or is_v7 or is_v6 or is_v5 or is_v4:
+    if is_v6 or is_v5 or is_v4:
         _validate_single_enum(
             validated,
             "solution_topology",
@@ -1160,71 +1018,12 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
             CROSS_SUBJECT_OPERATIONS,
             allow_empty=True,
         )
-    if is_v7:
-        _validate_single_enum(
-            validated,
-            "interference_type",
-            INTERFERENCE_TYPES,
-        )
-        _validate_single_enum(
-            validated,
-            "expression_type",
-            EXPRESSION_TYPES,
-        )
-    if is_v9_model or is_v8:
-        _validate_unique_enum_list(
-            validated,
-            "fine_curriculum_topics",
-            FINE_CURRICULUM_TOPIC_IDS,
-            allow_empty=True,
-        )
-        out_of_scope = _validate_unique_short_text_list(
-            validated,
-            "out_of_scope_items",
-            allow_empty=True,
-        )
-        depends_on_missing_out_of_scope = (
-            validated["new_information_operation"]
-            == "依赖题干未给出的超纲化学知识"
-        )
-        if depends_on_missing_out_of_scope and not out_of_scope:
-            raise ValueError(
-                "new_information_operation标记为超纲时，"
-                "out_of_scope_items必须列出具体内容"
-            )
-        if not depends_on_missing_out_of_scope and out_of_scope:
-            raise ValueError(
-                "out_of_scope_items非空时new_information_operation"
-                "必须标记为依赖题干未给出的超纲化学知识"
-            )
-        if not validated["fine_curriculum_topics"] and not out_of_scope:
-            raise ValueError(
-                "fine_curriculum_topics与out_of_scope_items不能同时为空"
-            )
-        if is_v9_model:
-            validated["curriculum_topics"] = sorted(
-                {
-                    FINE_CURRICULUM_TOPIC_TO_COARSE[topic]
-                    for topic in validated["fine_curriculum_topics"]
-                }
-            )
-    if (
-        is_v3
-        or is_v4
-        or is_v5
-        or is_v6
-        or is_v7
-        or is_v8
-        or is_v9_model
-    ):
+    if is_v3 or is_v4 or is_v5 or is_v6:
         _validate_unique_enum_list(
             validated,
             "curriculum_topics",
             CURRICULUM_TOPICS,
-            allow_empty=bool(
-                is_v9_model
-                or (is_v8 and validated.get("out_of_scope_items"))
-            ),
+            allow_empty=False,
         )
         _validate_single_enum(
             validated,
@@ -1266,7 +1065,7 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
         "experiment_operation",
         EXPERIMENT_OPERATIONS,
     )
-    if is_v3 or is_v4 or is_v5 or is_v6 or is_v8 or is_v9_model:
+    if is_v3 or is_v4 or is_v5 or is_v6:
         _validate_single_enum(
             validated,
             "visual_task_structure",
@@ -1283,7 +1082,7 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
         CALCULATION_OPERATIONS,
         allow_empty=True,
     )
-    if is_v3 or is_v4 or is_v5 or is_v6 or is_v8 or is_v9_model:
+    if is_v3 or is_v4 or is_v5 or is_v6:
         _validate_single_enum(
             validated,
             "error_analysis_operation",
@@ -1303,7 +1102,7 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
     if graph_conversions and validated["graph_table_operation"] == "无":
         raise ValueError("存在图表转换时graph_table_operation不能为无")
     if (
-        (is_v3 or is_v4 or is_v5 or is_v6 or is_v8 or is_v9_model)
+        (is_v3 or is_v4 or is_v5 or is_v6)
         and validated["graph_table_operation"] != "无"
         and validated["visual_task_structure"] == "无必要视觉信息"
     ):
@@ -1325,12 +1124,12 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
     ):
         raise ValueError("实验任务必须记录experiment_operation")
     if (
-        (is_v3 or is_v4 or is_v5 or is_v6 or is_v8 or is_v9_model)
+        (is_v3 or is_v4 or is_v5 or is_v6)
         and validated["error_analysis_operation"] != "无误差分析"
         and validated["experiment_operation"] == "无"
     ):
         raise ValueError("误差分析任务必须记录experiment_operation")
-    if is_v9_model or is_v8 or is_v6 or is_v5 or is_v4:
+    if is_v6 or is_v5 or is_v4:
         experiment_structure = validated["experiment_task_structure"]
         if (
             validated["experiment_operation"] == "无"
@@ -1432,7 +1231,7 @@ def derive_observable_metrics(
             + "）"
         )
 
-    metrics = {
+    return {
         "longest_chain_steps": len(
             validated["longest_solution_chain"]
         ),
@@ -1447,8 +1246,6 @@ def derive_observable_metrics(
         "cross_subject_operation_count": len(
             validated.get("cross_subject_operations", [])
         ),
-        "interference_type": validated.get("interference_type"),
-        "expression_type": validated.get("expression_type"),
         "curriculum_topic_count": topic_count,
         "curriculum_unit_count": len(curriculum_units),
         "curriculum_span_type": curriculum_span_type,
@@ -1478,28 +1275,3 @@ def derive_observable_metrics(
             "experiment_task_structure"
         ),
     }
-    if "fine_curriculum_topics" in validated:
-        fine_topics = validated["fine_curriculum_topics"]
-        fine_units = sorted({fine_topic_unit(topic) for topic in fine_topics})
-        mapped_coarse_topics = sorted(
-            {FINE_CURRICULUM_TOPIC_TO_COARSE[topic] for topic in fine_topics}
-        )
-        coarse_topics = sorted(validated["curriculum_topics"])
-        out_of_scope_items = validated["out_of_scope_items"]
-        metrics.update(
-            {
-                "fine_curriculum_topics": fine_topics,
-                "fine_curriculum_topic_count": len(fine_topics),
-                "fine_curriculum_units": fine_units,
-                "fine_curriculum_unit_count": len(fine_units),
-                "fine_mapped_coarse_topics": mapped_coarse_topics,
-                "fine_coarse_topic_consistent": (
-                    mapped_coarse_topics == coarse_topics
-                ),
-                "curriculum_scope": (
-                    "out_of_scope" if out_of_scope_items else "within_junior"
-                ),
-                "out_of_scope_items": out_of_scope_items,
-            }
-        )
-    return metrics
