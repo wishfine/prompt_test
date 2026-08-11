@@ -178,6 +178,49 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertTrue(any(action["field"] == "calculation_type" for action in actions))
         self.assertEqual(result["difficulty_level"], "拔高题")
 
+    def test_normalization_never_erases_explicit_high_difficulty_evidence(self):
+        value = rating("拔高题")
+        value["features"].update({
+            "visual_content": "曲线图",
+            "visual_item_count": "1幅",
+            "visual_complexity": "图像拐点或分段分析",
+            "information_operation": "图像拐点或分段分析",
+            "reaction_count": "3个",
+            "reaction_relation": "多个反应连续",
+            "calculation_type": "多类计算综合",
+            "calculation_steps": "4步及以上",
+            "calculation_structure": "多个化学反应计算",
+            "special_method": "差量法、元素守恒",
+            "hidden_condition_count": "多个关联条件",
+            "hidden_condition_type": "多类条件联合",
+            "condition_relation": "多个关联条件",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        features = result["features"]
+        self.assertEqual(features["reaction_count"], "2-3个")
+        self.assertEqual(features["reaction_relation"], "多个反应连续")
+        self.assertEqual(features["special_method"], "多种特殊方法联合")
+        self.assertEqual(features["hidden_condition_count"], "2个")
+        self.assertEqual(features["condition_relation"], "多个关联条件")
+        self.assertEqual(features["visual_complexity"], "复杂高难图像")
+
+    def test_consistency_uses_nonzero_relation_evidence_over_zero_counts(self):
+        value = rating("拔高题")
+        value["features"].update({
+            "reaction_count": "0个",
+            "reaction_relation": "反应先后或过量不足",
+            "hidden_condition_count": "0个",
+            "hidden_condition_type": "多类条件联合",
+            "condition_relation": "多个关联条件",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["features"]["reaction_count"], "2-3个")
+        self.assertEqual(
+            result["features"]["reaction_relation"], "反应先后或过量不足"
+        )
+        self.assertEqual(result["features"]["hidden_condition_count"], "2个")
+        self.assertEqual(result["features"]["condition_relation"], "多个关联条件")
+
     def test_every_model_feature_finishes_in_its_own_enum(self):
         value = rating("基础题")
         for field in schema.FEATURE_OPTIONS:
@@ -362,6 +405,72 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
                     "R2_hard_to_final_multi_feature_review",
                 )
 
+    def test_hard_review_uses_concrete_tasks_without_low_count_vetoes(self):
+        staged_graph = rating("拔高题")
+        staged_graph["features"].update({
+            "step_count": "4-5步",
+            "information_operation": "图像拐点或分段分析",
+            "reaction_count": "2-3个",
+            "reaction_relation": "多个反应连续",
+            "calculation_type": "多类计算综合",
+            "calculation_steps": "4步及以上",
+            "calculation_structure": "多个化学反应计算",
+            "hidden_condition_count": "2个",
+            "hidden_condition_type": "图像拐点或分段",
+            "condition_relation": "多个关联条件",
+        })
+
+        shared_composition = rating("拔高题", ["U05_T03", "U08_T02", "U10_T02"])
+        shared_composition["features"].update({
+            "chemical_object_distribution": "不同类多个化学对象",
+            "step_count": "4-5步",
+            "solution_method": "定性与定量联合",
+            "reaction_count": "2-3个",
+            "reaction_relation": "多个反应连续",
+            "calculation_type": "多类计算综合",
+            "calculation_steps": "4步及以上",
+            "calculation_structure": "多个化学反应计算",
+            "special_method": "元素守恒",
+            "hidden_condition_count": "2个",
+            "hidden_condition_type": "物质或溶液状态",
+            "condition_relation": "多个关联条件",
+            "interference_type": "体系质量关系易错",
+        })
+
+        qualitative_remainder = rating("拔高题", ["U08_T04", "U10_T06"])
+        qualitative_remainder["features"].update({
+            "task_count": "4项及以上",
+            "task_relation": "前后依赖",
+            "chemical_object_distribution": "不同类多个化学对象",
+            "step_count": "4-5步",
+            "solution_method": "连续推导",
+            "classification_discussion": "单一情况讨论",
+            "reverse_tracing": "有",
+            "reaction_count": "2-3个",
+            "reaction_relation": "多个反应连续",
+            "experiment_analysis": "多个实验分析任务联合",
+            "hidden_condition_count": "2个",
+            "hidden_condition_type": "多类条件联合",
+            "condition_relation": "多个关联条件",
+            "interference_type": "多种剩余情况或竞争解释",
+        })
+
+        expected_paths = (
+            "分阶段图像或多来源数据中判断2-3个连续反应并完成关联计算",
+            "同一复杂体系中用2-3个反应和守恒反推组成或纯度",
+            "多个实验结果共同排除剩余物并完成逆向检验",
+        )
+        for value, expected_path in zip(
+            (staged_graph, shared_composition, qualitative_remainder),
+            expected_paths,
+        ):
+            with self.subTest(expected_path=expected_path):
+                result = schema.postprocess_chemistry_difficulty(value, {})
+                self.assertEqual(result["difficulty_level"], "压轴题")
+                action = result["postprocess_actions"][-1]
+                self.assertIn(expected_path, action["evidence"]["matched_paths"])
+                self.assertIn("未被当作单项否决条件", action["reason"])
+
     def test_hard_review_accepts_single_chain_and_independent_final_paths(self):
         multi_source = rating("拔高题")
         multi_source["features"].update({
@@ -465,10 +574,14 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("不能因`跨单元不同知识点`或`多单元综合`自动升档", prompt)
         self.assertIn("普通选择题中的错误选项不算干扰", prompt)
         self.assertIn("题干字数、选项数、小问数、图片数只用于审计", prompt)
-        self.assertIn("多个高难环节强耦合，前一步结果决定后一步所用模型", prompt)
-        self.assertIn("通常6步以上或多条任务链汇合", prompt)
-        self.assertIn("【Case 63：单一高难实验或计算 vs 多类型高难任务耦合】", prompt)
-        self.assertNotIn("【Case 64", prompt)
+        self.assertIn("多个高难环节共同决定答案", prompt)
+        self.assertIn("4-5步", prompt)
+        self.assertIn("不能单独否决压轴题", prompt)
+        self.assertIn("【Case 36：石青分阶段受热】", prompt)
+        self.assertIn("【Case 41：锌与两种盐溶液反应后的滤液滤渣】", prompt)
+        self.assertIn("【Case 69：单一高难实验或计算 vs 多类型高难任务耦合】", prompt)
+        self.assertNotIn("【Case 70", prompt)
+        self.assertIn("禁止借用相邻字段的枚举", prompt)
         self.assertIn("必须按指定的严格JSON Schema输出一个完整对象", prompt)
         self.assertNotIn("必须通过指定函数提交", prompt)
         self.assertIn("calculation_structure", prompt)

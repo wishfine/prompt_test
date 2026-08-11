@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v16"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v17"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -121,8 +121,8 @@ FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
     ),
 }
 
-# 模型侧只保留互不重复的字段。这里仅处理老师语言中稳定、无歧义的简称；
-# 未命中时使用中性默认值并留下审计记录，不把自由文本带入最终特征。
+# 模型侧只保留互不重复的字段。规范化必须保留模型已经明确表达的
+# “存在反应/条件/图像分析/特殊方法”等实质证据，禁止因枚举串值而回落为无或0。
 FEATURE_DEFAULTS: dict[str, str] = {
     field: options[0] for field, options in FEATURE_OPTIONS.items()
 }
@@ -285,6 +285,89 @@ def _clean_enum_text(value: Any) -> str:
     return re.sub(r"[\s`'\"，,。；;：:]", "", str(value or ""))
 
 
+def _numeric_count(value: Any) -> int | None:
+    """读取明确数量；不把“多个”等模糊量词猜成精确数量。"""
+    text = str(value or "")
+    numbers = [int(number) for number in re.findall(r"\d+", text)]
+    if numbers:
+        return max(numbers)
+    chinese_numbers = {
+        "零": 0, "一": 1, "二": 2, "两": 2, "三": 3,
+        "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+    }
+    matched = [number for token, number in chinese_numbers.items() if token in text]
+    return max(matched) if matched else None
+
+
+def _count_band(field: str, count: int) -> str:
+    if field == "reaction_count":
+        if count <= 0:
+            return "0个"
+        if count == 1:
+            return "1个"
+        if count <= 3:
+            return "2-3个"
+        return "4个及以上"
+    if field == "hidden_condition_count":
+        if count <= 0:
+            return "0个"
+        if count == 1:
+            return "1个"
+        if count == 2:
+            return "2个"
+        return "3个及以上"
+    if field == "visual_item_count":
+        if count <= 0:
+            return "无图片"
+        if count <= 3:
+            return f"{count}幅"
+        return "4幅及以上"
+    raise KeyError(field)
+
+
+def _infer_reaction_count(source: dict[str, Any]) -> str | None:
+    relation = str(source.get("reaction_relation", "") or "")
+    if relation == "无反应关系":
+        return "0个"
+    if relation == "单一反应":
+        return "1个"
+    if relation in FEATURE_OPTIONS["reaction_relation"]:
+        return "2-3个"
+    return None
+
+
+def _infer_hidden_condition_count(source: dict[str, Any]) -> str | None:
+    relation = str(source.get("condition_relation", "") or "")
+    relation_counts = {
+        "无条件限制": "0个",
+        "单一条件": "1个",
+        "多个独立条件": "2个",
+        "多个关联条件": "2个",
+        "多层嵌套条件": "3个及以上",
+    }
+    if relation in relation_counts:
+        return relation_counts[relation]
+    condition_type = str(source.get("hidden_condition_type", "") or "")
+    if condition_type in FEATURE_OPTIONS["hidden_condition_type"]:
+        return "0个" if condition_type == "无" else "1个"
+    return None
+
+
+def _infer_visual_complexity(source: dict[str, Any]) -> str | None:
+    operation = str(source.get("information_operation", "") or "")
+    if operation == "图像拐点或分段分析":
+        return "复杂高难图像"
+    if operation == "多来源信息筛选联合":
+        return "多个不同类型图像"
+    item_count = str(source.get("visual_item_count", "") or "")
+    if item_count in {"2幅", "3幅", "4幅及以上"}:
+        return "多个同类型图像"
+    content = str(source.get("visual_content", "") or "")
+    if content in FEATURE_OPTIONS["visual_content"] and content != "无图片信息":
+        return "单一同类型图像"
+    return None
+
+
 def canonicalize_feature_value(
     field: str,
     value: Any,
@@ -293,6 +376,18 @@ def canonicalize_feature_value(
     """把单个模型特征确定性收敛到该字段的受控枚举。"""
     options = FEATURE_OPTIONS[field]
     if isinstance(value, str) and value in options:
+        if field == "reaction_count":
+            inferred = _infer_reaction_count(source)
+            if value in {"0个", "1个"} and inferred in {"2-3个", "4个及以上"}:
+                return inferred, "反应关系明确为多个反应，禁止把反应数量清零或压成1个"
+        if field == "hidden_condition_count":
+            inferred = _infer_hidden_condition_count(source)
+            if value in {"0个", "1个"} and inferred in {"2个", "3个及以上"}:
+                return inferred, "条件关系明确为多个条件，禁止把条件数量清零或压成1个"
+        if field == "visual_complexity":
+            inferred = _infer_visual_complexity(source)
+            if inferred == "复杂高难图像" and value != inferred:
+                return inferred, "已明确要求图像分段分析，禁止降低为普通图像"
         return value, "原值已是合法枚举"
 
     cleaned = _clean_enum_text(value)
@@ -308,6 +403,35 @@ def canonicalize_feature_value(
     }
     if cleaned in aliases:
         return aliases[cleaned], "按该字段的受控同义词映射"
+
+    if field in {"reaction_count", "hidden_condition_count", "visual_item_count"}:
+        count = _numeric_count(value)
+        if count is not None:
+            return _count_band(field, count), "按明确数字或数量词映射到计数区间"
+
+    if field == "reaction_count":
+        inferred = _infer_reaction_count(source)
+        if inferred is not None:
+            return inferred, "由反应关系保留已明确存在的反应数量证据"
+
+    if field == "hidden_condition_count":
+        inferred = _infer_hidden_condition_count(source)
+        if inferred is not None:
+            return inferred, "由条件关系保留已明确存在的条件数量证据"
+
+    if field == "visual_complexity":
+        inferred = _infer_visual_complexity(source)
+        if inferred is not None:
+            return inferred, "由图像任务保留已明确存在的图像复杂度证据"
+
+    if field == "special_method":
+        matched_methods = [
+            option for option in options
+            if option not in {"无", "多种特殊方法联合"}
+            and _clean_enum_text(option) in cleaned
+        ]
+        if len(matched_methods) >= 2:
+            return "多种特殊方法联合", "识别到两种及以上受控特殊方法"
 
     contained = [
         option for option in options
@@ -752,6 +876,41 @@ def _build_upper_level_review_candidate(
         multiple_reactions = features["reaction_count"] == "4个及以上"
         continuous_reactions = features["reaction_relation"] == "多个反应连续"
         classification_required = features["classification_discussion"] != "无"
+        four_or_more_steps = features["step_count"] in {"4-5步", "6步及以上"}
+        two_or_three_reactions = features["reaction_count"] == "2-3个"
+        staged_or_multi_source_information = features["information_operation"] in {
+            "图像拐点或分段分析", "多来源信息筛选联合",
+        }
+        sequential_or_competing_reactions = features["reaction_relation"] in {
+            "多个反应连续", "反应先后或过量不足", "分情况或竞争反应",
+        }
+        different_chemical_objects = features["chemical_object_distribution"] in {
+            "不同类多个化学对象", "多类化学对象综合",
+        }
+        system_or_remainder_risk = features["interference_type"] in {
+            "体系质量关系易错", "多种剩余情况或竞争解释",
+        }
+        composition_calculation = features["calculation_type"] in {
+            "含杂质计算", "多类计算综合",
+        }
+        composition_condition = features["hidden_condition_type"] in {
+            "物质或溶液状态", "纯净干燥或杂质", "气体水分或质量损失",
+            "剩余物或变质程度", "多类条件联合",
+        }
+        shared_composition_evidence = (
+            composition_condition
+            or classification_required
+            or (
+                features["task_count"] == "4项及以上"
+                and features["task_relation"] == "前后依赖"
+                and features["experiment_analysis"] == "无"
+            )
+            or (
+                features["cross_subject"] == "物理知识参与"
+                and features["information_operation"] == "多来源信息筛选联合"
+            )
+            or features["special_method"] == "多种特殊方法联合"
+        )
         pressure_paths = {
             "多来源信息、四个以上反应与关联条件形成整题综合压力": (
                 features["information_operation"] == "多来源信息筛选联合"
@@ -780,6 +939,61 @@ def _build_upper_level_review_candidate(
                 and continuous_reactions
                 and decisive_special_method
             ),
+            "分阶段图像或多来源数据中判断2-3个连续反应并完成关联计算": (
+                four_or_more_steps
+                and staged_or_multi_source_information
+                and two_or_three_reactions
+                and sequential_or_competing_reactions
+                and complex_calculation
+                and complex_condition
+                and features["task_relation"] != "多项独立"
+            ),
+            "同一复杂体系中用2-3个反应和守恒反推组成或纯度": (
+                four_or_more_steps
+                and two_or_three_reactions
+                and complex_calculation
+                and features["special_method"] != "无"
+                and features["solution_method"] == "定性与定量联合"
+                and different_chemical_objects
+                and system_or_remainder_risk
+                and complex_condition
+                and composition_calculation
+                and features["task_relation"] != "多项独立"
+                and shared_composition_evidence
+            ),
+            "单一反应存在两种过量结果并分别反推原混合物组成": (
+                four_or_more_steps
+                and features["task_count"] == "2-3项"
+                and features["task_relation"] == "前后依赖"
+                and features["reaction_count"] == "1个"
+                and classification_required
+                and features["calculation_structure"] == "含杂质多步质量分数"
+                and features["special_method"] != "无"
+                and complex_condition
+                and system_or_remainder_risk
+            ),
+            "多个实验结果共同排除剩余物并完成逆向检验": (
+                four_or_more_steps
+                and two_or_three_reactions
+                and sequential_or_competing_reactions
+                and complex_condition
+                and features["interference_type"] == "多种剩余情况或竞争解释"
+                and features["reverse_tracing"] == "有"
+                and features["experiment_analysis"] == "多个实验分析任务联合"
+                and features["experiment_design"] == "无"
+                and different_chemical_objects
+            ),
+            "由最终现象和质量关系共同判断反应先后及剩余物": (
+                four_or_more_steps
+                and features["task_count"] == "1项"
+                and two_or_three_reactions
+                and features["reaction_relation"] == "反应先后或过量不足"
+                and classification_required
+                and features["hidden_condition_count"] in {"2个", "3个及以上"}
+                and complex_condition
+                and features["interference_type"] == "体系质量关系易错"
+                and features["special_method"] != "无"
+            ),
         }
         matched_paths = [
             name for name, active in pressure_paths.items() if active
@@ -787,7 +1001,7 @@ def _build_upper_level_review_candidate(
         if matched_paths:
             return _candidate(
                 "R2_hard_to_final_multi_feature_review", "压轴题",
-                "命中经教师样本校准的压轴复核路径；每条路径都要求多个不同类型特征共同成立，不以题长、任务数或单一特殊方法机械升档。",
+                "高难特征触发4/5档复核后，多个具体任务证据共同支持压轴；4-5步、2-3个反应、单项任务或较少隐藏条件均未被当作单项否决条件。",
                 {
                     "matched_paths": matched_paths,
                     "matched_path_count": len(matched_paths),
