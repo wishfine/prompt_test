@@ -190,6 +190,7 @@ CHEMISTRY_IMAGE_DETAIL = os.getenv(
 ).strip().lower()
 if CHEMISTRY_IMAGE_DETAIL not in {
     "default",
+    "adaptive",
     "auto",
     "low",
     "high",
@@ -197,7 +198,7 @@ if CHEMISTRY_IMAGE_DETAIL not in {
 }:
     raise ValueError(
         f"不支持的 CHEMISTRY_IMAGE_DETAIL={CHEMISTRY_IMAGE_DETAIL!r}；"
-        "可选值：default, auto, low, high, xhigh（实验值）"
+        "可选值：default, adaptive, auto, low, high, xhigh（实验值）"
     )
 MAX_SCHEMA_RETRIES = int(os.getenv("CHEMISTRY_SCHEMA_RETRIES", "3"))
 
@@ -212,6 +213,14 @@ VISUAL_REFERENCE_RE = re.compile(
     r"(如图|图中|下图|图示|示意图|装置图|实验装置|流程图|"
     r"曲线|坐标图|关系图|图像|图象|表格|微观示意|粒子图|"
     r"看图|观察图|由图|据图|结合图)"
+)
+ADAPTIVE_XHIGH_IMAGE_RE = re.compile(
+    r"(实验装置|装置图|装置|仪器|量筒|天平|滴定管|长颈漏斗|"
+    r"分液漏斗|试管|烧杯|集气瓶|导管|发生装置|收集装置)"
+)
+ADAPTIVE_HIGH_IMAGE_RE = re.compile(
+    r"(曲线|坐标图|关系图|拐点|分段图|流程图|流程|工艺|"
+    r"表格|数据表|折线图|柱状图)"
 )
 VISUAL_PLACEHOLDER_RE = re.compile(
     r"(<img\b|<image\b|\[image\]|\[图片\]|\【图片\】|图片缺失|见图|如下图)",
@@ -4488,6 +4497,30 @@ def select_image_fields(data: Dict[str, Any]) -> Tuple[List[str], List[str]]:
     return selected, reasons
 
 
+def resolve_image_detail(
+    data: Dict[str, Any],
+    selected_image_fields: Optional[Sequence[str]] = None,
+) -> str:
+    """将全局图片策略解析为单题实际 detail。
+
+    adaptive 只使用题面可见文字路由，不读解析，避免答案或解析
+    表述改变输入画质。实验装置和仪器细节使用 xhigh；曲线、流程、
+    数据表使用 high；其余保持 API 默认画质。
+    """
+    selected = list(selected_image_fields or [])
+    if not selected:
+        return "default"
+    if CHEMISTRY_IMAGE_DETAIL != "adaptive":
+        return CHEMISTRY_IMAGE_DETAIL
+
+    question_text = visible_text(data, include_analysis=False)
+    if ADAPTIVE_XHIGH_IMAGE_RE.search(question_text):
+        return "xhigh"
+    if ADAPTIVE_HIGH_IMAGE_RE.search(question_text):
+        return "high"
+    return "default"
+
+
 def build_user_content(
     data: Dict[str, Any],
     selected_image_fields: Optional[Sequence[str]] = None,
@@ -4505,6 +4538,8 @@ def build_user_content(
     )
     if not selected:
         return dynamic_text
+
+    resolved_image_detail = resolve_image_detail(data, selected)
 
     content: List[Dict[str, str]] = [
         {"type": "input_text", "text": dynamic_text}
@@ -4528,8 +4563,8 @@ def build_user_content(
             if url in seen:
                 continue
             image_part = {"type": "input_image", "image_url": url}
-            if CHEMISTRY_IMAGE_DETAIL != "default":
-                image_part["detail"] = CHEMISTRY_IMAGE_DETAIL
+            if resolved_image_detail != "default":
+                image_part["detail"] = resolved_image_detail
             content.append(image_part)
             seen.add(url)
     return content
@@ -4586,13 +4621,15 @@ async def call_model_with_cache(
         for field in selected_fields
         for url in extract_image_urls(data.get(field))
     ]
+    resolved_image_detail = resolve_image_detail(data, selected_fields)
     question_structure_metrics = derive_question_structure_metrics(data)
     image_status = {
         "question_input_mode": f"text_first_image_{CHEMISTRY_IMAGE_MODE}",
         "question_text_input_used": True,
         "structured_text_char_count": len(construct_question_content(data)),
         "image_mode": CHEMISTRY_IMAGE_MODE,
-        "image_detail": CHEMISTRY_IMAGE_DETAIL,
+        "image_detail_strategy": CHEMISTRY_IMAGE_DETAIL,
+        "image_detail": resolved_image_detail,
         "image_input_requested": bool(selected_fields),
         "image_input_used": False,
         "image_input_fields": selected_fields,
@@ -4833,7 +4870,11 @@ async def process_single_question(
                     "source_difficulty_sent": False,
                     "structured_text_primary": True,
                     "image_mode": CHEMISTRY_IMAGE_MODE,
-                    "image_detail": CHEMISTRY_IMAGE_DETAIL,
+                    "image_detail_strategy": CHEMISTRY_IMAGE_DETAIL,
+                    "image_detail": image_status.get(
+                        "image_detail",
+                        "default",
+                    ),
                     "selected_image_fields": image_status.get(
                         "image_input_fields",
                         [],

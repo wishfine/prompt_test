@@ -332,6 +332,49 @@ class ChemistryRuntimeTests(unittest.TestCase):
             ["analysis_pic_url"],
         )
 
+    def test_adaptive_image_detail_routes_by_visual_task(self) -> None:
+        chemistry.CHEMISTRY_IMAGE_MODE = "auto"
+        chemistry.CHEMISTRY_IMAGE_DETAIL = "adaptive"
+
+        cases = [
+            (
+                {
+                    "stem": "根据实验装置图判断仪器连接和气体收集方法。",
+                    "stem_pic_url": "https://example.com/device.png",
+                },
+                "xhigh",
+            ),
+            (
+                {
+                    "stem": "根据反应曲线的拐点和流程图回答问题。",
+                    "stem_pic_url": "https://example.com/curve.png",
+                },
+                "high",
+            ),
+            (
+                {
+                    "stem": "根据微观粒子示意图判断物质类别。",
+                    "stem_pic_url": "https://example.com/particle.png",
+                },
+                "default",
+            ),
+        ]
+
+        for row, expected in cases:
+            selected, _ = chemistry.select_image_fields(row)
+            self.assertEqual(
+                chemistry.resolve_image_detail(row, selected),
+                expected,
+            )
+            content = chemistry.build_user_content(row, selected)
+            image = next(
+                item for item in content if item.get("type") == "input_image"
+            )
+            if expected == "default":
+                self.assertNotIn("detail", image)
+            else:
+                self.assertEqual(image.get("detail"), expected)
+
     def test_full_structured_text_includes_subquestion_analysis(self) -> None:
         row = {
             "stem": "母题",
