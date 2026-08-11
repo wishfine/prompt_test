@@ -94,6 +94,7 @@ CACHE_GET_LOCK = Lock()
 
 CACHE_EXPIRE_DAYS = 6
 CACHE_EXPIRE_SECONDS = CACHE_EXPIRE_DAYS * 24 * 3600
+COMPLETION_TOKEN_ANOMALY_THRESHOLD = 1500
 CACHE_FILE_PATH = os.getenv(
     "CHEMISTRY_CACHE_FILE_PATH", "chemistry_prompt_cache.json"
 )
@@ -133,6 +134,8 @@ def load_prompt_config(prompt_path: str) -> None:
 
     with open(prompt_path, "r", encoding="utf-8") as f:
         content = f.read()
+
+    junior_schema.validate_prompt_feature_catalog(content)
 
     marker = "## 输入题目信息"
     if marker not in content:
@@ -669,6 +672,8 @@ async def call_model_with_cache(
                         anomaly_flags.append("structured_output_json_incomplete")
                     if not image_status["token_usage_consistent"]:
                         anomaly_flags.append("token_usage_sum_mismatch")
+                    if completion_tokens > COMPLETION_TOKEN_ANOMALY_THRESHOLD:
+                        anomaly_flags.append("completion_tokens_abnormally_high")
                     image_status["token_anomaly_flags"] = anomaly_flags
                     image_status["image_input_used"] = bool(selected_fields)
                     return (

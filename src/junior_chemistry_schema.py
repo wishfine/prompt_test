@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v20"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v21"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -35,14 +35,16 @@ FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
     "task_relation": ("单项任务", "多项独立", "前后依赖", "多条任务链汇合"),
     "solution_method": (
         "直接识记或辨认", "一条规则直接应用", "多条规则分别判断",
-        "连续推导", "定性与定量联合",
+        "连续推导", "定性与定量联合", "实验探究或方案评价",
+        "其他明确解题方法",
     ),
     "classification_discussion": ("无", "单一情况讨论", "多情况分类讨论"),
     "reverse_tracing": ("无", "有"),
     "visual_content": (
-        "无图片信息", "生活标识图", "仪器图", "基础装置图", "微观示意图", "数据表格",
+        "无图片信息", "生活标识图", "仪器图", "基础装置图", "微观示意图",
+        "元素周期表或标签图", "数据表格",
         "反应流程图", "工业流程图", "曲线图", "多组对比实验表格",
-        "多装置组合实验图", "多种图像综合",
+        "多装置组合实验图", "多种图像综合", "其他有效图像信息",
     ),
     "visual_item_count": ("无图片", "1幅", "2幅", "3幅", "4幅及以上"),
     "visual_complexity": (
@@ -52,49 +54,58 @@ FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
     "information_operation": (
         "无需额外提取", "直接读取一个信息", "比较或整理多条信息",
         "由图表变化推断", "图像拐点或分段分析", "多来源信息筛选联合",
+        "文字材料提取", "其他信息处理",
     ),
     "reaction_count": ("0个", "1个", "2-3个", "4个及以上"),
     "reaction_relation": (
         "无反应关系", "单一反应", "多个反应并列", "多个反应连续",
-        "反应先后或过量不足", "分情况或竞争反应",
+        "反应先后或过量不足", "分情况或竞争反应", "其他明确反应关系",
     ),
     "experiment_operation": (
         "无", "仪器识别或名称", "基本操作或读数判断", "装置选择或连接",
         "气体检验或验满", "试剂选择或物质检验", "多项实验操作联合",
+        "其他实验操作任务",
     ),
     "experiment_analysis": (
         "无", "实验现象判断", "装置作用或实验目的", "实验原因解释",
         "控制变量", "根据现象或数据得出结论", "多个实验分析任务联合",
+        "其他实验分析任务",
     ),
     "experiment_design": (
         "无", "补充实验步骤或操作", "根据结论设计操作", "实验方案设计",
         "实验方案评价", "实验改进", "多阶段探究设计",
+        "多类实验设计任务联合", "其他实验设计任务",
     ),
     "error_analysis": (
         "无", "量筒读数误差", "天平称量误差", "实验操作导致误差",
         "装置或方案导致误差", "定量实验误差分析", "多种误差联合分析",
+        "其他明确误差分析",
     ),
     "calculation_type": (
         "无", "化合价或化学式计算", "相对分子质量或元素质量计算",
         "化学方程式计算", "溶质质量分数或稀释计算", "溶解度计算",
         "反应后气体沉淀固体质量", "反应后溶液或溶质质量",
         "含杂质计算", "图像分段计算", "实验误差定量计算", "多类计算综合",
+        "其他明确计算",
     ),
     "calculation_steps": ("无", "1步", "2-3步", "4步及以上"),
     "calculation_structure": (
         "无任何计算", "一步或口算", "多步常规计算", "单个化学方程式计算",
         "多个化学反应计算", "含杂质多步质量分数",
-        "实验误差定量计算", "多模型综合计算",
+        "实验误差定量计算", "多模型综合计算", "其他明确计算结构",
     ),
     "special_method": (
         "无", "质量守恒", "元素守恒", "差量法", "极值法",
         "分情况计算", "多方程式联立", "循环反应计算", "多种特殊方法联合",
+        "其他明确计算方法",
     ),
     "hidden_condition_count": ("0个", "1个", "2个", "3个及以上"),
     "hidden_condition_type": (
         "无", "前后对象要求", "反应条件", "过量或不足", "反应先后",
         "物质或溶液状态", "纯净干燥或杂质", "气体水分或质量损失",
-        "图像拐点或分段", "剩余物或变质程度", "多类条件联合",
+        "图像拐点或分段", "剩余物或变质程度", "组成或转化关系",
+        "装置或操作前提", "守恒或质量关系", "溶解或饱和状态",
+        "粒子或电荷关系", "多类条件联合", "其他隐藏条件",
     ),
     "condition_relation": (
         "无条件限制", "单一条件", "多个独立条件",
@@ -103,24 +114,114 @@ FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
     "interference_type": (
         "无", "易混概念", "多个选项规则切换", "规范表述易错",
         "干扰数据", "特例或边界", "体系质量关系易错",
-        "多种剩余情况或竞争解释",
+        "多种剩余情况或竞争解释", "多类干扰联合", "其他决定性干扰",
     ),
     "expression_type": (
         "无", "元素离子符号或化学式书写", "仪器操作或试剂名称书写",
         "化学方程式书写", "实验现象或操作规范描述",
-        "原因或结论规范表达", "计算过程书写", "多类规范表达联合",
+        "原因或结论规范表达", "计算过程书写", "数值或简短答案填写",
+        "物质名称性质或用途填写", "多类规范表达联合", "其他明确表达任务",
     ),
     "subjective_response": ("无", "有"),
     "given_information": (
         "题干未提供新增规则", "题干给出一条新事实或规则",
         "题干给出多条新事实或规则", "题干给出陌生物质或反应资料",
-        "题干给出陌生装置流程或材料资料",
+        "题干给出陌生装置流程或材料资料", "题干给出其他新增信息",
     ),
     "cross_subject": (
         "无", "古文或文言理解", "物理知识参与", "生物知识参与",
-        "生产流程或工程信息参与", "多学科信息参与",
+        "生产流程或工程信息参与", "多学科信息参与", "其他学科知识参与",
     ),
 }
+
+# 开放语义字段必须具有合法兜底项。它只在所有具体枚举均不适用时使用，
+# 目的是保留“确有该类任务”的证据，禁止规范化时静默回落为“无”。
+FEATURE_RESIDUAL_OPTIONS: dict[str, str] = {
+    "solution_method": "其他明确解题方法",
+    "visual_content": "其他有效图像信息",
+    "information_operation": "其他信息处理",
+    "reaction_relation": "其他明确反应关系",
+    "experiment_operation": "其他实验操作任务",
+    "experiment_analysis": "其他实验分析任务",
+    "experiment_design": "其他实验设计任务",
+    "error_analysis": "其他明确误差分析",
+    "calculation_type": "其他明确计算",
+    "calculation_structure": "其他明确计算结构",
+    "special_method": "其他明确计算方法",
+    "hidden_condition_type": "其他隐藏条件",
+    "interference_type": "其他决定性干扰",
+    "expression_type": "其他明确表达任务",
+    "given_information": "题干给出其他新增信息",
+    "cross_subject": "其他学科知识参与",
+}
+
+# 模型把多个合法值拼在一个字段时，优先收敛到该字段的联合枚举，
+# 而不是清空为“无”或任意保留其中一项。
+FEATURE_MULTI_OPTIONS: dict[str, str] = {
+    "visual_content": "多种图像综合",
+    "experiment_operation": "多项实验操作联合",
+    "experiment_analysis": "多个实验分析任务联合",
+    "experiment_design": "多类实验设计任务联合",
+    "error_analysis": "多种误差联合分析",
+    "calculation_type": "多类计算综合",
+    "calculation_structure": "多模型综合计算",
+    "special_method": "多种特殊方法联合",
+    "hidden_condition_type": "多类条件联合",
+    "interference_type": "多类干扰联合",
+    "expression_type": "多类规范表达联合",
+    "cross_subject": "多学科信息参与",
+}
+
+# 这些字段的取值天然是计数区间、布尔值或互斥关系，现有枚举已经穷尽，
+# 不应增加“其他”逃逸项。每个核心字段必须且只能属于穷尽型或开放型之一。
+EXHAUSTIVE_FEATURE_FIELDS = frozenset({
+    "task_count", "knowledge_distribution", "chemical_object_distribution",
+    "step_count", "task_relation", "classification_discussion", "reverse_tracing",
+    "visual_item_count", "visual_complexity", "reaction_count",
+    "calculation_steps", "hidden_condition_count", "condition_relation",
+    "subjective_response",
+})
+
+
+def validate_feature_registry() -> None:
+    all_fields = set(FEATURE_OPTIONS)
+    residual_fields = set(FEATURE_RESIDUAL_OPTIONS)
+    if EXHAUSTIVE_FEATURE_FIELDS | residual_fields != all_fields:
+        missing = all_fields - EXHAUSTIVE_FEATURE_FIELDS - residual_fields
+        extra = (EXHAUSTIVE_FEATURE_FIELDS | residual_fields) - all_fields
+        raise RuntimeError(f"特征覆盖分类不完整: missing={sorted(missing)}, extra={sorted(extra)}")
+    if EXHAUSTIVE_FEATURE_FIELDS & residual_fields:
+        raise RuntimeError("穷尽型特征与开放型特征不得重叠")
+    for field, residual in FEATURE_RESIDUAL_OPTIONS.items():
+        if residual not in FEATURE_OPTIONS[field] or residual == FEATURE_OPTIONS[field][0]:
+            raise RuntimeError(f"{field}的保留证据兜底项配置错误")
+    for registry in (FEATURE_MULTI_OPTIONS, FEATURE_ALIASES):
+        for field, values in registry.items():
+            targets = values.values() if isinstance(values, dict) else (values,)
+            if any(target not in FEATURE_OPTIONS[field] for target in targets):
+                raise RuntimeError(f"{field}存在指向非法枚举的映射")
+
+
+def validate_prompt_feature_catalog(prompt: str) -> None:
+    """启动前验证Prompt的30项枚举与运行时Schema完全同源。"""
+    documented = {
+        field: tuple(re.findall(r"`([^`]+)`", values))
+        for field, values in re.findall(
+            r"#### \d+\. ([a-z_]+)\s*\n只能是：([^\n]+)", prompt
+        )
+    }
+    if set(documented) != set(FEATURE_OPTIONS):
+        raise RuntimeError(
+            "Prompt特征字段与Schema不一致: "
+            f"missing={sorted(set(FEATURE_OPTIONS) - set(documented))}, "
+            f"extra={sorted(set(documented) - set(FEATURE_OPTIONS))}"
+        )
+    mismatched = [
+        field for field, options in FEATURE_OPTIONS.items()
+        if documented[field] != options
+    ]
+    if mismatched:
+        raise RuntimeError(f"Prompt枚举顺序或内容与Schema不一致: {mismatched}")
 
 # 模型侧只保留互不重复的字段。规范化必须保留模型已经明确表达的
 # “存在反应/条件/图像分析/特殊方法”等实质证据，禁止因枚举串值而回落为无或0。
@@ -128,6 +229,11 @@ FEATURE_DEFAULTS: dict[str, str] = {
     field: options[0] for field, options in FEATURE_OPTIONS.items()
 }
 FEATURE_ALIASES: dict[str, dict[str, str]] = {
+    "visual_content": {
+        "元素周期表单元格图": "元素周期表或标签图",
+        "元素周期表信息图": "元素周期表或标签图",
+        "药品标签图": "元素周期表或标签图",
+    },
     "experiment_operation": {
         "仪器识别": "仪器识别或名称",
         "仪器名称": "仪器识别或名称",
@@ -137,14 +243,22 @@ FEATURE_ALIASES: dict[str, dict[str, str]] = {
     "experiment_analysis": {
         "现象判断": "实验现象判断",
         "实验目的": "装置作用或实验目的",
+        "实验目的分析": "装置作用或实验目的",
         "原因解释": "实验原因解释",
     },
     "calculation_type": {
+        "单个化学方程式计算": "化学方程式计算",
+        "多个化学反应计算": "化学方程式计算",
         "反应后气体质量": "反应后气体沉淀固体质量",
         "反应后沉淀质量": "反应后气体沉淀固体质量",
         "反应后固体质量": "反应后气体沉淀固体质量",
         "反应后溶液质量": "反应后溶液或溶质质量",
         "反应后溶质质量": "反应后溶液或溶质质量",
+        "化学式计算": "化合价或化学式计算",
+        "元素质量计算": "相对分子质量或元素质量计算",
+        "元素质量分数计算": "相对分子质量或元素质量计算",
+        "溶质质量分数计算": "溶质质量分数或稀释计算",
+        "溶质质量分数稀释计算": "溶质质量分数或稀释计算",
     },
     "calculation_structure": {
         "无": "无任何计算",
@@ -164,11 +278,54 @@ FEATURE_ALIASES: dict[str, dict[str, str]] = {
         "元素质量守恒": "元素守恒",
         "总质量守恒": "质量守恒",
     },
+    "hidden_condition_type": {
+        "杂质": "纯净干燥或杂质",
+        "物质状态": "物质或溶液状态",
+        "反应物过量或不足": "过量或不足",
+        "物质过量判断": "过量或不足",
+        "剩余物": "剩余物或变质程度",
+        "变质程度": "剩余物或变质程度",
+        "物质组成": "组成或转化关系",
+        "混合物组分范围": "组成或转化关系",
+        "物质转化要求": "组成或转化关系",
+        "物质转化关系": "组成或转化关系",
+        "产物要求": "组成或转化关系",
+        "装置气密性要求": "装置或操作前提",
+        "装置选择条件": "装置或操作前提",
+        "实验操作要求": "装置或操作前提",
+        "反应前后质量不变": "守恒或质量关系",
+        "反应前后总质量不变": "守恒或质量关系",
+        "质量变化关系": "守恒或质量关系",
+        "质量差推断组成": "守恒或质量关系",
+        "饱和溶液状态": "溶解或饱和状态",
+        "饱和不饱和状态": "溶解或饱和状态",
+        "溶解度差异": "溶解或饱和状态",
+        "粒子带电状态": "粒子或电荷关系",
+        "电荷与质子数关系": "粒子或电荷关系",
+    },
+    "expression_type": {
+        "计算结果填写": "数值或简短答案填写",
+        "数值填写": "数值或简短答案填写",
+        "简短答案填写": "数值或简短答案填写",
+        "化学式或物质名称书写": "物质名称性质或用途填写",
+        "物质名称书写": "物质名称性质或用途填写",
+        "物质性质填写": "物质名称性质或用途填写",
+        "物质用途填写": "物质名称性质或用途填写",
+    },
+    "given_information": {
+        "题干给出两条新事实或规则": "题干给出多条新事实或规则",
+        "题干仅给出常规数据": "题干未提供新增规则",
+        "题干给出实验数据和图像": "题干未提供新增规则",
+        "题干给出反应化学方程式未提供新增规则": "题干未提供新增规则",
+        "题干给出陌生物质化学式": "题干给出陌生物质或反应资料",
+    },
     "subjective_response": {
         "是": "有",
         "否": "无",
     },
 }
+
+validate_feature_registry()
 
 
 class ChemistrySchemaError(ValueError):
@@ -511,22 +668,45 @@ def canonicalize_feature_value(
         if inferred is not None:
             return inferred, "由图像任务保留已明确存在的图像复杂度证据"
 
-    if field == "special_method":
-        matched_methods = [
-            option for option in options
-            if option not in {"无", "多种特殊方法联合"}
-            and _clean_enum_text(option) in cleaned
-        ]
-        if len(matched_methods) >= 2:
-            return "多种特殊方法联合", "识别到两种及以上受控特殊方法"
-
+    excluded = {
+        FEATURE_DEFAULTS[field],
+        FEATURE_RESIDUAL_OPTIONS.get(field, ""),
+        FEATURE_MULTI_OPTIONS.get(field, ""),
+    }
     contained = [
         option for option in options
+        if option not in excluded
         if len(_clean_enum_text(option)) >= 4
         and _clean_enum_text(option) in cleaned
     ]
+    contained.extend(
+        target
+        for alias, target in FEATURE_ALIASES.get(field, {}).items()
+        if target not in excluded
+        and len(_clean_enum_text(alias)) >= 2
+        and _clean_enum_text(alias) in cleaned
+    )
+    contained = list(dict.fromkeys(contained))
+    if len(contained) >= 2 and field in FEATURE_MULTI_OPTIONS:
+        return FEATURE_MULTI_OPTIONS[field], "自由表述包含同字段多个合法类别，收敛到联合枚举"
     if len(contained) == 1:
-        return contained[0], "自由表述中只包含一个合法枚举"
+        return contained[0], "自由表述中只包含一个合法枚举或受控同义词"
+
+    if field == "calculation_structure":
+        calculation_type = str(source.get("calculation_type", "") or "")
+        calculation_steps = str(source.get("calculation_steps", "") or "")
+        structure_by_type = {
+            "化学方程式计算": "单个化学方程式计算",
+            "含杂质计算": "含杂质多步质量分数",
+            "实验误差定量计算": "实验误差定量计算",
+            "多类计算综合": "多模型综合计算",
+        }
+        if calculation_type in structure_by_type:
+            return structure_by_type[calculation_type], "依据计算类型确定计算结构"
+        if calculation_type not in {"", "无"}:
+            return (
+                "一步或口算" if calculation_steps == "1步" else "多步常规计算"
+            ), "依据计算类型与步骤确定常规计算结构"
 
     # 计算类型发生字段串值时，不能回落为“无”并清空其他计算证据。
     if field == "calculation_type":
@@ -534,6 +714,10 @@ def canonicalize_feature_value(
         special_method = str(source.get("special_method", "") or "")
         if calculation_steps not in {"", "无"} or special_method not in {"", "无"}:
             return "多类计算综合", "计算证据明确存在但计算对象无法唯一确定"
+
+    residual = FEATURE_RESIDUAL_OPTIONS.get(field)
+    if residual is not None and str(value or "").strip():
+        return residual, "具体类别无法唯一映射，保留该类任务证据而不回落为无"
 
     return FEATURE_DEFAULTS[field], "无法唯一映射，使用该字段中性默认值"
 
@@ -807,6 +991,27 @@ def _normalize_feature_consistency(result: dict[str, Any]) -> list[dict[str, Any
                 "calculation_structure",
                 fallback,
                 "存在计算时不能标为无任何计算",
+            )
+        ordinary_nonreaction_types = {
+            "化合价或化学式计算",
+            "相对分子质量或元素质量计算",
+            "溶质质量分数或稀释计算",
+            "溶解度计算",
+        }
+        if (
+            features["calculation_type"] in ordinary_nonreaction_types
+            and features["calculation_structure"] not in {
+                "一步或口算", "多步常规计算",
+            }
+        ):
+            replace(
+                "calculation_structure",
+                (
+                    "一步或口算"
+                    if features["calculation_steps"] == "1步"
+                    else "多步常规计算"
+                ),
+                "非反应类常规计算不得误用反应、含杂质或多模型结构",
             )
 
     if features["hidden_condition_count"] == "0个":

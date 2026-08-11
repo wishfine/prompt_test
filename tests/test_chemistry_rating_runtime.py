@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -215,7 +216,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         value["features"]["special_method"] = "元素守恒"
         value["features"]["calculation_structure"] = "多个化学反应计算"
         result = schema.postprocess_chemistry_difficulty(value, {})
-        self.assertEqual(result["features"]["calculation_type"], "多类计算综合")
+        self.assertEqual(result["features"]["calculation_type"], "化学方程式计算")
         self.assertEqual(
             result["features"]["calculation_structure"],
             "多个化学反应计算",
@@ -341,11 +342,79 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         result = schema.postprocess_chemistry_difficulty(value, {})
         for field, options in schema.FEATURE_OPTIONS.items():
             self.assertIn(result["features"][field], options, field)
-        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertIn(result["difficulty_level"], schema.LEVELS)
         self.assertGreaterEqual(
             len(result["postprocess"]["feature_normalization_actions"]),
             len(schema.FEATURE_OPTIONS),
         )
+
+    def test_open_semantic_fields_have_legal_nonempty_residuals(self):
+        for field, residual in schema.FEATURE_RESIDUAL_OPTIONS.items():
+            self.assertIn(field, schema.FEATURE_OPTIONS)
+            self.assertIn(residual, schema.FEATURE_OPTIONS[field])
+            self.assertNotEqual(residual, schema.FEATURE_DEFAULTS[field])
+        for field, combined in schema.FEATURE_MULTI_OPTIONS.items():
+            self.assertIn(field, schema.FEATURE_OPTIONS)
+            self.assertIn(combined, schema.FEATURE_OPTIONS[field])
+        for field, aliases in schema.FEATURE_ALIASES.items():
+            for target in aliases.values():
+                self.assertIn(target, schema.FEATURE_OPTIONS[field])
+
+    def test_unknown_open_semantic_value_keeps_positive_evidence(self):
+        source = rating("基础题")["features"]
+        for field, residual in schema.FEATURE_RESIDUAL_OPTIONS.items():
+            normalized, reason = schema.canonicalize_feature_value(
+                field, "明确存在但目录未列出的任务", source
+            )
+            self.assertEqual(normalized, residual, field)
+            self.assertIn("不回落为无", reason)
+
+    def test_multiple_values_converge_to_joint_enum_instead_of_none(self):
+        value = rating("中等题")
+        value["features"]["experiment_operation"] = "仪器识别或名称;装置选择或连接"
+        value["features"]["expression_type"] = "化学方程式书写;计算过程书写"
+        value["features"]["subjective_response"] = "有"
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(
+            result["features"]["experiment_operation"], "多项实验操作联合"
+        )
+        self.assertEqual(
+            result["features"]["expression_type"], "多类规范表达联合"
+        )
+
+    def test_calculation_structure_is_derived_when_model_crosses_fields(self):
+        value = rating("中等题")
+        value["features"].update({
+            "calculation_type": "相对分子质量或元素质量计算",
+            "calculation_steps": "2-3步",
+            "calculation_structure": "相对分子质量和元素质量计算",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(
+            result["features"]["calculation_structure"], "多步常规计算"
+        )
+
+    def test_legal_but_incompatible_calculation_structure_is_corrected(self):
+        value = rating("中等题")
+        value["features"].update({
+            "calculation_type": "相对分子质量或元素质量计算",
+            "calculation_steps": "2-3步",
+            "calculation_structure": "含杂质多步质量分数",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(
+            result["features"]["calculation_structure"], "多步常规计算"
+        )
+
+    def test_short_numeric_answer_is_not_forced_to_reason_explanation(self):
+        value = rating("基础题")
+        value["features"]["expression_type"] = "数值或简短答案填写"
+        value["features"]["subjective_response"] = "有"
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(
+            result["features"]["expression_type"], "数值或简短答案填写"
+        )
+        self.assertEqual(result["features"]["subjective_response"], "有")
 
     def test_independent_task_count_does_not_inflate_solution_steps(self):
         value = rating("中等题", ["U07_T01", "U02_T03", "U10_T01", "U10_T02"])
@@ -750,6 +819,15 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
                 self.assertIn(value, prompt)
         for value in (*schema.SCOPES, *schema.LEVELS):
             self.assertIn(value, prompt)
+        documented = {
+            field: tuple(re.findall(r"`([^`]+)`", values))
+            for field, values in re.findall(
+                r"#### \d+\. ([a-z_]+)\s*\n只能是：([^\n]+)", prompt
+            )
+        }
+        self.assertEqual(set(documented), set(schema.FEATURE_OPTIONS))
+        for field, options in schema.FEATURE_OPTIONS.items():
+            self.assertEqual(documented[field], options, field)
         self.assertIn("task_count只描述工作量，不能单独决定档位", prompt)
         self.assertIn("不能因`跨单元不同知识点`或`多单元综合`自动升档", prompt)
         self.assertIn("普通选择题中的错误选项不算干扰", prompt)
@@ -809,6 +887,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertNotIn("json_repair", runtime)
         self.assertIn('"structured_output_json_complete": False', runtime)
         self.assertIn('"token_anomaly_flags": []', runtime)
+        self.assertIn("completion_tokens_abnormally_high", runtime)
 
     def test_junior_runtime_has_no_legacy_or_source_label_logic(self):
         paths = [
