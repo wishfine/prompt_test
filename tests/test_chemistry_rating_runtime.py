@@ -34,6 +34,7 @@ def rating(level="基础题", topic_ids=None):
             "error_analysis": "无",
             "calculation_type": "无",
             "calculation_steps": "无",
+            "calculation_structure": "无任何计算",
             "special_method": "无",
             "hidden_condition_count": "0个",
             "hidden_condition_type": "无",
@@ -75,8 +76,8 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         ]["properties"]["knowledge"]["properties"]["topic_ids"]
         self.assertTrue(topic_schema["uniqueItems"])
 
-    def test_exactly_twenty_nine_single_choice_core_features(self):
-        self.assertEqual(len(schema.FEATURE_OPTIONS), 29)
+    def test_exactly_thirty_single_choice_core_features(self):
+        self.assertEqual(len(schema.FEATURE_OPTIONS), 30)
         self.assertTrue(all(isinstance(values, tuple) for values in schema.FEATURE_OPTIONS.values()))
         value = rating()
         for field in schema.FEATURE_OPTIONS:
@@ -161,7 +162,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             "反应后气体沉淀固体质量",
         )
 
-    def test_cross_field_value_and_removed_field_are_normalized_without_retry(self):
+    def test_cross_field_value_is_normalized_without_retry(self):
         value = rating("拔高题")
         value["features"]["calculation_type"] = "多个化学反应计算"
         value["features"]["calculation_steps"] = "4步及以上"
@@ -169,10 +170,12 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         value["features"]["calculation_structure"] = "多个化学反应计算"
         result = schema.postprocess_chemistry_difficulty(value, {})
         self.assertEqual(result["features"]["calculation_type"], "多类计算综合")
-        self.assertNotIn("calculation_structure", result["features"])
+        self.assertEqual(
+            result["features"]["calculation_structure"],
+            "多个化学反应计算",
+        )
         actions = result["postprocess"]["feature_normalization_actions"]
         self.assertTrue(any(action["field"] == "calculation_type" for action in actions))
-        self.assertTrue(any(action["field"] == "calculation_structure" for action in actions))
         self.assertEqual(result["difficulty_level"], "拔高题")
 
     def test_every_model_feature_finishes_in_its_own_enum(self):
@@ -255,6 +258,34 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("不得仅因不足4步", candidates["H1_medium_decisive_task"]["reason"])
         self.assertEqual(result["difficulty_level"], "中等题")
 
+    def test_medium_local_difficulty_review_does_not_require_four_steps(self):
+        reverse_case = rating("中等题")
+        reverse_case["features"].update({
+            "step_count": "2-3步",
+            "reverse_tracing": "有",
+            "hidden_condition_count": "1个",
+            "hidden_condition_type": "反应先后",
+            "condition_relation": "单一条件",
+        })
+        result = schema.postprocess_chemistry_difficulty(reverse_case, {})
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(
+            result["postprocess_actions"][-1]["rule"],
+            "R1_medium_to_hard_calibrated_local_difficulty",
+        )
+
+        reaction_case = rating("中等题")
+        reaction_case["features"].update({
+            "step_count": "2-3步",
+            "reaction_count": "2-3个",
+            "reaction_relation": "反应先后或过量不足",
+            "hidden_condition_count": "1个",
+            "hidden_condition_type": "过量或不足",
+            "condition_relation": "单一条件",
+        })
+        result = schema.postprocess_chemistry_difficulty(reaction_case, {})
+        self.assertEqual(result["difficulty_level"], "拔高题")
+
     def test_medium_review_requires_anchor_and_multiple_supporting_features(self):
         value = rating("中等题", ["U05_T03", "U10_T03"])
         value["features"]["task_count"] = "2-3项"
@@ -331,6 +362,31 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
                     "R2_hard_to_final_multi_feature_review",
                 )
 
+    def test_hard_review_accepts_single_chain_and_independent_final_paths(self):
+        multi_source = rating("拔高题")
+        multi_source["features"].update({
+            "task_count": "4项及以上",
+            "task_relation": "多项独立",
+            "step_count": "4-5步",
+            "information_operation": "多来源信息筛选联合",
+            "reaction_count": "4个及以上",
+            "reaction_relation": "多个反应连续",
+            "hidden_condition_count": "2个",
+            "hidden_condition_type": "多类条件联合",
+            "condition_relation": "多个关联条件",
+        })
+        result = schema.postprocess_chemistry_difficulty(multi_source, {})
+        self.assertEqual(result["difficulty_level"], "压轴题")
+
+        error_case = rating("拔高题")
+        error_case["features"].update({
+            "reaction_count": "4个及以上",
+            "reaction_relation": "多个反应连续",
+            "error_analysis": "装置或方案导致误差",
+        })
+        result = schema.postprocess_chemistry_difficulty(error_case, {})
+        self.assertEqual(result["difficulty_level"], "压轴题")
+
     def test_hard_review_does_not_promote_independent_comprehensive_tasks(self):
         value = rating("拔高题")
         value["features"].update({
@@ -396,7 +452,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
 
     def test_prompt_documents_every_runtime_enum(self):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
-        self.assertIn("29个细粒度特征", prompt)
+        self.assertIn("30个细粒度特征", prompt)
         self.assertEqual(prompt.count("## 输入题目信息"), 1)
         self.assertGreaterEqual(prompt.count("【Case"), 25)
         for field, options in schema.FEATURE_OPTIONS.items():
@@ -414,10 +470,13 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("`step_count=1步`只表示最长单项任务较短，不能否决中等题", prompt)
         self.assertNotIn("没有连续多步任务，因此判为基础题", prompt)
         self.assertIn("【Case 67：多项独立综合任务通常保持拔高】", prompt)
+        self.assertIn("【Case 68：2—3步图像守恒仍可达到拔高】", prompt)
+        self.assertIn("【Case 72：多问独立不能抵消其中的压轴任务】", prompt)
+        self.assertIn("步骤数只记录最长连续操作，不是拔高题准入门槛", prompt)
+        self.assertIn("禁止使用“没有多条任务链汇合”", prompt)
         self.assertIn("必须按指定的严格JSON Schema输出一个完整对象", prompt)
         self.assertNotIn("必须通过指定函数提交", prompt)
-        self.assertIn("本项只回答“在计算什么”", prompt)
-        self.assertNotIn("calculation_structure", prompt)
+        self.assertIn("calculation_structure", prompt)
 
     def test_prompt_json_example_follows_runtime_contract(self):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")

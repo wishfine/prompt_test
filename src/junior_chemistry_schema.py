@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v15"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v16"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -16,7 +16,7 @@ LEVELS = ("送分题", "基础题", "中等题", "拔高题", "压轴题")
 SCOPES = ("within_junior", "out_of_scope")
 LEVEL_INDEX = {level: index for index, level in enumerate(LEVELS)}
 
-# 29 个细粒度核心特征均为单选枚举。顺序同时用于 Prompt 文档测试和 JSON Schema。
+# 30 个细粒度核心特征均为单选枚举。顺序同时用于 Prompt 文档测试和 JSON Schema。
 # 具体知识点另由受控 topic_id 列表表达，避免把知识内容压成抽象标签。
 FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
     "task_count": ("1项", "2-3项", "4项及以上"),
@@ -80,6 +80,11 @@ FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
         "含杂质计算", "图像分段计算", "实验误差定量计算", "多类计算综合",
     ),
     "calculation_steps": ("无", "1步", "2-3步", "4步及以上"),
+    "calculation_structure": (
+        "无任何计算", "一步或口算", "单个化学方程式计算",
+        "多个化学反应计算", "含杂质多步质量分数",
+        "实验误差定量计算", "多模型综合计算",
+    ),
     "special_method": (
         "无", "质量守恒", "元素守恒", "差量法", "极值法",
         "分情况计算", "多方程式联立", "循环反应计算", "多种特殊方法联合",
@@ -139,6 +144,15 @@ FEATURE_ALIASES: dict[str, dict[str, str]] = {
         "反应后固体质量": "反应后气体沉淀固体质量",
         "反应后溶液质量": "反应后溶液或溶质质量",
         "反应后溶质质量": "反应后溶液或溶质质量",
+    },
+    "calculation_structure": {
+        "无": "无任何计算",
+        "口算": "一步或口算",
+        "一个化学方程式计算": "单个化学方程式计算",
+        "多反应计算": "多个化学反应计算",
+        "多个反应计算": "多个化学反应计算",
+        "含杂质计算": "含杂质多步质量分数",
+        "多模型计算": "多模型综合计算",
     },
     "special_method": {
         "差量": "差量法",
@@ -473,10 +487,23 @@ def _normalize_feature_consistency(result: dict[str, Any]) -> list[dict[str, Any
 
     if features["calculation_type"] == "无":
         replace("calculation_steps", "无", "无计算时步骤唯一确定")
+        replace("calculation_structure", "无任何计算", "无计算时结构唯一确定")
         replace("special_method", "无", "无计算时特殊方法唯一确定")
     else:
         if features["calculation_steps"] == "无":
             replace("calculation_steps", "1步", "存在计算时至少有1步")
+        if features["calculation_structure"] == "无任何计算":
+            structure_by_type = {
+                "化学方程式计算": "单个化学方程式计算",
+                "含杂质计算": "含杂质多步质量分数",
+                "实验误差定量计算": "实验误差定量计算",
+                "多类计算综合": "多模型综合计算",
+            }
+            replace(
+                "calculation_structure",
+                structure_by_type.get(features["calculation_type"], "一步或口算"),
+                "存在计算时不能标为无任何计算",
+            )
 
     if features["hidden_condition_count"] == "0个":
         replace("hidden_condition_type", "无", "零个隐藏条件时类型唯一确定")
@@ -571,13 +598,10 @@ def _build_upper_level_review_candidate(
     difficult_reaction = features["reaction_relation"] in {
         "反应先后或过量不足", "分情况或竞争反应",
     }
-    complex_calculation = (
-        features["calculation_steps"] == "4步及以上"
-        or features["calculation_type"] in {
-            "含杂质计算", "图像分段计算",
-            "实验误差定量计算", "多类计算综合",
-        }
-    )
+    complex_calculation = features["calculation_structure"] in {
+        "多个化学反应计算", "含杂质多步质量分数",
+        "实验误差定量计算", "多模型综合计算",
+    }
     dependent_tasks = features["task_relation"] in {
         "前后依赖", "多条任务链汇合",
     }
@@ -638,6 +662,44 @@ def _build_upper_level_review_candidate(
             )
 
     if level == "中等题":
+        calibrated_local_difficulty_paths = {
+            "逆向溯源与隐藏条件共同决定反应模型": (
+                features["reverse_tracing"] == "有"
+                and features["hidden_condition_count"] != "0个"
+            ),
+            "信息整理、特殊方法与高风险干扰共同参与定量建模": (
+                features["information_operation"] in {
+                    "比较或整理多条信息", "由图表变化推断",
+                    "图像拐点或分段分析", "多来源信息筛选联合",
+                }
+                and features["special_method"] != "无"
+                and features["interference_type"] in {
+                    "干扰数据", "特例或边界", "体系质量关系易错",
+                    "多种剩余情况或竞争解释",
+                }
+            ),
+            "反应先后或竞争模型与隐藏条件共同决定结论": (
+                features["reaction_relation"] in {
+                    "反应先后或过量不足", "分情况或竞争反应",
+                }
+                and features["hidden_condition_count"] != "0个"
+            ),
+        }
+        calibrated_matches = [
+            name
+            for name, active in calibrated_local_difficulty_paths.items()
+            if active
+        ]
+        if calibrated_matches:
+            return _candidate(
+                "R1_medium_to_hard_calibrated_local_difficulty", "拔高题",
+                "命中教师样本校准的局部高难组合；2—3步不是否决拔高的门槛。",
+                {
+                    "matched_paths": calibrated_matches,
+                    "matched_path_count": len(calibrated_matches),
+                },
+            )
+
         weighted_anchors = {
             "决定建模的特殊方法": decisive_special_method,
             "图像分段或多来源信息联合": complex_information,
@@ -681,15 +743,9 @@ def _build_upper_level_review_candidate(
             )
 
     if level == "拔高题":
-        multi_reaction_calculation = (
-            features["calculation_steps"] == "4步及以上"
-            and features["calculation_type"] in {
-                "化学方程式计算", "含杂质计算",
-                "反应后气体沉淀固体质量",
-                "反应后溶液或溶质质量", "多类计算综合",
-            }
-            and features["reaction_count"] in {"2-3个", "4个及以上"}
-        )
+        multi_reaction_calculation = features["calculation_structure"] in {
+            "多个化学反应计算", "多模型综合计算",
+        }
         multiple_hidden_conditions = features["hidden_condition_count"] in {
             "2个", "3个及以上",
         }
@@ -697,6 +753,16 @@ def _build_upper_level_review_candidate(
         continuous_reactions = features["reaction_relation"] == "多个反应连续"
         classification_required = features["classification_discussion"] != "无"
         pressure_paths = {
+            "多来源信息、四个以上反应与关联条件形成整题综合压力": (
+                features["information_operation"] == "多来源信息筛选联合"
+                and multiple_reactions
+                and complex_condition
+                and features["step_count"] in {"4-5步", "6步及以上"}
+            ),
+            "四个以上反应与真实误差分析共同构成实验定量综合": (
+                multiple_reactions
+                and features["error_analysis"] != "无"
+            ),
             "多来源信息、多反应计算与至少两个隐藏条件联合": (
                 features["information_operation"] == "多来源信息筛选联合"
                 and multi_reaction_calculation
