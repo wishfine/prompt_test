@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v12"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v14"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -43,7 +43,7 @@ FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
         "反应流程图", "工业流程图", "曲线图", "多组对比实验表格",
         "多装置组合实验图", "多种图像综合",
     ),
-    "visual_item_count": ("无图片", "1幅", "2-3幅", "4幅及以上"),
+    "visual_item_count": ("无图片", "1幅", "2幅", "3幅", "4幅及以上"),
     "visual_complexity": (
         "无图片信息", "单一同类型图像", "多个同类型图像",
         "多个不同类型图像", "复杂高难图像",
@@ -171,6 +171,7 @@ def rating_json_schema() -> dict[str, Any]:
             "topic_ids": {
                 "type": "array",
                 "items": {"type": "string", "enum": list(topic_ids)},
+                "uniqueItems": True,
             },
         }, ("topic_ids",)),
     }
@@ -221,13 +222,18 @@ def _exact_dict(value: Any, expected: set[str], name: str) -> dict[str, Any]:
     return value
 
 
-def _string_list(value: Any, name: str) -> list[str]:
+def _string_list(
+    value: Any,
+    name: str,
+    *,
+    deduplicate: bool = False,
+) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise ChemistrySchemaError(f"{name}必须是字符串数组")
     stripped = [item.strip() for item in value if item.strip()]
-    if len(stripped) != len(set(stripped)):
+    if len(stripped) != len(set(stripped)) and not deduplicate:
         raise ChemistrySchemaError(f"{name}不得包含重复值")
-    return stripped
+    return list(dict.fromkeys(stripped)) if deduplicate else stripped
 
 
 def validate_rating_contract(value: Any) -> dict[str, Any]:
@@ -239,7 +245,11 @@ def validate_rating_contract(value: Any) -> dict[str, Any]:
     expected_features = {"knowledge", *FEATURE_OPTIONS.keys(), "curriculum_scope"}
     features = _exact_dict(value["features"], expected_features, "features")
     knowledge = _exact_dict(features["knowledge"], {"topic_ids"}, "knowledge")
-    topic_ids = _string_list(knowledge["topic_ids"], "knowledge.topic_ids")
+    topic_ids = _string_list(
+        knowledge["topic_ids"],
+        "knowledge.topic_ids",
+        deduplicate=True,
+    )
     topics = load_curriculum_topics()
     unknown = [topic_id for topic_id in topic_ids if topic_id not in topics]
     if unknown:
@@ -343,7 +353,7 @@ def _normalize_feature_consistency(result: dict[str, Any]) -> list[dict[str, Any
         if features["visual_complexity"] == "无图片信息":
             replace("visual_complexity", "单一同类型图像", "存在图片内容时不能标为无图片信息")
         if (
-            features["visual_item_count"] in {"2-3幅", "4幅及以上"}
+            features["visual_item_count"] in {"2幅", "3幅", "4幅及以上"}
             and features["visual_complexity"] == "单一同类型图像"
         ):
             replace("visual_complexity", "多个同类型图像", "多幅图片时不能标为单一图像")
@@ -479,6 +489,51 @@ def _build_upper_level_review_candidate(
         "定量实验误差分析", "多种误差联合分析",
     }
 
+    if level == "基础题":
+        has_visual_analysis = features["visual_complexity"] != "无图片信息"
+        has_information_processing = (
+            features["information_operation"] != "无需额外提取"
+        )
+        has_expression = features["expression_type"] != "无"
+        has_experiment_analysis = features["experiment_analysis"] != "无"
+        heterogeneous_rules = features["solution_method"] == "多条规则分别判断"
+        substantive_support = (
+            heterogeneous_rules or has_expression or has_experiment_analysis
+        )
+        medium_paths = {
+            "四项以上实质任务、图像分析与异质任务负担联合": (
+                features["task_count"] == "4项及以上"
+                and has_visual_analysis
+                and substantive_support
+            ),
+            "多项独立任务、信息处理与异质任务负担联合": (
+                features["task_relation"] == "多项独立"
+                and has_information_processing
+                and substantive_support
+            ),
+            "图像分析、规范表达与另一项实质负担联合": (
+                has_visual_analysis
+                and has_expression
+                and (
+                    heterogeneous_rules
+                    or has_information_processing
+                    or has_experiment_analysis
+                )
+            ),
+        }
+        matched_paths = [
+            name for name, active in medium_paths.items() if active
+        ]
+        if matched_paths:
+            return _candidate(
+                "M1_basic_to_medium_teacher_factor_review", "中等题",
+                "虽无连续长链，但命中由至少三类具体特征共同构成的中等复核路径；不以题数、图片数或跨单元单独升档。",
+                {
+                    "matched_paths": matched_paths,
+                    "matched_path_count": len(matched_paths),
+                },
+            )
+
     if level == "中等题":
         weighted_anchors = {
             "决定建模的特殊方法": decisive_special_method,
@@ -537,6 +592,7 @@ def _build_upper_level_review_candidate(
                 features["information_operation"] == "多来源信息筛选联合"
                 and multi_reaction_calculation
                 and multiple_hidden_conditions
+                and dependent_tasks
             ),
             "单项任务内分类讨论、复杂计算与关联条件联合": (
                 features["task_relation"] == "单项任务"
@@ -548,11 +604,6 @@ def _build_upper_level_review_candidate(
                 multiple_reactions
                 and continuous_reactions
                 and decisive_special_method
-            ),
-            "多项独立任务中包含多来源信息与多反应计算": (
-                features["task_relation"] == "多项独立"
-                and features["information_operation"] == "多来源信息筛选联合"
-                and multi_reaction_calculation
             ),
         }
         matched_paths = [

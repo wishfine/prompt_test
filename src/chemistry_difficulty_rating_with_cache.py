@@ -2,7 +2,7 @@
 """初中化学难度批量评级。
 
 运行与审计方式对齐当前物理正式流程：OpenAI-compatible Responses API、
-可选前缀缓存、并发、重试、断点续跑、JSONL 输入输出，以及基于
+强制前缀缓存、并发、断点续跑、JSONL 输入输出，以及基于
 “教材知识点覆盖 + 实际作答任务”的严格 schema。预测结果不保存教师
 标签，也不执行基于分布或旧抽象特征的自动改档。
 """
@@ -67,12 +67,7 @@ if RATING_PROFILE not in VALID_RATING_PROFILES:
         f"可选值：{', '.join(sorted(VALID_RATING_PROFILES))}"
     )
 
-USE_CACHE = os.getenv("USE_CACHE", "1").strip().lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
+USE_CACHE = True
 CHEMISTRY_IMAGE_MODE = os.getenv(
     "CHEMISTRY_IMAGE_MODE",
     "auto",
@@ -193,7 +188,7 @@ def build_run_config(
         "num": num,
         "feature_schema_version": junior_schema.FEATURE_SCHEMA_VERSION,
         "structured_output_mode": "forced_function_call_strict_json_schema",
-        "postprocess_mode": "multi_feature_pressure_path_review_writeback",
+        "postprocess_mode": "teacher_factor_boundary_review_writeback_v2",
     }
 
 
@@ -288,7 +283,10 @@ async def set_cache(response_id: str, expire_at: int) -> None:
     }
     await save_cache(cache_data)
 
-async def create_prefix_cache(session: aiohttp.ClientSession, retries: int, timeout_sec: int) -> Optional[str]:
+async def create_prefix_cache(
+    session: aiohttp.ClientSession,
+    timeout_sec: int,
+) -> Optional[str]:
     current_time = int(time.time())
     expire_at = current_time + CACHE_EXPIRE_SECONDS
 
@@ -301,44 +299,44 @@ async def create_prefix_cache(session: aiohttp.ClientSession, retries: int, time
     }
 
     t1 = time.time()
-    for attempt in range(retries):
-        try:
-            async with session.post(
-                f"{BASE_URL}responses",
-                json=payload,
-                headers={"Authorization": f"Bearer {API_KEY}"},
-                timeout=aiohttp.ClientTimeout(total=timeout_sec),
-            ) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    print(f"创建前缀缓存失败 (状态码: {response.status}): {error_text[:200]}")
-                    if 400 <= response.status < 500:
-                        return None
-                    await asyncio.sleep(2 ** attempt)
-                    continue
-
-                result = await response.json()
-                response_id = result.get("id")
-                if response_id:
-                    await set_cache(response_id, expire_at)
-                    print(f"前缀缓存创建成功，耗时: {time.time() - t1:.2f}秒，缓存ID: {response_id}")
-                    return response_id
-        except Exception as e:
-            backoff = (2 ** attempt) + random.uniform(0, 1)
-            if attempt == retries - 1:
-                print(f"创建前缀缓存最终失败: {e}")
+    try:
+        async with session.post(
+            f"{BASE_URL}responses",
+            json=payload,
+            headers={"Authorization": f"Bearer {API_KEY}"},
+            timeout=aiohttp.ClientTimeout(total=timeout_sec),
+        ) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                print(
+                    f"创建前缀缓存失败且不重试 (状态码: {response.status}): "
+                    f"{error_text[:200]}"
+                )
                 return None
-            print(f"创建前缀缓存异常，{backoff:.2f}秒后重试: {e}")
-            await asyncio.sleep(backoff)
+
+            result = await response.json()
+            response_id = result.get("id")
+            if response_id:
+                await set_cache(response_id, expire_at)
+                print(
+                    f"前缀缓存创建成功，耗时: {time.time() - t1:.2f}秒，"
+                    f"缓存ID: {response_id}"
+                )
+                return response_id
+    except Exception as e:
+        print(f"创建前缀缓存异常且不重试: {e}")
     return None
 
-async def get_or_create_cache(session: aiohttp.ClientSession, retries: int, timeout_sec: int) -> Optional[str]:
+async def get_or_create_cache(
+    session: aiohttp.ClientSession,
+    timeout_sec: int,
+) -> Optional[str]:
     async with CACHE_GET_LOCK:
         cache_entry = await get_valid_cache()
         if cache_entry:
             return cache_entry["response_id"]
         print("未找到有效缓存，正在向服务器创建前缀缓存...")
-        return await create_prefix_cache(session, retries, timeout_sec)
+        return await create_prefix_cache(session, timeout_sec)
 
 # -------------------------- 3. 输入可见文本 --------------------------
 def visible_text(data: Dict[str, Any], include_analysis: bool = False) -> str:
@@ -564,7 +562,7 @@ def parse_model_response(response_text: str) -> Dict[str, Any]:
 
 
 def extract_rating_from_response(result: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
-    """优先读取强制函数调用参数；普通文本仅作为兼容性失败证据。"""
+    """优先读取完整函数参数；不得把截断JSON修补成部分预测。"""
     output_text = ""
     for item in result.get("output", []):
         if (
@@ -575,7 +573,11 @@ def extract_rating_from_response(result: Dict[str, Any]) -> Tuple[Dict[str, Any]
             if isinstance(arguments, dict):
                 return arguments, json.dumps(arguments, ensure_ascii=False)
             if isinstance(arguments, str):
-                return parse_model_response(arguments), arguments
+                try:
+                    parsed = json.loads(arguments)
+                except json.JSONDecodeError:
+                    return {}, arguments
+                return (parsed if isinstance(parsed, dict) else {}), arguments
         if item.get("type") == "message":
             for content_item in item.get("content", []):
                 if content_item.get("type") == "output_text":
@@ -586,7 +588,6 @@ def extract_rating_from_response(result: Dict[str, Any]) -> Tuple[Dict[str, Any]
 async def call_model_with_cache(
     data: Dict[str, Any],
     session: aiohttp.ClientSession,
-    retries: int,
     timeout_sec: int,
 ) -> Tuple[
     Dict[str, Any],
@@ -614,18 +615,25 @@ async def call_model_with_cache(
         "image_input_url_count": len(dict.fromkeys(selected_urls)),
         "image_selection_reasons": selection_reasons,
         "http_retry_count": 0,
+        "model_request_count": 0,
+        "response_status": "",
+        "response_incomplete_reason": "",
+        "response_output_item_statuses": [],
+        "structured_output_json_complete": False,
+        "token_usage_consistent": True,
+        "token_anomaly_flags": [],
     }
 
     response_id: Optional[str] = None
     if USE_CACHE:
-        response_id = await get_or_create_cache(session, retries, timeout_sec)
+        response_id = await get_or_create_cache(session, timeout_sec)
         if not response_id:
             print("警告: 无法获取有效缓存 ID，终止单题请求")
             return {}, "", 0.0, 0, 0, 0, image_status
 
     # 每道题最多发送一次模型请求；HTTP/API失败也不在题目内部重试。
-    for retry in range(1):
-        image_status["http_retry_count"] = retry
+    for _single_http_attempt in range(1):
+        image_status["http_retry_count"] = 0
         user_content = build_user_content(data, selected_fields)
         if USE_CACHE:
             request_content = user_content
@@ -658,6 +666,7 @@ async def call_model_with_cache(
             payload["temperature"] = TEMPERATURE
         t1 = time.time()
         try:
+            image_status["model_request_count"] += 1
             async with session.post(
                 f"{BASE_URL}responses",
                 json=payload,
@@ -671,6 +680,40 @@ async def call_model_with_cache(
                     prompt_tokens = usage.get("input_tokens", 0)
                     completion_tokens = usage.get("output_tokens", 0)
                     total_tokens = usage.get("total_tokens", 0)
+                    image_status["response_status"] = str(
+                        result.get("status", "") or ""
+                    )
+                    incomplete_details = result.get("incomplete_details")
+                    if isinstance(incomplete_details, dict):
+                        image_status["response_incomplete_reason"] = str(
+                            incomplete_details.get("reason", "") or ""
+                        )
+                    image_status["response_output_item_statuses"] = [
+                        str(item.get("status", "") or "")
+                        for item in result.get("output", [])
+                        if isinstance(item, dict)
+                    ]
+                    try:
+                        decoded_output = json.loads(output_text)
+                        output_is_complete = isinstance(decoded_output, dict)
+                    except (json.JSONDecodeError, TypeError):
+                        output_is_complete = False
+                    image_status["structured_output_json_complete"] = (
+                        output_is_complete
+                    )
+                    image_status["token_usage_consistent"] = (
+                        total_tokens == prompt_tokens + completion_tokens
+                    )
+                    anomaly_flags = []
+                    if image_status["model_request_count"] != 1:
+                        anomaly_flags.append("model_request_count_not_one")
+                    if image_status["response_status"] == "incomplete":
+                        anomaly_flags.append("response_incomplete")
+                    if not output_is_complete:
+                        anomaly_flags.append("structured_output_json_incomplete")
+                    if not image_status["token_usage_consistent"]:
+                        anomaly_flags.append("token_usage_sum_mismatch")
+                    image_status["token_anomaly_flags"] = anomaly_flags
                     image_status["image_input_used"] = bool(selected_fields)
                     return (
                         parsed_result,
@@ -712,7 +755,6 @@ async def process_single_question(
     semaphore: Semaphore,
     output_path: str,
     error_path: str,
-    retries: int,
     timeout_sec: int,
 ) -> None:
     async with semaphore:
@@ -741,7 +783,6 @@ async def process_single_question(
                 ) = await call_model_with_cache(
                     question_input,
                     session,
-                    retries,
                     timeout_sec,
                 )
                 raw_result = copy.deepcopy(candidate)
@@ -842,10 +883,16 @@ async def process_with_progress(
     pbar: tqdm,
     output_path: str,
     error_path: str,
-    retries: int,
     timeout_sec: int,
 ) -> None:
-    await process_single_question(data, session, semaphore, output_path, error_path, retries, timeout_sec)
+    await process_single_question(
+        data,
+        session,
+        semaphore,
+        output_path,
+        error_path,
+        timeout_sec,
+    )
     pbar.update(1)
 
 
@@ -872,7 +919,7 @@ def get_processed_question_ids(output_path: str) -> set:
 
 # -------------------------- 6. 主执行流 --------------------------
 async def main_batch_run() -> None:
-    global USE_CACHE, CURRENT_RUN_SIGNATURE, CURRENT_RUN_CONFIG
+    global CURRENT_RUN_SIGNATURE, CURRENT_RUN_CONFIG
     parser = argparse.ArgumentParser(description="初中化学难度评级多线程并发批量打标脚本 (带 Cache 优化)")
     parser.add_argument(
         "-p",
@@ -892,21 +939,11 @@ async def main_batch_run() -> None:
     parser.add_argument("-e", "--error", type=str, default="chemistry_difficulty_errors.jsonl", help="输出保存失败结果的 JSONL 路径")
     parser.add_argument("-c", "--concurrency", type=int, default=15, help="最大并发限制，默认 15")
     parser.add_argument("-t", "--timeout", type=int, default=180, help="单次 API 调用超时时间，默认 180 秒")
-    parser.add_argument(
-        "-r",
-        "--retries",
-        type=int,
-        default=3,
-        help="仅用于前缀缓存创建；单道题模型请求和schema失败均不自动重试",
-    )
     parser.add_argument("-n", "--num", type=int, default=None, help="测试打标的限制数量（留空表示全部打标）")
     parser.add_argument("--seed", type=int, default=42, help="随机抽样/打乱的种子，默认 42")
-    parser.add_argument("--no-cache", action="store_true", help="禁用前缀缓存，每题发送完整提示词")
     args = parser.parse_args()
 
     random.seed(args.seed)
-    if args.no_cache:
-        USE_CACHE = False
     load_prompt_config(args.prompt)
     print(f"评级配置: {RATING_PROFILE}")
     print(f"模型: {MODEL_NAME}")
@@ -915,7 +952,7 @@ async def main_batch_run() -> None:
         + ("服务端默认" if TEMPERATURE is None else str(TEMPERATURE))
     )
     print(f"图片模式: {CHEMISTRY_IMAGE_MODE}")
-    print("前缀缓存: " + ("启用" if USE_CACHE else "禁用"))
+    print("前缀缓存: 强制启用（正式运行不允许逐题重复发送完整提示词）")
 
     if not os.path.exists(args.input):
         print(f"错误: 输入文件 {args.input} 不存在，终止运行！")
@@ -972,10 +1009,18 @@ async def main_batch_run() -> None:
     connector = aiohttp.TCPConnector(limit=args.concurrency * 2)
     async with aiohttp.ClientSession(connector=connector) as session:
         if USE_CACHE:
-            await get_or_create_cache(session, args.retries, args.timeout)
+            await get_or_create_cache(session, args.timeout)
         tasks = [
             asyncio.create_task(
-                process_with_progress(q, session, semaphore, pbar, args.output, args.error, args.retries, args.timeout)
+                process_with_progress(
+                    q,
+                    session,
+                    semaphore,
+                    pbar,
+                    args.output,
+                    args.error,
+                    args.timeout,
+                )
             )
             for q in to_process
         ]
@@ -985,7 +1030,7 @@ async def main_batch_run() -> None:
     pbar.close()
     print("\n✨ 化学多线程批量打标运行结束！")
     print(f"👉 成功保存打标结果至: {os.path.abspath(args.output)}")
-    print(f"👉 失败重试错误日志在: {os.path.abspath(args.error)}")
+    print(f"👉 单次请求失败日志在: {os.path.abspath(args.error)}")
 
 
 if __name__ == "__main__":

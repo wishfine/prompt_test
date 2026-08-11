@@ -62,6 +62,20 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertGreaterEqual(len(topics), 58)
         self.assertEqual(topics["U10_T02"]["unit_id"], "U10")
 
+    def test_duplicate_topic_ids_are_deduplicated_without_level_change(self):
+        value = rating("中等题", ["U02_T03", "U02_T03", "U10_T01"])
+        result = schema.postprocess_chemistry_difficulty(value, {})
+
+        self.assertEqual(
+            result["features"]["knowledge"]["topic_ids"],
+            ["U02_T03", "U10_T01"],
+        )
+        self.assertEqual(result["difficulty_level"], "中等题")
+        topic_schema = schema.rating_tool_definition()["parameters"]["properties"][
+            "features"
+        ]["properties"]["knowledge"]["properties"]["topic_ids"]
+        self.assertTrue(topic_schema["uniqueItems"])
+
     def test_exactly_thirty_single_choice_core_features(self):
         self.assertEqual(len(schema.FEATURE_OPTIONS), 30)
         self.assertTrue(all(isinstance(values, tuple) for values in schema.FEATURE_OPTIONS.values()))
@@ -163,6 +177,38 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertNotIn("B2_basic_multiple_tasks", candidate_codes)
         self.assertEqual(result["difficulty_level"], "基础题")
 
+    def test_basic_review_uses_multiple_teacher_factors_without_step_veto(self):
+        value = rating("基础题", ["U02_T03", "U07_T01", "U10_T01"])
+        value["features"].update({
+            "task_count": "4项及以上",
+            "task_relation": "多项独立",
+            "step_count": "1步",
+            "solution_method": "多条规则分别判断",
+            "visual_content": "仪器图",
+            "visual_item_count": "4幅及以上",
+            "visual_complexity": "多个同类型图像",
+            "information_operation": "比较或整理多条信息",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "中等题")
+        action = result["postprocess_actions"][-1]
+        self.assertEqual(
+            action["rule"],
+            "M1_basic_to_medium_teacher_factor_review",
+        )
+
+    def test_basic_review_does_not_promote_counts_or_cross_unit_alone(self):
+        value = rating("基础题", ["U02_T03", "U07_T01", "U10_T01"])
+        value["features"].update({
+            "task_count": "4项及以上",
+            "task_relation": "多项独立",
+            "step_count": "1步",
+            "solution_method": "一条规则直接应用",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertFalse(result["postprocess"]["writeback_applied"])
+
     def test_decisive_special_method_is_not_blocked_by_four_step_threshold(self):
         value = rating("中等题", ["U05_T03", "U10_T03"])
         value["features"]["calculation_type"] = "含杂质计算"
@@ -247,17 +293,6 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         })
         cases.append(continuous_reactions)
 
-        independent_comprehensive = rating("拔高题")
-        independent_comprehensive["features"].update({
-            "task_count": "4项及以上",
-            "task_relation": "多项独立",
-            "information_operation": "多来源信息筛选联合",
-            "calculation_type": "多类计算综合",
-            "calculation_steps": "4步及以上",
-            "calculation_structure": "多模型综合计算",
-        })
-        cases.append(independent_comprehensive)
-
         for value in cases:
             with self.subTest(features=value["features"]):
                 result = schema.postprocess_chemistry_difficulty(value, {})
@@ -266,6 +301,20 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
                     result["postprocess_actions"][-1]["rule"],
                     "R2_hard_to_final_multi_feature_review",
                 )
+
+    def test_hard_review_does_not_promote_independent_comprehensive_tasks(self):
+        value = rating("拔高题")
+        value["features"].update({
+            "task_count": "4项及以上",
+            "task_relation": "多项独立",
+            "information_operation": "多来源信息筛选联合",
+            "calculation_type": "多类计算综合",
+            "calculation_steps": "4步及以上",
+            "calculation_structure": "多模型综合计算",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertFalse(result["postprocess"]["writeback_applied"])
 
     def test_hard_review_does_not_promote_one_special_method(self):
         value = rating("拔高题")
@@ -315,6 +364,9 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertFalse(feature_schema["additionalProperties"])
         for field, options in schema.FEATURE_OPTIONS.items():
             self.assertEqual(feature_schema["properties"][field]["enum"], list(options))
+        self.assertIn("2幅", schema.FEATURE_OPTIONS["visual_item_count"])
+        self.assertIn("3幅", schema.FEATURE_OPTIONS["visual_item_count"])
+        self.assertNotIn("2-3幅", schema.FEATURE_OPTIONS["visual_item_count"])
 
     def test_prompt_documents_every_runtime_enum(self):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
@@ -333,7 +385,9 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("题干字数、选项数、小问数、图片数只用于审计", prompt)
         self.assertIn("6步及以上`和`多条任务链汇合`是常见表现，不是必要条件", prompt)
         self.assertIn("【Case 64：多来源实验流程 + 多反应计算 + 多个隐藏条件】", prompt)
-        self.assertIn("【Case 67：多项独立但整题存在综合压轴负担】", prompt)
+        self.assertIn("`step_count=1步`只表示最长单项任务较短，不能否决中等题", prompt)
+        self.assertNotIn("没有连续多步任务，因此判为基础题", prompt)
+        self.assertIn("【Case 67：多项独立综合任务通常保持拔高】", prompt)
 
     def test_prompt_json_example_follows_runtime_contract(self):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
@@ -349,9 +403,18 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn('"tools": [junior_schema.rating_tool_definition()]', runtime)
         self.assertIn('"tool_choice": {', runtime)
         self.assertIn('"parallel_tool_calls": False', runtime)
-        self.assertIn("for retry in range(1)", runtime)
+        self.assertIn("for _single_http_attempt in range(1)", runtime)
+        self.assertNotIn("--retries", runtime)
+        self.assertNotIn("args.retries", runtime)
+        self.assertNotIn("--no-cache", runtime)
+        self.assertNotIn("args.no_cache", runtime)
+        self.assertIn("USE_CACHE = True", runtime)
         self.assertNotIn("MAX_SCHEMA_RETRIES", runtime)
         self.assertNotIn("repair_feedback", runtime)
+        self.assertIn('json.loads(arguments)', runtime)
+        self.assertNotIn('parse_model_response(arguments)', runtime)
+        self.assertIn('"structured_output_json_complete": False', runtime)
+        self.assertIn('"token_anomaly_flags": []', runtime)
 
     def test_junior_runtime_has_no_legacy_or_source_label_logic(self):
         paths = [
