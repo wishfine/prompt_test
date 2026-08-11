@@ -160,6 +160,7 @@ TEACHER_GUARD_AUDIT_ONLY_RULES = frozenset(
         "teacher_easy_to_basic_experiment_application",
         "teacher_easy_to_basic_reported_four_fact_floor",
         "teacher_basic_to_medium_multi_rule_breadth_candidate",
+        "teacher_basic_to_medium_parallel_reaction_multitopic_candidate",
         "teacher_hard_to_final_qualitative_evidence_network_candidate",
     }
 )
@@ -1798,6 +1799,33 @@ def observable_multi_rule_multitopic_medium_signal(
     return (
         "至少四项非重复任务横跨两个课题，"
         "且需切换至少三类具体回答规则"
+    )
+
+
+def observable_parallel_reaction_multitopic_medium_candidate_signal(
+    model_features: Dict[str, Any],
+) -> Optional[str]:
+    """V5下仅供审计的并列反应跨课题广度候选。
+
+    V13/V14历史回放中，四项以上任务、三个以上课题、至多两类
+    回答规则且存在多个并列反应时均有小幅净收益，但精度不足以
+    自动写回。因此该信号只生成候选动作，不能改变最终等级。
+    """
+    if frozenset(model_features) != frozenset(
+        OBSERVABLE_V5_FEATURE_FIELDS
+    ):
+        return None
+    metrics = derive_observable_metrics(model_features)
+    if not (
+        metrics["effective_task_count"] >= 4
+        and metrics["curriculum_topic_count"] >= 3
+        and metrics["rule_family_count"] <= 2
+        and model_features.get("reaction_structure") == "多个并列反应"
+    ):
+        return None
+    return (
+        "至少四项非重复任务横跨三个课题，回答规则不超过两类，"
+        "且包含多个并列反应；仅作为基础到中等的回放审计候选"
     )
 
 
@@ -3644,6 +3672,13 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         if observable_contract
         else None
     )
+    parallel_reaction_multitopic_medium = (
+        observable_parallel_reaction_multitopic_medium_candidate_signal(
+            model_features
+        )
+        if observable_contract
+        else None
+    )
     high_density_evidence_hard = (
         observable_high_density_evidence_hard_signal(model_features)
         if observable_contract
@@ -3753,6 +3788,20 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 "结构边界窄校准：多项非重复任务跨课题切换多类具体回答规则",
                 rule="teacher_basic_to_medium_multi_rule_multitopic",
                 evidence=[multi_rule_multitopic_medium],
+            )
+        elif (
+            raw_level == "基础题"
+            and parallel_reaction_multitopic_medium
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "中等题",
+                "横向广度候选：多课题并列反应形成多项独立核验任务",
+                rule=(
+                    "teacher_basic_to_medium_"
+                    "parallel_reaction_multitopic_candidate"
+                ),
+                evidence=[parallel_reaction_multitopic_medium],
             )
         elif (
             raw_level == "基础题"

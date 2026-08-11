@@ -442,6 +442,83 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
                     )
                 )
 
+    def test_v5_parallel_reaction_multitopic_candidate_is_audit_only(
+        self,
+    ) -> None:
+        item = rating("基础题")
+        item["features"] = stable_v5_features()
+        item["features"].update(
+            {
+                "task_groups": [
+                    {"task_type": "性质与反应判断", "count": 2},
+                    {"task_type": "化学用语", "count": 2},
+                ],
+                "rule_families": [
+                    "反应关系或条件判断",
+                    "化学用语书写",
+                ],
+                "curriculum_topics": ["U5-2", "U6-2", "U8-2"],
+                "reaction_structure": "多个并列反应",
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(item, {})
+
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_basic_to_medium_parallel_reaction_multitopic_candidate",
+        )
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+
+    def test_v5_parallel_reaction_multitopic_candidate_requires_all_signals(
+        self,
+    ) -> None:
+        features = stable_v5_features()
+        features.update(
+            {
+                "task_groups": [
+                    {"task_type": "性质与反应判断", "count": 2},
+                    {"task_type": "化学用语", "count": 2},
+                ],
+                "rule_families": [
+                    "反应关系或条件判断",
+                    "化学用语书写",
+                ],
+                "curriculum_topics": ["U5-2", "U6-2", "U8-2"],
+                "reaction_structure": "多个并列反应",
+            }
+        )
+        variants = {
+            "W不足": {
+                "task_groups": [
+                    {"task_type": "性质与反应判断", "count": 1},
+                    {"task_type": "化学用语", "count": 2},
+                ]
+            },
+            "T不足": {"curriculum_topics": ["U5-2", "U6-2"]},
+            "B过宽": {
+                "rule_families": [
+                    "反应关系或条件判断",
+                    "化学用语书写",
+                    "定量关系与计算",
+                ]
+            },
+            "不是并列反应": {"reaction_structure": "单一反应"},
+        }
+
+        for label, changes in variants.items():
+            candidate = copy.deepcopy(features)
+            candidate.update(changes)
+            with self.subTest(label=label):
+                self.assertIsNone(
+                    self.runtime.observable_parallel_reaction_multitopic_medium_candidate_signal(
+                        candidate
+                    )
+                )
+
     def test_v5_high_density_evidence_writes_medium_to_hard(self) -> None:
         item = rating("中等题")
         item["features"] = stable_v5_features()
