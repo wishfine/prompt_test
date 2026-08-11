@@ -575,6 +575,34 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             "teacher_hard_to_final_dense_multiquestion_quantitative_chain",
         )
 
+    def test_dense_guard_blocks_six_question_single_reaction_difference_chain(self) -> None:
+        item = hard_rating()
+        item["features"]["longest_solution_chain"] = [
+            "判断元素组成",
+            "判断二氧化碳现象",
+            "解释氧气检验干扰",
+            "由质量差求二氧化碳",
+            "按方程式求质量分数",
+            "判断实验偏差原因",
+        ]
+        item["features"]["reaction_structure"] = "单一反应"
+        item["features"]["solution_topology"] = "单线性常规链"
+        item["features"]["calculation_operations"] = ["单一方程式", "差量"]
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {
+                "stem": "围绕泡腾片的单一反应完成实验与计算。",
+                "sub_questions": [
+                    {"stem": f"任务{i}"}
+                    for i in range(1, 7)
+                ],
+            },
+        )
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["postprocess_actions"], [])
+
     def test_narrow_final_rule_requires_four_explicit_subquestions(self) -> None:
         item = hard_rating()
         # 隔离“深定量压轴链”这条独立路径，本测试只验证

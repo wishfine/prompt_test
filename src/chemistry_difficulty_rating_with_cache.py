@@ -42,6 +42,7 @@ try:
         OBSERVABLE_FEATURE_FIELDS,
         OBSERVABLE_V6_FEATURE_FIELDS,
         OBSERVABLE_V8_FEATURE_FIELDS,
+        OBSERVABLE_V9_MODEL_FEATURE_FIELDS,
         OBSERVABLE_V7_FEATURE_FIELDS,
         OBSERVABLE_V5_FEATURE_FIELDS,
         OBSERVABLE_V4_FEATURE_FIELDS,
@@ -57,6 +58,7 @@ except ModuleNotFoundError:
         OBSERVABLE_FEATURE_FIELDS,
         OBSERVABLE_V6_FEATURE_FIELDS,
         OBSERVABLE_V8_FEATURE_FIELDS,
+        OBSERVABLE_V9_MODEL_FEATURE_FIELDS,
         OBSERVABLE_V7_FEATURE_FIELDS,
         OBSERVABLE_V5_FEATURE_FIELDS,
         OBSERVABLE_V4_FEATURE_FIELDS,
@@ -226,6 +228,7 @@ DEFAULT_INPUT_PATH = (
 
 DIFFICULTY_RATING_PROMPT_PREFIX = ""
 DIFFICULTY_RATING_PROMPT_SUFFIX = ""
+EXPECTED_MODEL_FEATURE_SCHEMA_VERSION = ""
 CURRENT_RUN_SIGNATURE = ""
 CURRENT_RUN_CONFIG: Dict[str, Any] = {}
 
@@ -243,6 +246,7 @@ VALID_LEVELS = set(LEVEL_MAP.keys())
 def load_prompt_config(prompt_path: str) -> None:
     """动态解析提示词文件，支持 Python 变量格式与纯文本格式。"""
     global DIFFICULTY_RATING_PROMPT_PREFIX, DIFFICULTY_RATING_PROMPT_SUFFIX
+    global EXPECTED_MODEL_FEATURE_SCHEMA_VERSION
 
     if not os.path.exists(prompt_path):
         print(f"错误: 找不到提示词文件 {prompt_path}！")
@@ -271,6 +275,11 @@ def load_prompt_config(prompt_path: str) -> None:
                 1,
             )
         )
+        EXPECTED_MODEL_FEATURE_SCHEMA_VERSION = (
+            "chemistry_observable_v9"
+            if "chemistry_observable_v9" in appendix
+            else ""
+        )
         print(f"成功加载冻结基线并追加审计协议: {include_name}")
         return
 
@@ -281,6 +290,7 @@ def load_prompt_config(prompt_path: str) -> None:
         prefix = namespace.get("DIFFICULTY_RATING_PROMPT_PREFIX")
         suffix = namespace.get("DIFFICULTY_RATING_PROMPT_SUFFIX")
         if prefix and suffix:
+            EXPECTED_MODEL_FEATURE_SCHEMA_VERSION = ""
             DIFFICULTY_RATING_PROMPT_PREFIX = str(prefix)
             DIFFICULTY_RATING_PROMPT_SUFFIX = str(suffix)
             print("成功以 Python 变量结构解析提示词")
@@ -290,6 +300,7 @@ def load_prompt_config(prompt_path: str) -> None:
 
     # 兼容纯文本提示词
     if "## 输入题目信息" in content:
+        EXPECTED_MODEL_FEATURE_SCHEMA_VERSION = ""
         parts = content.split("## 输入题目信息")
         DIFFICULTY_RATING_PROMPT_PREFIX = parts[0] + "## 输入题目信息"
         DIFFICULTY_RATING_PROMPT_SUFFIX = "\n\n请根据以上信息，对题目进行全面的难度分析和评级。"
@@ -327,6 +338,9 @@ def build_run_config(
         "model_name": MODEL_NAME,
         "temperature": TEMPERATURE,
         "image_mode": CHEMISTRY_IMAGE_MODE,
+        "expected_model_feature_schema_version": (
+            EXPECTED_MODEL_FEATURE_SCHEMA_VERSION or "auto"
+        ),
         "cache_enabled": USE_CACHE,
         "seed": seed,
         "num": num,
@@ -829,6 +843,12 @@ def build_schema_repair_feedback(
     """
     error_text = str(error)
     hints = [f"上次输出未通过化学特征schema：{error_text}"]
+    if "chemistry_observable_v9" in error_text:
+        hints.append(
+            "V9只允许一套课程字段：删除curriculum_topics，"
+            "保留fine_curriculum_topics和out_of_scope_items；"
+            "29项粗课题将由程序派生。"
+        )
     for field, allowed in OBSERVABLE_ENUM_VALUES_BY_FIELD.items():
         if field in error_text:
             hints.append(
@@ -873,6 +893,7 @@ def is_observable_feature_contract(features: Any) -> bool:
         isinstance(features, dict)
         and frozenset(features)
         in {
+            frozenset(OBSERVABLE_V9_MODEL_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V8_FEATURE_FIELDS),
             frozenset(OBSERVABLE_V7_FEATURE_FIELDS),
             frozenset(OBSERVABLE_FEATURE_FIELDS),
@@ -891,6 +912,7 @@ def looks_like_observable_feature_contract(features: Any) -> bool:
         return False
     known = (
         set(OBSERVABLE_FEATURE_FIELDS)
+        | set(OBSERVABLE_V9_MODEL_FEATURE_FIELDS)
         | set(OBSERVABLE_V8_FEATURE_FIELDS)
         | set(OBSERVABLE_V7_FEATURE_FIELDS)
         | set(OBSERVABLE_V6_FEATURE_FIELDS)
@@ -902,6 +924,8 @@ def looks_like_observable_feature_contract(features: Any) -> bool:
 
 
 def observable_feature_schema_version(features: Dict[str, Any]) -> str:
+    if set(features) == set(OBSERVABLE_V9_MODEL_FEATURE_FIELDS):
+        return "chemistry_observable_v9"
     if set(features) == set(OBSERVABLE_V8_FEATURE_FIELDS):
         return "chemistry_observable_v8"
     if set(features) == set(OBSERVABLE_V7_FEATURE_FIELDS):
@@ -1356,12 +1380,26 @@ def observable_dense_multiquestion_final_signal(
         "联立",
         "范围或分类计算",
     }
+    single_reaction_routine_difference_chain = bool(
+        validated["reaction_structure"] == "单一反应"
+        and validated["solution_topology"] == "单线性常规链"
+        and set(validated["calculation_operations"])
+        <= {
+            "单一方程式",
+            "单一守恒",
+            "直接比例",
+            "化学符号→定量关系",
+            "差量",
+        }
+        and question_metrics["explicit_subquestion_count"] < 8
+    )
     return bool(
         metrics["longest_chain_steps"] >= 4
         and metrics["effective_task_count"] >= 7
         and question_metrics["explicit_subquestion_count"] >= 4
         and set(validated["calculation_operations"])
         & advanced_calculations
+        and not single_reaction_routine_difference_chain
         and not (
             validated["reaction_structure"] == "单一反应"
             and metrics["longest_chain_steps"] == 4
@@ -1481,6 +1519,24 @@ def validate_rating_contract(rating_result: Any) -> Dict[str, Any]:
 
     prepared = copy.deepcopy(rating_result)
     raw_features = prepared["features"]
+    raw_feature_keys = (
+        set(raw_features) if isinstance(raw_features, dict) else set()
+    )
+    if (
+        EXPECTED_MODEL_FEATURE_SCHEMA_VERSION == "chemistry_observable_v9"
+        and raw_feature_keys != set(OBSERVABLE_V9_MODEL_FEATURE_FIELDS)
+    ):
+        missing = sorted(
+            set(OBSERVABLE_V9_MODEL_FEATURE_FIELDS) - raw_feature_keys
+        )
+        extra = sorted(
+            raw_feature_keys - set(OBSERVABLE_V9_MODEL_FEATURE_FIELDS)
+        )
+        raise ChemistrySchemaError(
+            "chemistry_observable_v9审计Prompt必须输出"
+            "细知识点唯一课程合同; "
+            f"missing={missing}; extra={extra}"
+        )
     if (
         is_observable_feature_contract(raw_features)
         or looks_like_observable_feature_contract(raw_features)
@@ -1495,6 +1551,10 @@ def validate_rating_contract(rating_result: Any) -> Dict[str, Any]:
         except ValueError as exc:
             raise ChemistrySchemaError(str(exc)) from exc
         prepared["feature_normalization_actions"] = normalization_actions
+        if raw_feature_keys == set(OBSERVABLE_V9_MODEL_FEATURE_FIELDS):
+            prepared["model_feature_schema_version"] = (
+                "chemistry_observable_v9"
+            )
     else:
         prepared["features"] = validate_feature_contract(raw_features)
         prepared["feature_normalization_actions"] = []
@@ -3504,6 +3564,10 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         return rating_result
 
     rating_result = validate_rating_contract(rating_result)
+    model_feature_schema_version = rating_result.pop(
+        "model_feature_schema_version",
+        "",
+    )
     normalize_reasoning_schema(rating_result)
     raw_level = rating_result["difficulty_level"]
     raw_coarse_difficulty = rating_result["coarse_difficulty"]
@@ -3541,28 +3605,35 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         observable_metrics = derive_observable_metrics(model_features)
         observable_metrics.update(derive_question_structure_metrics(data))
         features = project_observable_to_core12(model_features)
-        schema_version = observable_feature_schema_version(model_features)
+        schema_version = (
+            model_feature_schema_version
+            or observable_feature_schema_version(model_features)
+        )
         rating_result["feature_schema_version"] = schema_version
         rating_result["observable_metrics"] = observable_metrics
         rating_result["postprocess_profile"] = (
-            "chemistry_observable_v8_fine_curriculum_audit_only_v1"
-            if schema_version == "chemistry_observable_v8"
+            "chemistry_observable_v9_fine_only_curriculum_audit_v1"
+            if schema_version == "chemistry_observable_v9"
             else (
-                "chemistry_observable_v7_audit_only_narrow_guard_v1"
-                if schema_version == "chemistry_observable_v7"
+                "chemistry_observable_v8_fine_curriculum_audit_only_v1"
+                if schema_version == "chemistry_observable_v8"
                 else (
-                    "chemistry_observable_v6_narrow_guard_v1"
-                    if schema_version == "chemistry_observable_v6"
+                    "chemistry_observable_v7_audit_only_narrow_guard_v1"
+                    if schema_version == "chemistry_observable_v7"
                     else (
-                        "chemistry_observable_v5_narrow_guard_v1"
-                        if schema_version == "chemistry_observable_v5"
+                        "chemistry_observable_v6_narrow_guard_v1"
+                        if schema_version == "chemistry_observable_v6"
                         else (
-                            "chemistry_observable_v4_narrow_guard_v1"
-                            if schema_version == "chemistry_observable_v4"
+                            "chemistry_observable_v5_narrow_guard_v1"
+                            if schema_version == "chemistry_observable_v5"
                             else (
-                                "chemistry_observable_v3_teacher_calibrated_v2"
-                                if schema_version == "chemistry_observable_v3"
-                                else "chemistry_observable_v2_teacher_distribution_v2_safe"
+                                "chemistry_observable_v4_narrow_guard_v1"
+                                if schema_version == "chemistry_observable_v4"
+                                else (
+                                    "chemistry_observable_v3_teacher_calibrated_v2"
+                                    if schema_version == "chemistry_observable_v3"
+                                    else "chemistry_observable_v2_teacher_distribution_v2_safe"
+                                )
                             )
                         )
                     )
@@ -3730,6 +3801,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         candidate_result.get("postprocess_trace", [])
     )
     if schema_version in {
+        "chemistry_observable_v9",
         "chemistry_observable_v8",
         "chemistry_observable_v7",
         "chemistry_observable_v6",
@@ -3835,6 +3907,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             and (
                 schema_version
                 not in {
+                    "chemistry_observable_v9",
                     "chemistry_observable_v8",
                     "chemistry_observable_v7",
                     "chemistry_observable_v6",
@@ -3991,6 +4064,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
             and observable_contract
             and schema_version
             in {
+                "chemistry_observable_v9",
                 "chemistry_observable_v8",
                 "chemistry_observable_v7",
                 "chemistry_observable_v6",
@@ -4100,6 +4174,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 observable_shared_new_information_signal(model_features)
                 if schema_version
                 in {
+                    "chemistry_observable_v9",
                     "chemistry_observable_v8",
                     "chemistry_observable_v7",
                     "chemistry_observable_v6",
@@ -4123,6 +4198,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         + model_features["new_information_operation"]
                         if schema_version
                         in {
+                            "chemistry_observable_v9",
                             "chemistry_observable_v8",
                             "chemistry_observable_v7",
                             "chemistry_observable_v6",
@@ -4137,6 +4213,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         + model_features["parallel_task_relation"]
                         if schema_version
                         in {
+                            "chemistry_observable_v9",
                             "chemistry_observable_v8",
                             "chemistry_observable_v7",
                             "chemistry_observable_v6",
@@ -4149,6 +4226,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         "解题拓扑=" + model_features["solution_topology"]
                         if schema_version
                         in {
+                            "chemistry_observable_v9",
                             "chemistry_observable_v8",
                             "chemistry_observable_v7",
                             "chemistry_observable_v6",

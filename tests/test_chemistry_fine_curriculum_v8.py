@@ -45,12 +45,23 @@ def stable_v5_features() -> dict:
     }
 
 
+def fine_only_v9_features() -> dict:
+    features = stable_v5_features()
+    features.pop("curriculum_topics")
+    features["fine_curriculum_topics"] = ["U04_T04", "U04_T06"]
+    features["out_of_scope_items"] = []
+    return features
+
+
 class ChemistryFineCurriculumV8Tests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.catalog = load_module("chemistry_curriculum_catalog_test", CATALOG_PATH)
         cls.features = load_module("chemistry_features_v8_test", FEATURE_PATH)
         cls.runtime = load_module("chemistry_runtime_v8_test", RUNTIME_PATH)
+
+    def setUp(self) -> None:
+        self.runtime.EXPECTED_MODEL_FEATURE_SCHEMA_VERSION = ""
 
     def test_catalog_has_58_unique_topics_and_complete_coarse_mapping(self) -> None:
         self.assertEqual(len(self.catalog.FINE_CURRICULUM_TOPIC_NAMES), 58)
@@ -74,6 +85,104 @@ class ChemistryFineCurriculumV8Tests(unittest.TestCase):
         )
         self.assertEqual(len(self.features.OBSERVABLE_FEATURE_FIELDS), 17)
         self.assertEqual(len(self.features.OBSERVABLE_V8_FEATURE_FIELDS), 19)
+
+    def test_v9_model_contract_uses_only_fine_topics_and_derives_coarse_topics(self) -> None:
+        item = fine_only_v9_features()
+
+        validated = self.features.validate_observable_features(item)
+        metrics = self.features.derive_observable_metrics(validated)
+
+        self.assertNotIn(
+            "curriculum_topics",
+            self.features.OBSERVABLE_V9_MODEL_FEATURE_FIELDS,
+        )
+        self.assertEqual(
+            set(validated["curriculum_topics"]),
+            {"U4-3"},
+        )
+        self.assertTrue(metrics["fine_coarse_topic_consistent"])
+
+    def test_v9_allows_pure_out_of_scope_without_forced_fine_topic_mapping(self) -> None:
+        item = fine_only_v9_features()
+        item["fine_curriculum_topics"] = []
+        item["new_information_operation"] = "依赖题干未给出的超纲化学知识"
+        item["out_of_scope_items"] = ["物质的量", "转移电子数"]
+
+        validated = self.features.validate_observable_features(item)
+
+        self.assertEqual(validated["curriculum_topics"], [])
+        self.assertEqual(
+            self.features.derive_observable_metrics(validated)["curriculum_scope"],
+            "out_of_scope",
+        )
+
+    def test_audit_prompt_requires_v9_instead_of_accepting_v5_fallback(self) -> None:
+        self.runtime.load_prompt_config(str(AUDIT_PROMPT_PATH))
+        rating = {
+            "features": stable_v5_features(),
+            "coarse_difficulty": "送分/基础区间（1-2档）",
+            "reasoning": {
+                "core_basis": "一条课内规则。",
+                "hard_point": "无。",
+                "why_not_lower": "需要判断。",
+                "why_not_higher": "没有连续推导。",
+            },
+            "difficulty_level": "基础题",
+        }
+
+        with self.assertRaisesRegex(
+            self.runtime.ChemistrySchemaError,
+            "chemistry_observable_v9",
+        ):
+            self.runtime.validate_rating_contract(rating)
+
+        rating["features"] = fine_only_v9_features()
+        validated = self.runtime.validate_rating_contract(rating)
+        self.assertEqual(
+            validated["model_feature_schema_version"],
+            "chemistry_observable_v9",
+        )
+        self.assertEqual(validated["features"]["curriculum_topics"], ["U4-3"])
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            rating,
+            {"stem": "写出水的化学式。"},
+        )
+        self.assertEqual(
+            result["feature_schema_version"],
+            "chemistry_observable_v9",
+        )
+        self.assertEqual(
+            result["postprocess_profile"],
+            "chemistry_observable_v9_fine_only_curriculum_audit_v1",
+        )
+
+    def test_v9_schema_repair_feedback_tells_model_to_replace_coarse_field(self) -> None:
+        feedback = self.runtime.build_schema_repair_feedback(
+            self.runtime.ChemistrySchemaError(
+                "chemistry_observable_v9审计Prompt必须输出"
+                "细知识点唯一课程合同"
+            ),
+            {"features": stable_v5_features()},
+        )
+
+        self.assertIn("删除curriculum_topics", feedback)
+        self.assertIn("保留fine_curriculum_topics", feedback)
+
+    def test_v9_run_config_records_expected_model_contract(self) -> None:
+        self.runtime.load_prompt_config(str(AUDIT_PROMPT_PATH))
+
+        config = self.runtime.build_run_config(
+            BASE_PROMPT_PATH,
+            AUDIT_PROMPT_PATH,
+            seed=42,
+            num=2,
+        )
+
+        self.assertEqual(
+            config["expected_model_feature_schema_version"],
+            "chemistry_observable_v9",
+        )
 
     def test_v8_derives_fine_counts_and_mapping_without_changing_grade_fields(self) -> None:
         item = stable_v5_features()
@@ -161,6 +270,12 @@ class ChemistryFineCurriculumV8Tests(unittest.TestCase):
         self.assertIn('@include 初中化学难度打标提示词.txt', audit)
         self.assertIn('"fine_curriculum_topics"', audit)
         self.assertIn('"out_of_scope_items"', audit)
+        self.assertIn("chemistry_observable_v9", audit)
+        self.assertIn("不要输出curriculum_topics", audit)
+        self.assertLess(
+            audit.index("课程越界前置检查"),
+            audit.index("### fine_curriculum_topics"),
+        )
         for topic_id in self.catalog.FINE_CURRICULUM_TOPIC_NAMES:
             self.assertIn(topic_id, audit)
         self.assertIn("不得单独触发升档或降档", audit)
