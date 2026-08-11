@@ -716,7 +716,7 @@ async def process_single_question(
     output_path: str,
     error_path: str,
     timeout_sec: int,
-) -> bool:
+) -> str:
     async with semaphore:
         question_id = data.get("question_id", "unknown")
         question_input = make_output_base(data)
@@ -782,6 +782,12 @@ async def process_single_question(
                 output_data["postprocess_actions"] = copy.deepcopy(
                     rating_result.get("postprocess_actions", [])
                 )
+                output_data["feature_normalization_actions"] = copy.deepcopy(
+                    rating_result.get("postprocess", {}).get(
+                        "feature_normalization_actions",
+                        [],
+                    )
+                )
                 output_data["difficulty_rating"] = rating_result
                 output_data["api_time_use"] = round(total_time, 2)
                 output_data["api_prompt_tokens"] = total_prompt_tokens
@@ -806,7 +812,7 @@ async def process_single_question(
                         await f.write(
                             json.dumps(output_data, ensure_ascii=False) + "\n"
                         )
-                return True
+                return "success"
             except Exception as e:
                 error_data = make_output_base(data)
                 error_data["run_signature"] = CURRENT_RUN_SIGNATURE
@@ -833,7 +839,9 @@ async def process_single_question(
                         await f.write(
                             json.dumps(error_data, ensure_ascii=False) + "\n"
                         )
-                return False
+                if image_status.get("response_status"):
+                    return "model_validation_error"
+                return "request_error"
 
 
 async def process_with_progress(
@@ -844,8 +852,8 @@ async def process_with_progress(
     output_path: str,
     error_path: str,
     timeout_sec: int,
-) -> bool:
-    succeeded = await process_single_question(
+) -> str:
+    status = await process_single_question(
         data,
         session,
         semaphore,
@@ -854,7 +862,7 @@ async def process_with_progress(
         timeout_sec,
     )
     pbar.update(1)
-    return succeeded
+    return status
 
 
 def get_processed_question_ids(output_path: str) -> set:
@@ -973,8 +981,8 @@ async def main_batch_run() -> None:
         if not response_id:
             raise RuntimeError("前缀缓存创建失败，批量任务未启动")
 
-        print("正在用第一道真实题验证前缀缓存与严格JSON Schema兼容性...")
-        preflight_ok = await process_single_question(
+        print("正在用第一道真实题验证前缀缓存与JSON输出兼容性...")
+        preflight_status = await process_single_question(
             to_process[0],
             session,
             semaphore,
@@ -983,12 +991,18 @@ async def main_batch_run() -> None:
             args.timeout,
         )
         pbar.update(1)
-        if not preflight_ok:
+        if preflight_status == "request_error":
             raise RuntimeError(
                 "启动验证失败，仅处理1题并已写入错误文件；"
                 "为避免批量无效请求，本次运行已终止"
             )
-        print("启动验证通过，开始处理剩余题目。")
+        if preflight_status == "model_validation_error":
+            print(
+                "启动验证确认API与缓存兼容；第一题未通过本地Schema，"
+                "已写入错误文件且不重试，继续处理剩余题目。"
+            )
+        else:
+            print("启动验证通过，开始处理剩余题目。")
         tasks = [
             asyncio.create_task(
                 process_with_progress(

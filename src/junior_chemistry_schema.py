@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v14"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v15"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -16,7 +16,7 @@ LEVELS = ("送分题", "基础题", "中等题", "拔高题", "压轴题")
 SCOPES = ("within_junior", "out_of_scope")
 LEVEL_INDEX = {level: index for index, level in enumerate(LEVELS)}
 
-# 30 个细粒度核心特征均为单选枚举。顺序同时用于 Prompt 文档测试和 JSON Schema。
+# 29 个细粒度核心特征均为单选枚举。顺序同时用于 Prompt 文档测试和 JSON Schema。
 # 具体知识点另由受控 topic_id 列表表达，避免把知识内容压成抽象标签。
 FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
     "task_count": ("1项", "2-3项", "4项及以上"),
@@ -80,11 +80,6 @@ FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
         "含杂质计算", "图像分段计算", "实验误差定量计算", "多类计算综合",
     ),
     "calculation_steps": ("无", "1步", "2-3步", "4步及以上"),
-    "calculation_structure": (
-        "无任何计算", "一步或口算", "单个化学方程式计算",
-        "多个化学反应计算", "含杂质多步质量分数",
-        "实验误差定量计算", "多模型综合计算",
-    ),
     "special_method": (
         "无", "质量守恒", "元素守恒", "差量法", "极值法",
         "分情况计算", "多方程式联立", "循环反应计算", "多种特殊方法联合",
@@ -119,6 +114,42 @@ FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
         "无", "古文或文言理解", "物理知识参与", "生物知识参与",
         "生产流程或工程信息参与", "多学科信息参与",
     ),
+}
+
+# 模型侧只保留互不重复的字段。这里仅处理老师语言中稳定、无歧义的简称；
+# 未命中时使用中性默认值并留下审计记录，不把自由文本带入最终特征。
+FEATURE_DEFAULTS: dict[str, str] = {
+    field: options[0] for field, options in FEATURE_OPTIONS.items()
+}
+FEATURE_ALIASES: dict[str, dict[str, str]] = {
+    "experiment_operation": {
+        "仪器识别": "仪器识别或名称",
+        "仪器名称": "仪器识别或名称",
+        "基本操作": "基本操作或读数判断",
+        "装置连接": "装置选择或连接",
+    },
+    "experiment_analysis": {
+        "现象判断": "实验现象判断",
+        "实验目的": "装置作用或实验目的",
+        "原因解释": "实验原因解释",
+    },
+    "calculation_type": {
+        "反应后气体质量": "反应后气体沉淀固体质量",
+        "反应后沉淀质量": "反应后气体沉淀固体质量",
+        "反应后固体质量": "反应后气体沉淀固体质量",
+        "反应后溶液质量": "反应后溶液或溶质质量",
+        "反应后溶质质量": "反应后溶液或溶质质量",
+    },
+    "special_method": {
+        "差量": "差量法",
+        "极值": "极值法",
+        "元素质量守恒": "元素守恒",
+        "总质量守恒": "质量守恒",
+    },
+    "subjective_response": {
+        "是": "有",
+        "否": "无",
+    },
 }
 
 
@@ -234,6 +265,88 @@ def _string_list(
     if len(stripped) != len(set(stripped)) and not deduplicate:
         raise ChemistrySchemaError(f"{name}不得包含重复值")
     return list(dict.fromkeys(stripped)) if deduplicate else stripped
+
+
+def _clean_enum_text(value: Any) -> str:
+    return re.sub(r"[\s`'\"，,。；;：:]", "", str(value or ""))
+
+
+def canonicalize_feature_value(
+    field: str,
+    value: Any,
+    source: dict[str, Any],
+) -> tuple[str, str]:
+    """把单个模型特征确定性收敛到该字段的受控枚举。"""
+    options = FEATURE_OPTIONS[field]
+    if isinstance(value, str) and value in options:
+        return value, "原值已是合法枚举"
+
+    cleaned = _clean_enum_text(value)
+    exact_by_cleaned = {
+        _clean_enum_text(option): option for option in options
+    }
+    if cleaned in exact_by_cleaned:
+        return exact_by_cleaned[cleaned], "清除空白或标点后匹配合法枚举"
+
+    aliases = {
+        _clean_enum_text(alias): final_value
+        for alias, final_value in FEATURE_ALIASES.get(field, {}).items()
+    }
+    if cleaned in aliases:
+        return aliases[cleaned], "按该字段的受控同义词映射"
+
+    contained = [
+        option for option in options
+        if len(_clean_enum_text(option)) >= 4
+        and _clean_enum_text(option) in cleaned
+    ]
+    if len(contained) == 1:
+        return contained[0], "自由表述中只包含一个合法枚举"
+
+    # 计算类型发生字段串值时，不能回落为“无”并清空其他计算证据。
+    if field == "calculation_type":
+        calculation_steps = str(source.get("calculation_steps", "") or "")
+        special_method = str(source.get("special_method", "") or "")
+        if calculation_steps not in {"", "无"} or special_method not in {"", "无"}:
+            return "多类计算综合", "计算证据明确存在但计算对象无法唯一确定"
+
+    return FEATURE_DEFAULTS[field], "无法唯一映射，使用该字段中性默认值"
+
+
+def normalize_rating_contract(value: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """规范模型枚举与字段集合；不修改模型给出的难度等级。"""
+    if not isinstance(value, dict):
+        raise ChemistrySchemaError("顶层必须是对象")
+    if not isinstance(value.get("features"), dict):
+        raise ChemistrySchemaError("features必须是对象")
+
+    normalized = copy.deepcopy(value)
+    source = normalized["features"]
+    actions: list[dict[str, Any]] = []
+    expected = {"knowledge", *FEATURE_OPTIONS.keys(), "curriculum_scope"}
+
+    for field in sorted(set(source) - expected):
+        actions.append({
+            "field": field,
+            "original_value": copy.deepcopy(source[field]),
+            "final_value": None,
+            "reason": "删除模型Schema中不存在的额外字段",
+        })
+        source.pop(field)
+
+    for field in FEATURE_OPTIONS:
+        original = source.get(field)
+        final_value, reason = canonicalize_feature_value(field, original, source)
+        source[field] = final_value
+        if original != final_value:
+            actions.append({
+                "field": field,
+                "original_value": copy.deepcopy(original),
+                "final_value": final_value,
+                "reason": reason,
+            })
+
+    return validate_rating_contract(normalized), actions
 
 
 def validate_rating_contract(value: Any) -> dict[str, Any]:
@@ -360,23 +473,10 @@ def _normalize_feature_consistency(result: dict[str, Any]) -> list[dict[str, Any
 
     if features["calculation_type"] == "无":
         replace("calculation_steps", "无", "无计算时步骤唯一确定")
-        replace("calculation_structure", "无任何计算", "无计算时结构唯一确定")
         replace("special_method", "无", "无计算时特殊方法唯一确定")
     else:
         if features["calculation_steps"] == "无":
             replace("calculation_steps", "1步", "存在计算时至少有1步")
-        if features["calculation_structure"] == "无任何计算":
-            structure_by_type = {
-                "化学方程式计算": "单个化学方程式计算",
-                "含杂质计算": "含杂质多步质量分数",
-                "实验误差定量计算": "实验误差定量计算",
-                "多类计算综合": "多模型综合计算",
-            }
-            replace(
-                "calculation_structure",
-                structure_by_type.get(features["calculation_type"], "一步或口算"),
-                "存在计算时不能标为无任何计算",
-            )
 
     if features["hidden_condition_count"] == "0个":
         replace("hidden_condition_type", "无", "零个隐藏条件时类型唯一确定")
@@ -471,10 +571,13 @@ def _build_upper_level_review_candidate(
     difficult_reaction = features["reaction_relation"] in {
         "反应先后或过量不足", "分情况或竞争反应",
     }
-    complex_calculation = features["calculation_structure"] in {
-        "多个化学反应计算", "含杂质多步质量分数",
-        "实验误差定量计算", "多模型综合计算",
-    }
+    complex_calculation = (
+        features["calculation_steps"] == "4步及以上"
+        or features["calculation_type"] in {
+            "含杂质计算", "图像分段计算",
+            "实验误差定量计算", "多类计算综合",
+        }
+    )
     dependent_tasks = features["task_relation"] in {
         "前后依赖", "多条任务链汇合",
     }
@@ -578,9 +681,15 @@ def _build_upper_level_review_candidate(
             )
 
     if level == "拔高题":
-        multi_reaction_calculation = features["calculation_structure"] in {
-            "多个化学反应计算", "多模型综合计算",
-        }
+        multi_reaction_calculation = (
+            features["calculation_steps"] == "4步及以上"
+            and features["calculation_type"] in {
+                "化学方程式计算", "含杂质计算",
+                "反应后气体沉淀固体质量",
+                "反应后溶液或溶质质量", "多类计算综合",
+            }
+            and features["reaction_count"] in {"2-3个", "4个及以上"}
+        )
         multiple_hidden_conditions = features["hidden_condition_count"] in {
             "2个", "3个及以上",
         }
@@ -597,7 +706,7 @@ def _build_upper_level_review_candidate(
             "单项任务内分类讨论、复杂计算与关联条件联合": (
                 features["task_relation"] == "单项任务"
                 and classification_required
-                and multi_reaction_calculation
+                and complex_calculation
                 and complex_condition
             ),
             "四个以上连续反应与决定建模的特殊方法联合": (
@@ -701,7 +810,9 @@ def _writeback_floor(
 
 def postprocess_chemistry_difficulty(value: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
     """规范特征，并用多项独立证据复核中等题和拔高题的向上边界。"""
-    result = validate_rating_contract(copy.deepcopy(value))
+    result, model_normalization_actions = normalize_rating_contract(
+        copy.deepcopy(value)
+    )
     topics = load_curriculum_topics()
     topic_ids = result["features"]["knowledge"]["topic_ids"]
     points = [
@@ -721,7 +832,9 @@ def postprocess_chemistry_difficulty(value: dict[str, Any], data: dict[str, Any]
         "unit_count": len(unit_ids),
         "cross_unit": len(unit_ids) >= 2,
     }
-    normalization_actions = _normalize_feature_consistency(result)
+    normalization_actions = (
+        model_normalization_actions + _normalize_feature_consistency(result)
+    )
 
     original_level = result["difficulty_level"]
     question_statistics = compute_question_statistics(data)
