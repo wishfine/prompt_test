@@ -322,53 +322,52 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             prompt,
         )
 
-    def test_prompt_distinguishes_repeated_conservation_from_cross_constraints(
+    def test_v11_prompt_keeps_original_repeated_conservation_boundary(
         self,
     ) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
+            "多次元素守恒 vs 多条任务链汇合",
+            prompt,
+        )
+        self.assertNotIn(
             "总碱量关系与固体增重差量分别约束不同未知量",
             prompt,
         )
-        self.assertIn(
-            "不是同一种元素守恒的重复应用",
-            prompt,
-        )
 
-    def test_prompt_separates_course_boundary_exception_from_final_paths(
+    def test_v11_prompt_keeps_original_course_boundary_anchor(
         self,
     ) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "特殊课程越界复核，不是第三条普遍压轴路径",
+            "给足规则的陌生物质 vs 依赖未提供的超纲知识",
             prompt,
         )
         self.assertIn(
-            "多个题干未提供且无法由初中知识推出的高中或竞赛规律",
+            "确实需要题干未提供的高中化学规律",
             prompt,
         )
 
-    def test_prompt_uses_cases_only_for_same_structure_cross_check(
+    def test_v11_prompt_selects_the_nearest_adjacent_case(
         self,
     ) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("若本题与某组Case在任务结构上同型", prompt)
-        self.assertIn("若不存在同型Case，直接按§四", prompt)
-        self.assertNotIn(
+        self.assertIn(
             "先从Case中选择结构最接近的一对低档侧/高档侧",
             prompt,
         )
+        self.assertNotIn("若不存在同型Case，直接按§四", prompt)
 
-    def test_prompt_output_example_covers_all_declared_task_groups(
+    def test_v11_prompt_keeps_original_output_example(
         self,
     ) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "任务覆盖图表读取、反应判断和定量计算",
+            "任务覆盖图表读取和定量计算",
             prompt,
         )
         self.assertIn(
