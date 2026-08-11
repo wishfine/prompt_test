@@ -134,6 +134,39 @@ FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# 模型侧保持rerun9的精简选择空间，只补入“多步常规计算”这一处已验证缺口。
+# 扩展枚举仍由本地规范化使用，避免把大量兜底项展示给模型造成判档漂移。
+MODEL_ENUM_EXCLUSIONS: dict[str, frozenset[str]] = {
+    "solution_method": frozenset({"实验探究或方案评价", "其他明确解题方法"}),
+    "visual_content": frozenset({"元素周期表或标签图", "其他有效图像信息"}),
+    "information_operation": frozenset({"文字材料提取", "其他信息处理"}),
+    "reaction_relation": frozenset({"其他明确反应关系"}),
+    "experiment_operation": frozenset({"其他实验操作任务"}),
+    "experiment_analysis": frozenset({"其他实验分析任务"}),
+    "experiment_design": frozenset({"多类实验设计任务联合", "其他实验设计任务"}),
+    "error_analysis": frozenset({"其他明确误差分析"}),
+    "calculation_type": frozenset({"其他明确计算"}),
+    "calculation_structure": frozenset({"其他明确计算结构"}),
+    "special_method": frozenset({"其他明确计算方法"}),
+    "hidden_condition_type": frozenset({
+        "组成或转化关系", "装置或操作前提", "守恒或质量关系",
+        "溶解或饱和状态", "粒子或电荷关系", "其他隐藏条件",
+    }),
+    "interference_type": frozenset({"多类干扰联合", "其他决定性干扰"}),
+    "expression_type": frozenset({
+        "数值或简短答案填写", "物质名称性质或用途填写", "其他明确表达任务",
+    }),
+    "given_information": frozenset({"题干给出其他新增信息"}),
+    "cross_subject": frozenset({"其他学科知识参与"}),
+}
+MODEL_FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
+    field: tuple(
+        option for option in options
+        if option not in MODEL_ENUM_EXCLUSIONS.get(field, frozenset())
+    )
+    for field, options in FEATURE_OPTIONS.items()
+}
+
 # 开放语义字段必须具有合法兜底项。它只在所有具体枚举均不适用时使用，
 # 目的是保留“确有该类任务”的证据，禁止规范化时静默回落为“无”。
 FEATURE_RESIDUAL_OPTIONS: dict[str, str] = {
@@ -200,6 +233,11 @@ def validate_feature_registry() -> None:
             targets = values.values() if isinstance(values, dict) else (values,)
             if any(target not in FEATURE_OPTIONS[field] for target in targets):
                 raise RuntimeError(f"{field}存在指向非法枚举的映射")
+    if set(MODEL_FEATURE_OPTIONS) != all_fields:
+        raise RuntimeError("模型侧与本地侧特征字段必须完全一致")
+    for field, options in MODEL_FEATURE_OPTIONS.items():
+        if not options or any(option not in FEATURE_OPTIONS[field] for option in options):
+            raise RuntimeError(f"{field}的模型侧精简枚举配置错误")
 
 
 def validate_prompt_feature_catalog(prompt: str) -> None:
@@ -210,14 +248,14 @@ def validate_prompt_feature_catalog(prompt: str) -> None:
             r"#### \d+\. ([a-z_]+)\s*\n只能是：([^\n]+)", prompt
         )
     }
-    if set(documented) != set(FEATURE_OPTIONS):
+    if set(documented) != set(MODEL_FEATURE_OPTIONS):
         raise RuntimeError(
             "Prompt特征字段与Schema不一致: "
-            f"missing={sorted(set(FEATURE_OPTIONS) - set(documented))}, "
-            f"extra={sorted(set(documented) - set(FEATURE_OPTIONS))}"
+            f"missing={sorted(set(MODEL_FEATURE_OPTIONS) - set(documented))}, "
+            f"extra={sorted(set(documented) - set(MODEL_FEATURE_OPTIONS))}"
         )
     mismatched = [
-        field for field, options in FEATURE_OPTIONS.items()
+        field for field, options in MODEL_FEATURE_OPTIONS.items()
         if documented[field] != options
     ]
     if mismatched:
@@ -464,7 +502,7 @@ def rating_json_schema() -> dict[str, Any]:
             },
         }, ("topic_ids",)),
     }
-    for field, options in FEATURE_OPTIONS.items():
+    for field, options in MODEL_FEATURE_OPTIONS.items():
         feature_properties[field] = {"type": "string", "enum": list(options)}
     feature_properties["curriculum_scope"] = _object_schema({
         "scope": {"type": "string", "enum": list(SCOPES)},

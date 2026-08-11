@@ -802,7 +802,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertFalse(parameters["additionalProperties"])
         feature_schema = parameters["properties"]["features"]
         self.assertFalse(feature_schema["additionalProperties"])
-        for field, options in schema.FEATURE_OPTIONS.items():
+        for field, options in schema.MODEL_FEATURE_OPTIONS.items():
             self.assertEqual(feature_schema["properties"][field]["enum"], list(options))
         self.assertIn("2幅", schema.FEATURE_OPTIONS["visual_item_count"])
         self.assertIn("3幅", schema.FEATURE_OPTIONS["visual_item_count"])
@@ -813,7 +813,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("30个细粒度特征", prompt)
         self.assertEqual(prompt.count("## 输入题目信息"), 1)
         self.assertGreaterEqual(prompt.count("【Case"), 25)
-        for field, options in schema.FEATURE_OPTIONS.items():
+        for field, options in schema.MODEL_FEATURE_OPTIONS.items():
             self.assertIn(field, prompt)
             for value in options:
                 self.assertIn(value, prompt)
@@ -825,8 +825,8 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
                 r"#### \d+\. ([a-z_]+)\s*\n只能是：([^\n]+)", prompt
             )
         }
-        self.assertEqual(set(documented), set(schema.FEATURE_OPTIONS))
-        for field, options in schema.FEATURE_OPTIONS.items():
+        self.assertEqual(set(documented), set(schema.MODEL_FEATURE_OPTIONS))
+        for field, options in schema.MODEL_FEATURE_OPTIONS.items():
             self.assertEqual(documented[field], options, field)
         self.assertIn("task_count只描述工作量，不能单独决定档位", prompt)
         self.assertIn("不能因`跨单元不同知识点`或`多单元综合`自动升档", prompt)
