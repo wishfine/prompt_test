@@ -212,6 +212,16 @@ def rating_tool_definition() -> dict[str, Any]:
     }
 
 
+def rating_response_format() -> dict[str, Any]:
+    """Responses API 的严格 JSON Schema 输出格式。"""
+    return {
+        "type": "json_schema",
+        "name": TOOL_NAME,
+        "strict": True,
+        "schema": rating_json_schema(),
+    }
+
+
 def _exact_dict(value: Any, expected: set[str], name: str) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != expected:
         actual = set(value) if isinstance(value, dict) else set()

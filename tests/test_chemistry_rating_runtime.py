@@ -367,6 +367,10 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("2幅", schema.FEATURE_OPTIONS["visual_item_count"])
         self.assertIn("3幅", schema.FEATURE_OPTIONS["visual_item_count"])
         self.assertNotIn("2-3幅", schema.FEATURE_OPTIONS["visual_item_count"])
+        response_format = schema.rating_response_format()
+        self.assertEqual(response_format["type"], "json_schema")
+        self.assertTrue(response_format["strict"])
+        self.assertEqual(response_format["schema"], schema.rating_json_schema())
 
     def test_prompt_documents_every_runtime_enum(self):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
@@ -388,6 +392,8 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("`step_count=1步`只表示最长单项任务较短，不能否决中等题", prompt)
         self.assertNotIn("没有连续多步任务，因此判为基础题", prompt)
         self.assertIn("【Case 67：多项独立综合任务通常保持拔高】", prompt)
+        self.assertIn("必须按指定的严格JSON Schema输出一个完整对象", prompt)
+        self.assertNotIn("必须通过指定函数提交", prompt)
 
     def test_prompt_json_example_follows_runtime_contract(self):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
@@ -396,23 +402,28 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         example, _ = decoder.raw_decode(prompt[start:])
         schema.validate_rating_contract(example)
 
-    def test_runtime_forces_function_call_and_keeps_no_retry(self):
+    def test_runtime_uses_cache_compatible_strict_json_and_keeps_no_retry(self):
         runtime = (ROOT / "src" / "chemistry_difficulty_rating_with_cache.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn('"tools": [junior_schema.rating_tool_definition()]', runtime)
-        self.assertIn('"tool_choice": {', runtime)
-        self.assertIn('"parallel_tool_calls": False', runtime)
+        self.assertIn(
+            '"text": {"format": junior_schema.rating_response_format()}',
+            runtime,
+        )
+        self.assertNotIn('"tools": [junior_schema.rating_tool_definition()]', runtime)
+        self.assertNotIn('"parallel_tool_calls": False', runtime)
         self.assertIn("for _single_http_attempt in range(1)", runtime)
         self.assertNotIn("--retries", runtime)
         self.assertNotIn("args.retries", runtime)
         self.assertNotIn("--no-cache", runtime)
         self.assertNotIn("args.no_cache", runtime)
         self.assertIn("USE_CACHE = True", runtime)
+        self.assertIn("正在用第一道真实题验证前缀缓存与严格JSON Schema兼容性", runtime)
+        self.assertIn("for q in to_process[1:]", runtime)
         self.assertNotIn("MAX_SCHEMA_RETRIES", runtime)
         self.assertNotIn("repair_feedback", runtime)
-        self.assertIn('json.loads(arguments)', runtime)
-        self.assertNotIn('parse_model_response(arguments)', runtime)
+        self.assertIn("parsed = json.loads(output_text)", runtime)
+        self.assertNotIn("json_repair", runtime)
         self.assertIn('"structured_output_json_complete": False', runtime)
         self.assertIn('"token_anomaly_flags": []', runtime)
 

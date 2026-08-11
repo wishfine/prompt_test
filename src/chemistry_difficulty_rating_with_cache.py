@@ -20,14 +20,6 @@ import aiofiles
 import aiohttp
 import argparse
 from pathlib import Path
-try:
-    import json_repair
-except Exception:
-    class _JsonRepairFallback:
-        @staticmethod
-        def loads(text):
-            return json.loads(text)
-    json_repair = _JsonRepairFallback()
 from typing import Dict, Any, Optional, List, Tuple, Sequence
 from tqdm.asyncio import tqdm
 from asyncio import Lock, Semaphore
@@ -187,7 +179,7 @@ def build_run_config(
         "seed": seed,
         "num": num,
         "feature_schema_version": junior_schema.FEATURE_SCHEMA_VERSION,
-        "structured_output_mode": "forced_function_call_strict_json_schema",
+        "structured_output_mode": "response_text_strict_json_schema",
         "postprocess_mode": "teacher_factor_boundary_review_writeback_v2",
     }
 
@@ -531,38 +523,8 @@ def build_user_content(
     return content
 
 
-def parse_model_response(response_text: str) -> Dict[str, Any]:
-    """容错并修复 JSON 输出。"""
-    if not response_text:
-        return {}
-    try:
-        parsed = json_repair.loads(response_text)
-        return parsed if isinstance(parsed, dict) else {}
-    except Exception:
-        pass
-    try:
-        clean_text = response_text
-        if "```json" in clean_text:
-            clean_text = clean_text.split("```json", 1)[1].split("```", 1)[0]
-        elif "```" in clean_text:
-            clean_text = clean_text.split("```", 1)[1].split("```", 1)[0]
-        parsed = json_repair.loads(clean_text.strip())
-        return parsed if isinstance(parsed, dict) else {}
-    except Exception:
-        pass
-    try:
-        start = response_text.find("{")
-        end = response_text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            parsed = json_repair.loads(response_text[start:end + 1])
-            return parsed if isinstance(parsed, dict) else {}
-    except Exception:
-        pass
-    return {}
-
-
 def extract_rating_from_response(result: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
-    """优先读取完整函数参数；不得把截断JSON修补成部分预测。"""
+    """读取完整结构化 JSON；不得把截断内容修补成部分预测。"""
     output_text = ""
     for item in result.get("output", []):
         if (
@@ -582,7 +544,11 @@ def extract_rating_from_response(result: Dict[str, Any]) -> Tuple[Dict[str, Any]
             for content_item in item.get("content", []):
                 if content_item.get("type") == "output_text":
                     output_text = content_item.get("text", "")
-    return parse_model_response(output_text), output_text
+    try:
+        parsed = json.loads(output_text)
+    except (json.JSONDecodeError, TypeError):
+        return {}, output_text
+    return (parsed if isinstance(parsed, dict) else {}), output_text
 
 
 async def call_model_with_cache(
@@ -653,12 +619,7 @@ async def call_model_with_cache(
             "model": MODEL_NAME,
             "input": [{"role": "user", "content": request_content}],
             "thinking": {"type": "disabled"},
-            "tools": [junior_schema.rating_tool_definition()],
-            "tool_choice": {
-                "type": "function",
-                "name": junior_schema.TOOL_NAME,
-            },
-            "parallel_tool_calls": False,
+            "text": {"format": junior_schema.rating_response_format()},
         }
         if USE_CACHE:
             payload["previous_response_id"] = response_id
@@ -756,7 +717,7 @@ async def process_single_question(
     output_path: str,
     error_path: str,
     timeout_sec: int,
-) -> None:
+) -> bool:
     async with semaphore:
         question_id = data.get("question_id", "unknown")
         question_input = make_output_base(data)
@@ -846,7 +807,7 @@ async def process_single_question(
                         await f.write(
                             json.dumps(output_data, ensure_ascii=False) + "\n"
                         )
-                return
+                return True
             except Exception as e:
                 error_data = make_output_base(data)
                 error_data["run_signature"] = CURRENT_RUN_SIGNATURE
@@ -873,7 +834,7 @@ async def process_single_question(
                         await f.write(
                             json.dumps(error_data, ensure_ascii=False) + "\n"
                         )
-                return
+                return False
 
 
 async def process_with_progress(
@@ -884,8 +845,8 @@ async def process_with_progress(
     output_path: str,
     error_path: str,
     timeout_sec: int,
-) -> None:
-    await process_single_question(
+) -> bool:
+    succeeded = await process_single_question(
         data,
         session,
         semaphore,
@@ -894,6 +855,7 @@ async def process_with_progress(
         timeout_sec,
     )
     pbar.update(1)
+    return succeeded
 
 
 def get_processed_question_ids(output_path: str) -> set:
@@ -1008,8 +970,26 @@ async def main_batch_run() -> None:
 
     connector = aiohttp.TCPConnector(limit=args.concurrency * 2)
     async with aiohttp.ClientSession(connector=connector) as session:
-        if USE_CACHE:
-            await get_or_create_cache(session, args.timeout)
+        response_id = await get_or_create_cache(session, args.timeout)
+        if not response_id:
+            raise RuntimeError("前缀缓存创建失败，批量任务未启动")
+
+        print("正在用第一道真实题验证前缀缓存与严格JSON Schema兼容性...")
+        preflight_ok = await process_single_question(
+            to_process[0],
+            session,
+            semaphore,
+            args.output,
+            args.error,
+            args.timeout,
+        )
+        pbar.update(1)
+        if not preflight_ok:
+            raise RuntimeError(
+                "启动验证失败，仅处理1题并已写入错误文件；"
+                "为避免批量无效请求，本次运行已终止"
+            )
+        print("启动验证通过，开始处理剩余题目。")
         tasks = [
             asyncio.create_task(
                 process_with_progress(
@@ -1022,7 +1002,7 @@ async def main_batch_run() -> None:
                     args.timeout,
                 )
             )
-            for q in to_process
+            for q in to_process[1:]
         ]
         if tasks:
             await asyncio.gather(*tasks)
