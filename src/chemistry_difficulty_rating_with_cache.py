@@ -160,6 +160,7 @@ TEACHER_GUARD_AUDIT_ONLY_RULES = frozenset(
         "teacher_easy_to_basic_experiment_application",
         "teacher_easy_to_basic_reported_four_fact_floor",
         "teacher_basic_to_medium_multi_rule_breadth_candidate",
+        "teacher_hard_to_final_qualitative_evidence_network_candidate",
     }
 )
 if (
@@ -1182,6 +1183,7 @@ def project_observable_to_core12(
 
 def observable_deep_quantitative_final_signal(
     features: Dict[str, Any],
+    data: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """可观测特征下的窄“拔高→压轴”信号。
 
@@ -1189,8 +1191,9 @@ def observable_deep_quantitative_final_signal(
     前后依赖的化学决策，存在分支、反推、组分消元、交叉验证或
     多阶段网络拓扑，并包含差量、多反应定量、联立或范围分类中的
     至少一项。该审计信号与Prompt的单主线反应路径互补；题干长、
-    工业背景、多图或多小问都不在触发条件中。若只是低任务密度、
-    无条件/证据/图表/实验支撑的两次守恒或联立链，则保留拔高题。
+    工业背景、多图或多小问都不在触发条件中。若只是低任务密度的
+    同一主线守恒/联立重复应用，则保留拔高题；模型自报“条件切换”
+    或“多证据”不能替代真实的高级计算操作。
     """
     # V5/V4优先使用题目可观察的主模型拓扑；V3仍按历史语义回放。V2
     # 缺少新增的并列任务、视觉和误差事实，不在回放时改变其语义。
@@ -1216,21 +1219,39 @@ def observable_deep_quantitative_final_signal(
             "联立",
             "范围或分类计算",
         }
-        low_density_two_conservation_chain = bool(
+        calculation_operations = set(
+            validated["calculation_operations"]
+        )
+        question_metrics = derive_question_structure_metrics(data or {})
+        simple_calculation_claim = bool(
+            "联立" in calculation_operations
+            and calculation_operations
+            <= {
+                "单一方程式",
+                "单一守恒",
+                "直接比例",
+                "化学符号→定量关系",
+                "联立",
+            }
+        )
+        few_explicit_questions = bool(
+            2
+            <= question_metrics["explicit_subquestion_count"]
+            <= 3
+        )
+        low_density_repeated_conservation_chain = bool(
             validated["solution_topology"] == "未知组成或量反推"
             and validated["reaction_structure"] == "产物进入后一反应"
-            and len(advanced_calculations) == 1
             and metrics["effective_task_count"] <= 4
             and len(validated["rule_families"]) <= 2
-            and not validated["condition_operations"]
-            and not validated["evidence_operations"]
+            and (simple_calculation_claim or few_explicit_questions)
             and validated["experiment_operation"] == "无"
             and validated["graph_table_operation"] == "无"
         )
         return bool(
             len(validated["longest_solution_chain"]) >= 5
             and validated["reaction_structure"] != "无反应任务"
-            and not low_density_two_conservation_chain
+            and not low_density_repeated_conservation_chain
             and validated["solution_topology"]
             in {
                 "条件分支或范围筛选",
@@ -1306,6 +1327,61 @@ def observable_dense_multiquestion_final_signal(
             and metrics["longest_chain_steps"] == 4
             and question_metrics["explicit_subquestion_count"] < 8
         )
+    )
+
+
+def observable_qualitative_evidence_final_signal(
+    features: Dict[str, Any],
+) -> bool:
+    """识别无高级计算但定性证据强耦合的压轴审计候选。
+
+    该信号只服务候选审计：必须在共享模型中同时完成多证据
+    成立、多候选/冲突排除以及实验现象或方案核验。题目篇幅、
+    小问数、课程跨度或单一证据均不能触发。未经独立回放验证
+    前，本规则不允许写回最终等级。
+    """
+    if not isinstance(features, dict):
+        return False
+    feature_keys = frozenset(features)
+    if feature_keys not in {
+        frozenset(OBSERVABLE_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V4_FEATURE_FIELDS),
+    }:
+        return False
+    validated = validate_observable_features(features)
+    metrics = derive_observable_metrics(validated)
+    evidence = set(validated["evidence_operations"])
+    competing_evidence = bool(
+        evidence
+        & {
+            "排除多个候选解释",
+            "处理冲突证据",
+            "补充实验获得唯一结论",
+        }
+    )
+    return bool(
+        metrics["longest_chain_steps"] >= 4
+        and metrics["effective_task_count"] >= 5
+        and len(validated["rule_families"]) >= 3
+        and validated["parallel_task_relation"]
+        == "共享同一化学模型的关联任务"
+        and validated["solution_topology"]
+        == "未知组分消元或组成不变量"
+        and validated["reaction_structure"]
+        == "先后竞争或过量不足"
+        and "干扰条件排除"
+        in validated["condition_operations"]
+        and bool(
+            set(validated["condition_operations"])
+            & {"反应先后", "过量不足", "范围或边界"}
+        )
+        and "多证据共同成立" in evidence
+        and competing_evidence
+        and validated["experiment_operation"]
+        == "现象解释"
+        and not validated["calculation_operations"]
     )
 
 
@@ -3833,6 +3909,36 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         elif (
             raw_level == "拔高题"
             and observable_contract
+            and observable_qualitative_evidence_final_signal(
+                model_features
+            )
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "压轴题",
+                "审计候选：定性证据网络在共享模型中排除多个竞争解释",
+                rule=(
+                    "teacher_hard_to_final_"
+                    "qualitative_evidence_network_candidate"
+                ),
+                evidence=[
+                    "最长链="
+                    + " → ".join(
+                        model_features["longest_solution_chain"]
+                    ),
+                    "证据操作="
+                    + "、".join(
+                        model_features["evidence_operations"]
+                    ),
+                    "实验操作="
+                    + model_features["experiment_operation"],
+                    "解题拓扑="
+                    + model_features["solution_topology"],
+                ],
+            )
+        elif (
+            raw_level == "拔高题"
+            and observable_contract
             and observable_dense_multiquestion_final_signal(
                 model_features,
                 data,
@@ -3868,7 +3974,10 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         elif (
             raw_level == "拔高题"
             and observable_contract
-            and observable_deep_quantitative_final_signal(model_features)
+            and observable_deep_quantitative_final_signal(
+                model_features,
+                data,
+            )
         ):
             set_level_with_reason(
                 teacher_candidate_result,

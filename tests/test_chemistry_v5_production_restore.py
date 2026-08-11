@@ -321,6 +321,56 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             "不得再追加陌生信息、跨单元、多阶段实验或分类讨论作为必要条件",
             prompt,
         )
+
+    def test_prompt_distinguishes_repeated_conservation_from_cross_constraints(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "总碱量关系与固体增重差量分别约束不同未知量",
+            prompt,
+        )
+        self.assertIn(
+            "不是同一种元素守恒的重复应用",
+            prompt,
+        )
+
+    def test_prompt_separates_course_boundary_exception_from_final_paths(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "特殊课程越界复核，不是第三条普遍压轴路径",
+            prompt,
+        )
+        self.assertIn(
+            "多个题干未提供且无法由初中知识推出的高中或竞赛规律",
+            prompt,
+        )
+
+    def test_prompt_uses_cases_only_for_same_structure_cross_check(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("若本题与某组Case在任务结构上同型", prompt)
+        self.assertIn("若不存在同型Case，直接按§四", prompt)
+        self.assertNotIn(
+            "先从Case中选择结构最接近的一对低档侧/高档侧",
+            prompt,
+        )
+
+    def test_prompt_output_example_covers_all_declared_task_groups(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "任务覆盖图表读取、反应判断和定量计算",
+            prompt,
+        )
         self.assertIn(
             "定性证据网络不以存在定量计算为必要条件",
             prompt,
@@ -584,6 +634,115 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             "teacher_hard_to_final_deep_quantitative_chain",
         )
 
+    def test_qualitative_evidence_network_is_audit_only_final_candidate(
+        self,
+    ) -> None:
+        item = hard_rating()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "整理实验后的离子组成",
+                    "根据现象排除不可能离子",
+                    "结合电荷与共存关系确定必然组分",
+                    "筛选获得唯一结论的检验方案",
+                ],
+                "task_groups": [
+                    {"task_type": "化学用语", "count": 1},
+                    {"task_type": "性质与反应判断", "count": 2},
+                    {"task_type": "证据推断", "count": 2},
+                    {"task_type": "方案设计与评价", "count": 1},
+                ],
+                "rule_families": [
+                    "化学用语",
+                    "性质与反应判断",
+                    "证据推断",
+                    "方案设计与评价",
+                ],
+                "parallel_task_relation": "共享同一化学模型的关联任务",
+                "solution_topology": "未知组分消元或组成不变量",
+                "reaction_structure": "先后竞争或过量不足",
+                "condition_operations": ["干扰条件排除", "范围或边界"],
+                "evidence_operations": [
+                    "多证据共同成立",
+                    "排除多个候选解释",
+                ],
+                "experiment_operation": "现象解释",
+                "experiment_task_structure": "控制变量或数据归纳",
+                "graph_table_operation": "无",
+                "calculation_operations": [],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "结合多组离子现象排除候选并设计唯一检验方案。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["postprocess_actions"], [])
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "压轴题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_hard_to_final_qualitative_evidence_network_candidate",
+        )
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+
+    def test_qualitative_candidate_rejects_generic_scheme_evaluation(
+        self,
+    ) -> None:
+        item = hard_rating()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "读取实验现象",
+                    "比较两组方案",
+                    "排除不合理候选",
+                    "选择补充实验",
+                ],
+                "task_groups": [
+                    {"task_type": "实验操作与探究", "count": 3},
+                    {"task_type": "证据推断", "count": 2},
+                    {"task_type": "方案设计与评价", "count": 1},
+                ],
+                "rule_families": [
+                    "实验操作与探究",
+                    "证据推断",
+                    "方案设计与评价",
+                ],
+                "parallel_task_relation": "共享同一化学模型的关联任务",
+                "solution_topology": "条件分支或范围筛选",
+                "reaction_structure": "多个并列反应",
+                "condition_operations": ["干扰条件排除"],
+                "evidence_operations": [
+                    "多证据共同成立",
+                    "排除多个候选解释",
+                ],
+                "experiment_operation": "方案评价或补充实验",
+                "experiment_task_structure": "方案设计或评价",
+                "graph_table_operation": "无",
+                "calculation_operations": [],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "比较并列实验方案并选择补充实验。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "拔高题",
+        )
+        self.assertIsNone(
+            result["teacher_distribution_guard_candidate_action"]
+        )
+
     def test_v5_deep_quantitative_chain_requires_a_reaction_task(self) -> None:
         item = hard_rating()
         item["features"]["reaction_structure"] = "无反应任务"
@@ -618,7 +777,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
                 "experiment_operation": "无",
                 "experiment_task_structure": "无实验判断",
                 "graph_table_operation": "无",
-                "calculation_operations": ["单一守恒", "联立"],
+                "calculation_operations": ["单一守恒", "差量"],
             }
         )
 
@@ -630,6 +789,41 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
                     {"stem": "任务1"},
                     {"stem": "任务2"},
                     {"stem": "任务3"},
+                ],
+            },
+        )
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["postprocess_actions"], [])
+
+    def test_deep_guard_does_not_trust_support_claims_for_simple_chain(
+        self,
+    ) -> None:
+        item = hard_rating()
+        item["features"].update(
+            {
+                "task_groups": [
+                    {"task_type": "定量计算", "count": 2},
+                ],
+                "rule_families": ["定量计算", "性质与反应判断"],
+                "solution_topology": "未知组成或量反推",
+                "reaction_structure": "产物进入后一反应",
+                "condition_operations": ["条件切换"],
+                "evidence_operations": ["多证据共同成立"],
+                "experiment_operation": "无",
+                "experiment_task_structure": "无实验判断",
+                "graph_table_operation": "无",
+                "calculation_operations": ["单一守恒", "联立"],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {
+                "stem": "燃料不完全燃烧后沿同一主线重复使用元素守恒。",
+                "sub_questions": [
+                    {"stem": "写出方程式"},
+                    {"stem": "完成守恒计算"},
                 ],
             },
         )
