@@ -641,6 +641,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("H1_medium_decisive_task", candidates)
         self.assertIn("不得仅因不足4步", candidates["H1_medium_decisive_task"]["reason"])
         self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertFalse(result["postprocess"]["writeback_applied"])
 
     def test_medium_local_difficulty_review_does_not_require_four_steps(self):
         reverse_case = rating("中等题")
@@ -686,8 +687,95 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         result = schema.postprocess_chemistry_difficulty(value, {})
         self.assertEqual(result["difficulty_level"], "拔高题")
         action = result["postprocess_actions"][-1]
-        self.assertEqual(action["rule"], "R1_medium_to_hard_multi_feature_review")
-        self.assertGreaterEqual(action["evidence"]["review_score"], 5)
+        self.assertEqual(
+            action["rule"], "R1_medium_to_hard_teacher_multi_factor_review"
+        )
+        self.assertIn("最长实质任务链达到四步及以上", action["evidence"]["matched_paths"])
+
+    def test_teacher_hard_signal_four_step_chain_only_triggers_review(self):
+        value = rating("中等题", ["U06_T02", "U08_T05", "U10_T02"])
+        value["features"].update({
+            "step_count": "4-5步",
+            "task_relation": "前后依赖",
+            "solution_method": "连续推导",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "中等题")
+        candidate = result["postprocess"]["candidates"][-1]
+        self.assertEqual(candidate["rule"], "H2_medium_teacher_hard_signal_review")
+        self.assertFalse(candidate["writeback_applied"])
+
+    def test_teacher_hard_signal_industrial_flow_only_triggers_review(self):
+        value = rating("中等题", ["U05_T02", "U08_T05", "U10_T10"])
+        value["features"].update({
+            "visual_content": "工业流程图",
+            "visual_item_count": "1幅",
+            "visual_complexity": "复杂高难图像",
+            "information_operation": "多来源信息筛选联合",
+            "solution_method": "连续推导",
+            "reaction_count": "2-3个",
+            "reaction_relation": "多个反应连续",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertFalse(result["postprocess"]["writeback_applied"])
+
+    def test_teacher_hard_signal_multi_reaction_calculation_only_triggers_review(self):
+        value = rating("中等题", ["U05_T03", "U08_T03"])
+        value["features"].update({
+            "step_count": "2-3步",
+            "calculation_type": "多类计算综合",
+            "calculation_steps": "2-3步",
+            "calculation_structure": "多个化学反应计算",
+            "solution_method": "定性与定量联合",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertFalse(result["postprocess"]["writeback_applied"])
+
+    def test_two_independent_teacher_hard_signals_can_promote_medium(self):
+        value = rating("中等题", ["U05_T03", "U08_T03"])
+        value["features"].update({
+            "step_count": "4-5步",
+            "task_relation": "前后依赖",
+            "solution_method": "定性与定量联合",
+            "calculation_type": "多类计算综合",
+            "calculation_steps": "4步及以上",
+            "calculation_structure": "多个化学反应计算",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        action = result["postprocess_actions"][-1]
+        self.assertEqual(
+            action["rule"], "R1_medium_to_hard_teacher_multi_factor_review"
+        )
+        self.assertEqual(action["evidence"]["matched_path_count"], 2)
+
+    def test_cross_unit_coverage_alone_still_does_not_promote_medium(self):
+        value = rating("中等题", ["U02_T03", "U06_T03", "U10_T02"])
+        value["features"].update({
+            "knowledge_distribution": "多单元综合",
+            "chemical_object_distribution": "不同类多个化学对象",
+            "step_count": "1步",
+            "task_relation": "多项独立",
+            "solution_method": "多条规则分别判断",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertFalse(result["postprocess"]["writeback_applied"])
+
+    def test_high_information_carrier_without_analysis_stays_medium(self):
+        value = rating("中等题", ["U08_T05"])
+        value["features"].update({
+            "visual_content": "工业流程图",
+            "visual_item_count": "1幅",
+            "visual_complexity": "单一同类型图像",
+            "information_operation": "直接读取一个信息",
+            "step_count": "1步",
+            "solution_method": "一条规则直接应用",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "中等题")
 
     def test_hard_review_requires_multiple_types_of_final_level_evidence(self):
         value = rating("拔高题", ["U05_T03", "U10_T03", "U09_T05"])
