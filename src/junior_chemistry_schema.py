@@ -1162,6 +1162,10 @@ def _build_upper_level_review_candidate(
 ) -> dict[str, Any] | None:
     """按教师锚点复核相邻边界，并要求topic、任务与题面证据共同支持。"""
     features = result["features"]
+    data = data or {}
+    question_text = "\n".join(
+        str(data.get(field, "") or "") for field in ("stem", "options")
+    )
     level = result["difficulty_level"]
     decisive_special_method = features["special_method"] in {
         "差量法", "极值法", "分情况计算", "多方程式联立",
@@ -1193,10 +1197,6 @@ def _build_upper_level_review_candidate(
 
     if level == "送分题":
         topic_ids = set(features["knowledge"]["topic_ids"])
-        data = data or {}
-        question_text = "\n".join(
-            str(data.get(field, "") or "") for field in ("stem", "options")
-        )
         one_step_teacher_floor_calculation = (
             features["calculation_steps"] == "1步"
             and (
@@ -1328,6 +1328,9 @@ def _build_upper_level_review_candidate(
             )
 
     if level == "基础题":
+        topic_ids = set(features["knowledge"]["topic_ids"])
+        knowledge_point_count = features["knowledge"]["knowledge_point_count"]
+        unit_count = features["knowledge"]["unit_count"]
         has_visual_analysis = features["visual_complexity"] != "无图片信息"
         has_information_processing = (
             features["information_operation"] != "无需额外提取"
@@ -1335,6 +1338,12 @@ def _build_upper_level_review_candidate(
         has_expression = features["expression_type"] != "无"
         has_experiment_analysis = features["experiment_analysis"] != "无"
         heterogeneous_rules = features["solution_method"] == "多条规则分别判断"
+        multiple_chemical_objects = features["chemical_object_distribution"] in {
+            "不同类多个化学对象", "多类化学对象综合",
+        }
+        option_rule_switching = features["interference_type"] in {
+            "多个选项规则切换", "易混概念", "特例或边界",
+        }
         substantive_support = (
             heterogeneous_rules or has_expression or has_experiment_analysis
         )
@@ -1358,6 +1367,65 @@ def _build_upper_level_review_candidate(
                     or has_experiment_analysis
                 )
             ),
+            "二至三步图表或实验推断形成连续实质链": (
+                features["step_count"] == "2-3步"
+                and features["information_operation"] in {
+                    "由图表变化推断", "比较或整理多条信息",
+                    "多来源信息筛选联合",
+                }
+                and (
+                    heterogeneous_rules
+                    or features["solution_method"] == "连续推导"
+                    or has_experiment_analysis
+                )
+            ),
+            "六个以上知识点与不同对象规则切换共同构成综合负担": (
+                knowledge_point_count >= 6
+                and heterogeneous_rules
+                and multiple_chemical_objects
+            ),
+            "碳及其两种氧化物需要分别调用三组性质知识": (
+                {"U06_T01", "U06_T02", "U06_T03"}.issubset(topic_ids)
+                and knowledge_point_count == 3
+                and unit_count == 1
+                and heterogeneous_rules
+                and multiple_chemical_objects
+                and option_rule_switching
+            ),
+            "化学符号不同位置数字含义存在多类易混规则": (
+                "U04_T07" in topic_ids
+                and heterogeneous_rules
+                and features["interference_type"] == "易混概念"
+                and features["chemical_object_distribution"]
+                != "单一化学对象"
+            ),
+            "跨单元微观图需要由图中变化分别调用不同规则": (
+                knowledge_point_count >= 3
+                and unit_count >= 2
+                and features["visual_content"] == "微观示意图"
+                and features["information_operation"] == "由图表变化推断"
+                and heterogeneous_rules
+            ),
+            "多类图像与实验操作检验规则共同参与判断": (
+                knowledge_point_count >= 2
+                and features["visual_content"] == "多种图像综合"
+                and heterogeneous_rules
+                and (
+                    features["experiment_operation"] != "无"
+                    or has_experiment_analysis
+                )
+            ),
+            "多知识点表格整理与多个实验分析任务联合": (
+                knowledge_point_count >= 4
+                and features["information_operation"] == "比较或整理多条信息"
+                and features["experiment_analysis"] == "多个实验分析任务联合"
+            ),
+            "常规化合价与过氧化物特殊价态共同辨析": (
+                "U04_T05" in topic_ids
+                and features["calculation_type"] == "化合价或化学式计算"
+                and features["interference_type"] in {"易混概念", "特例或边界"}
+                and "过氧" in question_text
+            ),
         }
         matched_paths = [
             name for name, active in medium_paths.items() if active
@@ -1365,7 +1433,7 @@ def _build_upper_level_review_candidate(
         if matched_paths:
             return _candidate(
                 "M1_basic_to_medium_teacher_factor_review", "中等题",
-                "虽无连续长链，但命中由至少三类具体特征共同构成的中等复核路径；不以题数、图片数或跨单元单独升档。",
+                "命中教师确认的2/3档组合路径：知识覆盖必须与规则切换、图表推断、实验分析、易混特例或规范表达等实质负担共同成立；不以知识点数、图片数或跨单元单独升档。",
                 {
                     "matched_paths": matched_paths,
                     "matched_path_count": len(matched_paths),

@@ -541,6 +541,93 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "基础题")
         self.assertFalse(result["postprocess"]["writeback_applied"])
 
+    def test_basic_review_promotes_two_to_three_step_visual_inference(self):
+        value = rating("基础题", ["U03_T02"])
+        value["features"].update({
+            "step_count": "2-3步",
+            "solution_method": "多条规则分别判断",
+            "visual_content": "微观示意图",
+            "visual_item_count": "1幅",
+            "visual_complexity": "单一同类型图像",
+            "information_operation": "由图表变化推断",
+            "experiment_analysis": "根据现象或数据得出结论",
+            "interference_type": "多个选项规则切换",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "中等题")
+
+    def test_basic_review_uses_knowledge_count_only_with_rule_switching(self):
+        value = rating(
+            "基础题",
+            ["U04_T01", "U04_T02", "U04_T03", "U04_T04", "U04_T05", "U04_T06"],
+        )
+        value["features"].update({
+            "solution_method": "多条规则分别判断",
+            "chemical_object_distribution": "不同类多个化学对象",
+            "interference_type": "多个选项规则切换",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "中等题")
+
+        same_rule = rating(
+            "基础题",
+            ["U04_T01", "U04_T02", "U04_T03", "U04_T04", "U04_T05", "U04_T06"],
+        )
+        same_rule["features"].update({
+            "solution_method": "一条规则直接应用",
+            "chemical_object_distribution": "同类多个化学对象",
+        })
+        result = schema.postprocess_chemistry_difficulty(same_rule, {})
+        self.assertEqual(result["difficulty_level"], "基础题")
+
+    def test_carbon_anchor_does_not_match_unrelated_reaction_conversion(self):
+        value = rating(
+            "基础题",
+            ["U06_T01", "U06_T02", "U06_T03", "U08_T04", "U10_T10"],
+        )
+        value["features"].update({
+            "solution_method": "多条规则分别判断",
+            "chemical_object_distribution": "不同类多个化学对象",
+            "interference_type": "多个选项规则切换",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "基础题")
+
+    def test_basic_review_promotes_teacher_confirmed_symbol_confusion(self):
+        value = rating("基础题", ["U04_T07"])
+        value["features"].update({
+            "solution_method": "多条规则分别判断",
+            "chemical_object_distribution": "同类多个化学对象",
+            "interference_type": "易混概念",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "中等题")
+
+    def test_basic_review_promotes_peroxide_valence_boundary_only(self):
+        value = rating("基础题", ["U04_T05"])
+        value["features"].update({
+            "calculation_type": "化合价或化学式计算",
+            "calculation_steps": "1步",
+            "calculation_structure": "一步或口算",
+            "interference_type": "易混概念",
+        })
+        result = schema.postprocess_chemistry_difficulty(
+            value, {"stem": "判断Na2O2中过氧化物氧元素的化合价。"}
+        )
+        self.assertEqual(result["difficulty_level"], "中等题")
+
+        ordinary = rating("基础题", ["U04_T05"])
+        ordinary["features"].update({
+            "calculation_type": "化合价或化学式计算",
+            "calculation_steps": "1步",
+            "calculation_structure": "一步或口算",
+            "interference_type": "易混概念",
+        })
+        result = schema.postprocess_chemistry_difficulty(
+            ordinary, {"stem": "求CuO中铜元素的化合价。"}
+        )
+        self.assertEqual(result["difficulty_level"], "基础题")
+
     def test_decisive_special_method_is_not_blocked_by_four_step_threshold(self):
         value = rating("中等题", ["U05_T03", "U10_T03"])
         value["features"]["calculation_type"] = "含杂质计算"
@@ -908,17 +995,17 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("4-5步", prompt)
         self.assertIn("不能单独否决压轴题", prompt)
         self.assertIn("【Case 23：氧分子与含氧物质】", prompt)
-        self.assertIn("【Case 52：石青分阶段受热】", prompt)
-        self.assertIn("【Case 57：锌与两种盐溶液反应后的滤液滤渣】", prompt)
-        self.assertIn("【Case 92：单一高难实验或计算 vs 多类型高难任务耦合】", prompt)
-        self.assertIn("【Case 47：装置作用、顺序、改进与计算联合】", prompt)
-        self.assertNotIn("【Case 93", prompt)
+        self.assertIn("【Case 60：石青分阶段受热】", prompt)
+        self.assertIn("【Case 65：锌与两种盐溶液反应后的滤液滤渣】", prompt)
+        self.assertIn("【Case 101：单一高难实验或计算 vs 多类型高难任务耦合】", prompt)
+        self.assertIn("【Case 55：装置作用、顺序、改进与计算联合】", prompt)
+        self.assertNotIn("【Case 102", prompt)
         case_numbers = [int(value) for value in re.findall(r"【Case (\d+)", prompt)]
-        self.assertEqual(case_numbers, list(range(1, 93)))
+        self.assertEqual(case_numbers, list(range(1, 102)))
         self.assertNotIn("同档锚点", prompt)
         self.assertNotIn("补充边界", prompt)
         self.assertIn("【Case 17：利用化合价代数和求化合价或化学式】", prompt)
-        self.assertIn("【Case 59：常见化学式再认 vs 化合价关系应用】", prompt)
+        self.assertIn("【Case 67：常见化学式再认 vs 化合价关系应用】", prompt)
         self.assertIn("禁止借用相邻字段的枚举", prompt)
         self.assertIn("必须按指定的严格JSON Schema输出一个完整对象", prompt)
         self.assertNotIn("必须通过指定函数提交", prompt)
