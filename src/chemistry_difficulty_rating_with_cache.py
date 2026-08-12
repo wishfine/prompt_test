@@ -590,12 +590,6 @@ async def call_model_with_cache(
         "json_parse_mode": "failed",
         "token_usage_consistent": True,
         "token_anomaly_flags": [],
-        "cache_usage_reported": False,
-        "cache_hit_confirmed": False,
-        "api_cached_input_tokens": 0,
-        "api_uncached_input_tokens": 0,
-        "cache_hit_ratio": None,
-        "api_input_tokens_details": {},
     }
 
     response_id: Optional[str] = None
@@ -648,29 +642,6 @@ async def call_model_with_cache(
                     prompt_tokens = usage.get("input_tokens", 0)
                     completion_tokens = usage.get("output_tokens", 0)
                     total_tokens = usage.get("total_tokens", 0)
-                    input_token_details = usage.get("input_tokens_details", {})
-                    if not isinstance(input_token_details, dict):
-                        input_token_details = {}
-                    cache_usage_reported = "cached_tokens" in input_token_details
-                    cached_tokens = input_token_details.get("cached_tokens", 0)
-                    if not isinstance(cached_tokens, (int, float)):
-                        cached_tokens = 0
-                    cached_tokens = max(0, min(int(cached_tokens), prompt_tokens))
-                    uncached_tokens = max(prompt_tokens - cached_tokens, 0)
-                    image_status["cache_usage_reported"] = cache_usage_reported
-                    image_status["cache_hit_confirmed"] = (
-                        cache_usage_reported and cached_tokens > 0
-                    )
-                    image_status["api_cached_input_tokens"] = cached_tokens
-                    image_status["api_uncached_input_tokens"] = uncached_tokens
-                    image_status["cache_hit_ratio"] = (
-                        round(cached_tokens / prompt_tokens, 6)
-                        if cache_usage_reported and prompt_tokens > 0
-                        else None
-                    )
-                    image_status["api_input_tokens_details"] = copy.deepcopy(
-                        input_token_details
-                    )
                     image_status["response_status"] = str(
                         result.get("status", "") or ""
                     )
@@ -701,10 +672,6 @@ async def call_model_with_cache(
                         anomaly_flags.append("structured_output_json_incomplete")
                     if not image_status["token_usage_consistent"]:
                         anomaly_flags.append("token_usage_sum_mismatch")
-                    if USE_CACHE and cache_usage_reported and cached_tokens == 0:
-                        anomaly_flags.append("prefix_cache_not_hit")
-                    if USE_CACHE and not cache_usage_reported:
-                        anomaly_flags.append("cache_usage_details_missing")
                     if completion_tokens > COMPLETION_TOKEN_ANOMALY_THRESHOLD:
                         anomaly_flags.append("completion_tokens_abnormally_high")
                     image_status["token_anomaly_flags"] = anomaly_flags
