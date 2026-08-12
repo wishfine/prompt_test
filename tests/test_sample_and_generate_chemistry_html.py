@@ -16,6 +16,51 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
+    def test_parse_level_plan_accepts_requested_five_counts(self) -> None:
+        self.assertEqual(
+            MODULE.parse_level_plan("120,120,120,90,50"),
+            {
+                "送分题": 120,
+                "基础题": 120,
+                "中等题": 120,
+                "拔高题": 90,
+                "压轴题": 50,
+            },
+        )
+
+    def test_select_rows_by_level_plan_is_exact_and_reproducible(self) -> None:
+        grouped = {
+            level: [
+                {
+                    "question_id": f"{level}-{index}",
+                    "difficulty_rating": {"difficulty_level": level},
+                }
+                for index in range(10)
+            ]
+            for level in MODULE.LEVEL_MAP
+        }
+        plan = {level: 3 for level in MODULE.LEVEL_MAP}
+
+        first = MODULE.select_rows_by_level_plan(grouped, plan, seed=7)
+        second = MODULE.select_rows_by_level_plan(grouped, plan, seed=7)
+
+        self.assertEqual(first, second)
+        self.assertEqual(
+            {level: len(rows) for level, rows in first.items()},
+            {level: 3 for level in MODULE.LEVEL_MAP},
+        )
+
+    def test_select_rows_by_level_plan_rejects_short_level(self) -> None:
+        grouped = {level: [] for level in MODULE.LEVEL_MAP}
+        grouped["送分题"] = [{"question_id": "only-one"}]
+
+        with self.assertRaisesRegex(ValueError, "送分题仅1题"):
+            MODULE.select_rows_by_level_plan(
+                grouped,
+                {"送分题": 2},
+                seed=1,
+            )
+
     def test_stem_visualization_uses_only_last_image(self) -> None:
         section = MODULE.render_chemistry_image_section(
             "https://img.example/first.png,"

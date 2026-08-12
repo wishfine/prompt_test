@@ -440,6 +440,47 @@ def build_sample_plan(sample_size: int) -> Dict[str, int]:
     return plan
 
 
+def parse_level_plan(value: str) -> Dict[str, int]:
+    """解析“送分,基础,中等,拔高,压轴”五档数量。"""
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != len(LEVEL_MAP):
+        raise argparse.ArgumentTypeError(
+            "--level-plan 必须提供5个逗号分隔整数："
+            "送分,基础,中等,拔高,压轴"
+        )
+    try:
+        counts = [int(part) for part in parts]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "--level-plan 只能包含整数"
+        ) from exc
+    if any(count < 0 for count in counts) or not any(counts):
+        raise argparse.ArgumentTypeError(
+            "--level-plan 数量不能为负数，且总数必须大于0"
+        )
+    return dict(zip(LEVEL_MAP, counts))
+
+
+def select_rows_by_level_plan(
+    grouped_by_name: Dict[str, List[Dict[str, Any]]],
+    plan: Dict[str, int],
+    *,
+    seed: int,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """按最终模型档位精确抽样；不足时禁止跨档补数。"""
+    rng = random.Random(seed)
+    selected: Dict[str, List[Dict[str, Any]]] = {}
+    for level_name, target_count in plan.items():
+        pool = list(grouped_by_name.get(level_name, []))
+        if len(pool) < target_count:
+            raise ValueError(
+                f"{level_name}仅{len(pool)}题，无法按计划抽取"
+                f"{target_count}题；已禁止用其他档位补数"
+            )
+        selected[level_name] = rng.sample(pool, target_count)
+    return selected
+
+
 def _load_jsonl(path: Path) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     with path.open(encoding="utf-8") as handle:
@@ -484,6 +525,15 @@ def main() -> None:
     parser.add_argument("--all-results", action="store_true", help="渲染全部有效结果")
     parser.add_argument("--sample-size", type=int, default=500)
     parser.add_argument("--seed", type=int, default=20260812)
+    parser.add_argument(
+        "--level-plan",
+        type=parse_level_plan,
+        help=(
+            "按最终模型档位精确抽样，顺序为"
+            "送分,基础,中等,拔高,压轴；"
+            "例如 120,120,120,90,50"
+        ),
+    )
     parser.add_argument("--release-label", default=CHEMISTRY_FROZEN_RELEASE)
     args = parser.parse_args()
 
@@ -499,8 +549,26 @@ def main() -> None:
             grouped[LEVEL_MAP[level]].append(row)
 
     selected: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    if args.all_results and args.level_plan:
+        parser.error("--all-results 与 --level-plan 不能同时使用")
     if args.all_results:
         selected.update({level: list(grouped[level]) for level in range(1, 6)})
+    elif args.level_plan:
+        grouped_by_name = {
+            level_name: grouped[level_num]
+            for level_name, level_num in LEVEL_MAP.items()
+        }
+        selected_by_name = select_rows_by_level_plan(
+            grouped_by_name,
+            args.level_plan,
+            seed=args.seed,
+        )
+        selected.update(
+            {
+                LEVEL_MAP[level_name]: rows_for_level
+                for level_name, rows_for_level in selected_by_name.items()
+            }
+        )
     else:
         rng = random.Random(args.seed)
         plan = build_sample_plan(args.sample_size)
