@@ -922,7 +922,7 @@ def get_processed_question_ids(output_path: str) -> set:
 
 # -------------------------- 6. 主执行流 --------------------------
 async def main_batch_run() -> None:
-    global CURRENT_RUN_SIGNATURE, CURRENT_RUN_CONFIG, USE_CACHE
+    global CURRENT_RUN_SIGNATURE, CURRENT_RUN_CONFIG, USE_CACHE, CHEMISTRY_IMAGE_MODE
     parser = argparse.ArgumentParser(description="初中化学难度评级多线程并发批量打标脚本 (带 Cache 优化)")
     parser.add_argument(
         "-p",
@@ -949,9 +949,16 @@ async def main_batch_run() -> None:
         action="store_true",
         help="关闭前缀缓存并逐题发送完整提示词；全量运行会显著增加输入token成本",
     )
+    parser.add_argument(
+        "--image-mode",
+        choices=("off", "auto", "all"),
+        default=CHEMISTRY_IMAGE_MODE,
+        help="题图发送模式；off仅发送结构化文字，auto按需发送，all发送全部可用图片",
+    )
     args = parser.parse_args()
 
     USE_CACHE = not args.no_cache
+    CHEMISTRY_IMAGE_MODE = args.image_mode
 
     random.seed(args.seed)
     load_prompt_config(args.prompt)
