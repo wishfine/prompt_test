@@ -315,6 +315,78 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         unchanged = schema.postprocess_chemistry_difficulty(simple_classification, {})
         self.assertEqual(unchanged["difficulty_level"], "送分题")
 
+    def test_teacher_sensitive_single_topic_paths_use_specific_evidence(self):
+        cases = [
+            (
+                ["U04_T05"],
+                {"calculation_type": "化合价或化学式计算", "calculation_steps": "1步", "calculation_structure": "一步或口算"},
+                {"stem": "CuO中氧元素为-2价，求铜元素的化合价。"},
+            ),
+            (
+                ["U09_T03"], {},
+                {"stem": "与固体溶解度无关的因素是（ ）。"},
+            ),
+            (
+                ["U03_T01"], {},
+                {"stem": "物质发生三态变化的主要原因是（ ）。", "options": "分子大小；分子本身；分子间隔；运动状态"},
+            ),
+            (
+                ["U01_T04"], {"visual_content": "仪器图", "visual_item_count": "4幅及以上", "visual_complexity": "多个同类型图像"},
+                {"stem": "在过滤操作中，不需要用到的仪器是（ ）。<image>"},
+            ),
+        ]
+        for topic_ids, feature_updates, data in cases:
+            with self.subTest(topic_ids=topic_ids, data=data):
+                value = rating("送分题", topic_ids)
+                value["features"].update(feature_updates)
+                result = schema.postprocess_chemistry_difficulty(value, data)
+                self.assertEqual(result["difficulty_level"], "基础题")
+
+    def test_sensitive_topic_name_alone_does_not_raise_giveaway(self):
+        value = rating("送分题", ["U11_T01"])
+        result = schema.postprocess_chemistry_difficulty(
+            value, {"stem": "下列食物中富含蛋白质的是（ ）。"}
+        )
+        self.assertEqual(result["difficulty_level"], "送分题")
+
+    def test_uncommon_formula_details_raise_without_catching_simple_formula_item(self):
+        detailed = rating("送分题", ["U04_T04", "U04_T05"])
+        detailed["features"].update({
+            "chemical_object_distribution": "不同类多个化学对象",
+            "interference_type": "易混概念",
+        })
+        detailed_result = schema.postprocess_chemistry_difficulty(detailed, {
+            "stem": "下列物质的化学式书写正确的是（ ）。",
+            "options": "氧化铁FeO；甲烷CH4；氯化铵NH3Cl；硝酸NO3",
+        })
+        self.assertEqual(detailed_result["difficulty_level"], "基础题")
+
+        simple = rating("送分题", ["U04_T04", "U04_T05"])
+        simple["features"].update({
+            "chemical_object_distribution": "不同类多个化学对象",
+            "interference_type": "易混概念",
+        })
+        simple_result = schema.postprocess_chemistry_difficulty(simple, {
+            "stem": "某同学制作的试剂标签中化学式书写正确的是（ ）。",
+            "options": "氯化钠NaCl；水H2O；氧气O2；二氧化碳CO2",
+        })
+        self.assertEqual(simple_result["difficulty_level"], "送分题")
+
+    def test_element_deficiency_comparison_and_example_writeback_have_foundation_floor(self):
+        deficiency = rating("送分题", ["U11_T01"])
+        deficiency["features"]["chemical_object_distribution"] = "同类多个化学对象"
+        deficiency_result = schema.postprocess_chemistry_difficulty(deficiency, {
+            "stem": "青少年缺乏下列哪种元素会得佝偻病？",
+            "options": "A.铁 B.锌 C.钙 D.氟",
+        })
+        self.assertEqual(deficiency_result["difficulty_level"], "基础题")
+
+        example = rating("送分题", ["U01_T01"])
+        example_result = schema.postprocess_chemistry_difficulty(example, {
+            "stem": "下列过程中主要发生化学变化的是____。A.粮食酿酒 B.海水蒸发 C.苹果榨汁 D.______",
+        })
+        self.assertEqual(example_result["difficulty_level"], "基础题")
+
     def test_question_image_evidence_preserves_life_sign_features(self):
         value = rating("送分题", ["U11_T03"])
         value["features"].update({

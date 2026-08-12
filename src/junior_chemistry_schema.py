@@ -1158,8 +1158,9 @@ def _build_audit_candidates(result: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _build_upper_level_review_candidate(
     result: dict[str, Any],
+    data: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """用一个高难锚点触发复核，再要求其他独立特征共同支持升档。"""
+    """按教师锚点复核相邻边界，并要求topic、任务与题面证据共同支持。"""
     features = result["features"]
     level = result["difficulty_level"]
     decisive_special_method = features["special_method"] in {
@@ -1191,6 +1192,79 @@ def _build_upper_level_review_candidate(
     }
 
     if level == "送分题":
+        topic_ids = set(features["knowledge"]["topic_ids"])
+        data = data or {}
+        question_text = "\n".join(
+            str(data.get(field, "") or "") for field in ("stem", "options")
+        )
+        one_step_teacher_floor_calculation = (
+            features["calculation_steps"] == "1步"
+            and (
+                features["calculation_type"] == "化合价或化学式计算"
+                or (
+                    "U05_T01" in topic_ids
+                    and features["calculation_type"] != "无"
+                )
+            )
+        )
+        equation_meaning_with_confusion = (
+            "U05_T02" in topic_ids
+            and features["interference_type"] == "易混概念"
+            and "意义" in question_text
+        )
+        solubility_factor_distinction = (
+            "U09_T03" in topic_ids
+            and "溶解度" in question_text
+            and any(term in question_text for term in ("因素", "有关", "无关"))
+        )
+        molecular_state_detail = (
+            "U03_T01" in topic_ids
+            and "三态" in question_text
+            and "分子" in question_text
+        )
+        filtration_process_recall = (
+            "U01_T04" in topic_ids
+            and "过滤" in question_text
+            and features["visual_item_count"] != "无图片"
+        )
+        extinguishing_principle_matching = (
+            "U07_T01" in topic_ids
+            and features["chemical_object_distribution"]
+            in {"不同类多个化学对象", "多类化学对象综合"}
+            and "原理" in question_text
+        )
+        health_scenarios_with_rule_switching = (
+            "U11_T01" in topic_ids
+            and features["chemical_object_distribution"]
+            in {"不同类多个化学对象", "多类化学对象综合"}
+            and features["solution_method"] == "多条规则分别判断"
+        )
+        common_name_confusion = (
+            "U10_T05" in topic_ids
+            and features["interference_type"] == "易混概念"
+            and any(term in question_text for term in ("俗名", "名称", "同一物质"))
+        )
+        uncommon_formula_detail_comparison = (
+            {"U04_T04", "U04_T05"}.issubset(topic_ids)
+            and features["interference_type"] == "易混概念"
+            and sum(
+                term in question_text
+                for term in ("氧化铁", "甲烷", "氯化铵", "硝酸")
+            ) >= 3
+        )
+        multiple_element_deficiency_comparison = (
+            "U11_T01" in topic_ids
+            and "缺乏" in question_text
+            and sum(
+                term in question_text
+                for term in ("铁", "锌", "钙", "氟", "碘", "硒")
+            ) >= 3
+        )
+        choose_then_supply_chemical_change = (
+            "U01_T01" in topic_ids
+            and "化学变化" in question_text
+            and bool(re.search(r"D\s*[\.．、:：)]?\s*_{2,}", question_text))
+        )
         teacher_sensitive_interference = (
             features["interference_type"] in {"特例或边界", "多个选项规则切换"}
             and features["solution_method"] == "多条规则分别判断"
@@ -1202,6 +1276,39 @@ def _build_upper_level_review_candidate(
             and features["solution_method"] == "多条规则分别判断"
         )
         foundation_paths = {
+            "一步化合价或质量守恒计算具有教师确认的知识门槛": (
+                one_step_teacher_floor_calculation
+            ),
+            "化学方程式意义需要辨析符号读法、条件和质量含义": (
+                equation_meaning_with_confusion
+            ),
+            "固体溶解度影响因素需要区分内因、外因和物质量": (
+                solubility_factor_distinction
+            ),
+            "三态变化需要辨析分子大小、本身、间隔和运动状态": (
+                molecular_state_detail
+            ),
+            "过滤操作需要从多幅仪器图还原整套所需仪器": (
+                filtration_process_recall
+            ),
+            "多个灭火场景需要逐项理解并匹配灭火原理": (
+                extinguishing_principle_matching
+            ),
+            "健康生活选项分别调用营养元素、腌制和霉变食品知识": (
+                health_scenarios_with_rule_switching
+            ),
+            "盐和碱的名称、俗名及类别统称存在易混细节": (
+                common_name_confusion
+            ),
+            "不常见化学式需要辨析变价元素、原子团和酸的组成": (
+                uncommon_formula_detail_comparison
+            ),
+            "多个微量元素需要分别匹配对应缺乏症": (
+                multiple_element_deficiency_comparison
+            ),
+            "完成选择后还需自主补写另一个化学变化实例": (
+                choose_then_supply_chemical_change
+            ),
             "不同类化学对象间存在教师明确关注的易混概念或规则切换": (
                 teacher_sensitive_interference
             ),
@@ -1213,7 +1320,7 @@ def _build_upper_level_review_candidate(
         if matched_paths:
             return _candidate(
                 "S1_giveaway_to_foundation_teacher_anchor", "基础题",
-                "命中教师明确使用的1/2档边界；难度来自具体易混概念、多个物质事实或多幅标识核对，不由选项数量机械升档。",
+                "命中教师明确使用的1/2档边界；难度来自具体知识门槛、真实转换、易混细节或逐项原理分析，不由选项数量机械升档。",
                 {
                     "matched_paths": matched_paths,
                     "matched_path_count": len(matched_paths),
@@ -1605,7 +1712,7 @@ def postprocess_chemistry_difficulty(value: dict[str, Any], data: dict[str, Any]
     original_level = result["difficulty_level"]
     question_statistics = compute_question_statistics(data)
     candidates = _build_audit_candidates(result)
-    review_candidate = _build_upper_level_review_candidate(result)
+    review_candidate = _build_upper_level_review_candidate(result, data)
     if review_candidate is not None:
         candidates.append(review_candidate)
     result["postprocess_actions"] = []
