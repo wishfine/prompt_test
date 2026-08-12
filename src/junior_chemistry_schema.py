@@ -1441,114 +1441,6 @@ def _build_upper_level_review_candidate(
             )
 
     if level == "中等题":
-        knowledge_point_count = features["knowledge"]["knowledge_point_count"]
-        unit_count = features["knowledge"]["unit_count"]
-        multiple_chemical_objects = features["chemical_object_distribution"] in {
-            "不同类多个化学对象", "多类化学对象综合",
-        }
-        substantive_dependency = features["task_relation"] in {
-            "前后依赖", "多条任务链汇合",
-        } or features["solution_method"] in {
-            "连续推导", "定性与定量联合",
-        }
-        high_information_carrier = features["visual_content"] in {
-            "工业流程图", "多组对比实验表格", "多装置组合实验图",
-        }
-        substantive_information_processing = features["information_operation"] in {
-            "由图表变化推断", "图像拐点或分段分析",
-            "多来源信息筛选联合",
-        }
-        hard_calculation_structure = features["calculation_structure"] in {
-            "多个化学反应计算", "含杂质多步质量分数",
-            "实验误差定量计算", "多模型综合计算",
-        }
-        unfamiliar_given_material = features["given_information"] in {
-            "题干给出陌生物质或反应资料",
-            "题干给出陌生装置流程或材料资料",
-        }
-        hard_experiment_task = (
-            features["experiment_design"] in {
-                "实验方案评价", "实验改进", "多阶段探究设计",
-            }
-            or features["error_analysis"] in {
-                "定量实验误差分析", "多种误差联合分析",
-            }
-        )
-        teacher_hard_floor_paths = {
-            "最长实质任务链达到四步及以上": (
-                features["step_count"] in {"4-5步", "6步及以上"}
-            ),
-            "三个以上跨单元知识点在同一流程或推导中融合": (
-                knowledge_point_count >= 3
-                and unit_count >= 3
-                and multiple_chemical_objects
-                and (
-                    substantive_dependency
-                    or high_information_carrier
-                    or features["reaction_count"] == "4个及以上"
-                )
-            ),
-            "工业流程或多组实验图表承担实质推断任务": (
-                high_information_carrier
-                and (
-                    substantive_information_processing
-                    or substantive_dependency
-                    or features["experiment_analysis"]
-                    == "多个实验分析任务联合"
-                    or features["experiment_design"] != "无"
-                )
-            ),
-            "题干给出陌生物质或流程且必须迁移所给信息": (
-                unfamiliar_given_material
-                and substantive_information_processing
-                and (
-                    features["step_count"] != "1步"
-                    or features["reaction_count"] in {"2-3个", "4个及以上"}
-                    or features["experiment_analysis"] != "无"
-                )
-            ),
-            "多反应、含杂质或实验误差形成高难计算结构": (
-                hard_calculation_structure
-            ),
-            "三个以上隐藏条件共同约束答案": (
-                features["hidden_condition_count"] == "3个及以上"
-            ),
-            "高阶实验评价、改进、探究或定量误差分析": (
-                hard_experiment_task
-            ),
-            "四个以上反应关系需要逐项联合验证": (
-                features["reaction_count"] == "4个及以上"
-                and features["solution_method"] == "多条规则分别判断"
-                and knowledge_point_count >= 3
-                and multiple_chemical_objects
-            ),
-        }
-        teacher_hard_floor_matches = [
-            name for name, active in teacher_hard_floor_paths.items() if active
-        ]
-        if len(teacher_hard_floor_matches) >= 2:
-            return _candidate(
-                "R1_medium_to_hard_teacher_multi_factor_review", "拔高题",
-                "至少两类相互独立的教师高难信号共同成立，3/4档复核通过。单条信号只触发复核，不直接升档；跨单元仅在知识实际参与同一流程、推导或反应网络时生效。",
-                {
-                    "matched_paths": teacher_hard_floor_matches,
-                    "matched_path_count": len(teacher_hard_floor_matches),
-                    "required_independent_path_count": 2,
-                },
-            )
-        teacher_signal_review_candidate = None
-        if teacher_hard_floor_matches:
-            teacher_signal_review_candidate = _candidate(
-                "H2_medium_teacher_hard_signal_review", "拔高题",
-                "命中一类教师高难信号，仅触发3/4档复核；缺少另一类独立高难证据，不直接修改难度等级。",
-                {
-                    "matched_paths": teacher_hard_floor_matches,
-                    "matched_path_count": len(teacher_hard_floor_matches),
-                    "required_independent_path_count": 2,
-                },
-            )
-            teacher_signal_review_candidate["writeback_allowed"] = False
-
         calibrated_local_difficulty_paths = {
             "逆向溯源与隐藏条件共同决定反应模型": (
                 features["reverse_tracing"] == "有"
@@ -1628,8 +1520,6 @@ def _build_upper_level_review_candidate(
                     ],
                 },
             )
-        if teacher_signal_review_candidate is not None:
-            return teacher_signal_review_candidate
 
     if level == "拔高题":
         multi_reaction_calculation = features["calculation_structure"] in {
@@ -1901,10 +1791,7 @@ def postprocess_chemistry_difficulty(value: dict[str, Any], data: dict[str, Any]
             "教师规则：涉及实验误差分析时最低为中等题。",
             {"error_analysis": result["features"]["error_analysis"]},
         )
-    if (
-        review_candidate is not None
-        and review_candidate.get("writeback_allowed", True)
-    ):
+    if review_candidate is not None:
         before_review = result["difficulty_level"]
         _writeback_floor(
             result,
@@ -1916,8 +1803,6 @@ def postprocess_chemistry_difficulty(value: dict[str, Any], data: dict[str, Any]
         review_candidate["writeback_applied"] = (
             result["difficulty_level"] != before_review
         )
-    elif review_candidate is not None:
-        review_candidate["writeback_applied"] = False
     final_level = result["difficulty_level"]
     result["feature_schema_version"] = FEATURE_SCHEMA_VERSION
     result["postprocess"] = {
