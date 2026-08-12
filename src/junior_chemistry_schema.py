@@ -1191,6 +1191,14 @@ def _build_upper_level_review_candidate(
     }
 
     if level == "送分题":
+        one_step_chemical_calculation = (
+            features["calculation_steps"] == "1步"
+            and features["calculation_type"] != "无"
+        )
+        chemical_notation_writeback = (
+            features["subjective_response"] == "有"
+            and features["expression_type"] == "元素离子符号或化学式书写"
+        )
         teacher_sensitive_interference = (
             features["interference_type"] in {"特例或边界", "多个选项规则切换"}
             and features["solution_method"] == "多条规则分别判断"
@@ -1202,6 +1210,12 @@ def _build_upper_level_review_candidate(
             and features["solution_method"] == "多条规则分别判断"
         )
         foundation_paths = {
+            "需要完成一步化合价、化学式或质量关系计算": (
+                one_step_chemical_calculation
+            ),
+            "需要把名称或数量要求转换并自主写成化学符号": (
+                chemical_notation_writeback
+            ),
             "不同类化学对象间存在教师明确关注的易混概念或规则切换": (
                 teacher_sensitive_interference
             ),
@@ -1213,7 +1227,7 @@ def _build_upper_level_review_candidate(
         if matched_paths:
             return _candidate(
                 "S1_giveaway_to_foundation_teacher_anchor", "基础题",
-                "命中教师明确使用的1/2档边界；难度来自具体易混概念、多个物质事实或多幅标识核对，不由选项数量机械升档。",
+                "命中教师明确使用的1/2档边界；难度来自实际化学转换、一步计算、具体易混概念或多个物质事实，不由选项数量机械升档。",
                 {
                     "matched_paths": matched_paths,
                     "matched_path_count": len(matched_paths),

@@ -315,6 +315,35 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         unchanged = schema.postprocess_chemistry_difficulty(simple_classification, {})
         self.assertEqual(unchanged["difficulty_level"], "送分题")
 
+    def test_one_step_chemical_calculation_has_foundation_floor(self):
+        for calculation_type in ("化合价或化学式计算", "多类计算综合"):
+            with self.subTest(calculation_type=calculation_type):
+                value = rating("送分题")
+                value["features"].update({
+                    "calculation_type": calculation_type,
+                    "calculation_steps": "1步",
+                    "calculation_structure": "一步或口算",
+                })
+                result = schema.postprocess_chemistry_difficulty(value, {})
+                self.assertEqual(result["difficulty_level"], "基础题")
+                self.assertEqual(
+                    result["postprocess_actions"][-1]["rule"],
+                    "S1_giveaway_to_foundation_teacher_anchor",
+                )
+
+    def test_chemical_notation_writeback_has_foundation_floor(self):
+        value = rating("送分题")
+        value["features"].update({
+            "expression_type": "元素离子符号或化学式书写",
+            "subjective_response": "有",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(
+            result["postprocess_actions"][-1]["rule"],
+            "S1_giveaway_to_foundation_teacher_anchor",
+        )
+
     def test_question_image_evidence_preserves_life_sign_features(self):
         value = rating("送分题", ["U11_T03"])
         value["features"].update({
@@ -846,6 +875,9 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("必须按指定的严格JSON Schema输出一个完整对象", prompt)
         self.assertNotIn("必须通过指定函数提交", prompt)
         self.assertIn("calculation_structure", prompt)
+        self.assertIn("不能仅因四幅图和规则切换升为中等题", prompt)
+        self.assertIn("不能把“多条规则分别判断”单独作为升到中等题的依据", prompt)
+        self.assertIn("10 g甲与足量乙反应", prompt)
 
     def test_prompt_json_example_follows_runtime_contract(self):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
