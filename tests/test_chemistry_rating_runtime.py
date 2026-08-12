@@ -994,18 +994,27 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn("多个高难环节共同决定答案", prompt)
         self.assertIn("4-5步", prompt)
         self.assertIn("不能单独否决压轴题", prompt)
-        self.assertIn("【Case 23：氧分子与含氧物质】", prompt)
-        self.assertIn("【Case 60：石青分阶段受热】", prompt)
-        self.assertIn("【Case 65：锌与两种盐溶液反应后的滤液滤渣】", prompt)
-        self.assertIn("【Case 101：单一高难实验或计算 vs 多类型高难任务耦合】", prompt)
-        self.assertIn("【Case 55：装置作用、顺序、改进与计算联合】", prompt)
-        self.assertNotIn("【Case 102", prompt)
-        case_numbers = [int(value) for value in re.findall(r"【Case (\d+)", prompt)]
-        self.assertEqual(case_numbers, list(range(1, 102)))
+        self.assertIn("【Case 8：氧分子与含氧物质】", prompt)
+        self.assertIn("【Case 2：石青分阶段受热】", prompt)
+        self.assertIn("【Case 7：锌与两种盐溶液反应后的滤液滤渣】", prompt)
+        self.assertIn("【Case 6：单一高难实验或计算 vs 多类型高难任务耦合】", prompt)
+        self.assertIn("【Case 6：装置作用、顺序、改进与计算联合】", prompt)
+        case_sections = re.findall(
+            r"^###\s+[^\n]+\n(.*?)(?=^###\s+|^##\s+|\Z)",
+            prompt,
+            re.MULTILINE | re.DOTALL,
+        )
+        numbered_sections = [
+            [int(value) for value in re.findall(r"【Case (\d+)", section)]
+            for section in case_sections
+            if "【Case " in section
+        ]
+        self.assertEqual(len(numbered_sections), 9)
+        for case_numbers in numbered_sections:
+            self.assertEqual(case_numbers, list(range(1, len(case_numbers) + 1)))
         self.assertNotIn("同档锚点", prompt)
         self.assertNotIn("补充边界", prompt)
-        self.assertIn("【Case 17：利用化合价代数和求化合价或化学式】", prompt)
-        self.assertIn("【Case 67：常见化学式再认 vs 化合价关系应用】", prompt)
+        self.assertIn("【Case 2：利用化合价代数和求化合价或化学式】", prompt)
         self.assertIn("禁止借用相邻字段的枚举", prompt)
         self.assertIn("必须按指定的严格JSON Schema输出一个完整对象", prompt)
         self.assertNotIn("必须通过指定函数提交", prompt)
