@@ -117,6 +117,32 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         self.assertNotIn("### 4. response_operations", prompt)
         self.assertNotIn("### 6. cross_subject_operations", prompt)
 
+    def test_prompt_absorbs_reviewed_branch_case_anchors(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        for anchor in (
+            "【Case 13：同一低难规则筛选四项】",
+            "【Case 17：灭火场景与原理匹配】",
+            "【Case 13：两个跨单元原因的规范表达】",
+            "【Case 9：反应关系网络逐项验证】",
+            "【Case 7：锌与两种盐溶液反应后的滤液滤渣】",
+        ):
+            with self.subTest(anchor=anchor):
+                self.assertIn(anchor, prompt)
+
+    def test_absorbed_branch_guidance_keeps_seventeen_field_contract(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "features中的17项只能从给定枚举中各选一个完整值",
+            prompt,
+        )
+        self.assertNotIn("features中的30项", prompt)
+        self.assertNotIn("30个细粒度特征", prompt)
+        self.assertNotIn("`knowledge_distribution`", prompt)
+        self.assertNotIn("`chemical_object_distribution`", prompt)
+        self.assertNotIn("`step_count`", prompt)
+
     def test_prompt_final_path_has_priority_over_hard_dense_path(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
