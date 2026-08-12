@@ -1061,6 +1061,13 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertIn('"structured_output_json_complete": False', runtime)
         self.assertIn('"token_anomaly_flags": []', runtime)
         self.assertIn("completion_tokens_abnormally_high", runtime)
+        self.assertIn('usage.get("input_tokens_details", {})', runtime)
+        self.assertIn('"cached_tokens" in input_token_details', runtime)
+        self.assertIn('image_status["api_cached_input_tokens"]', runtime)
+        self.assertIn('image_status["api_uncached_input_tokens"]', runtime)
+        self.assertIn('image_status["cache_hit_ratio"]', runtime)
+        self.assertIn('"prefix_cache_not_hit"', runtime)
+        self.assertIn('"cache_usage_details_missing"', runtime)
 
     def test_junior_runtime_has_no_legacy_or_source_label_logic(self):
         paths = [
