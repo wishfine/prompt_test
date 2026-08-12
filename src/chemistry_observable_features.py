@@ -124,6 +124,7 @@ TASK_TYPES = {
     "定量计算",
     "方案设计与评价",
     "新信息应用",
+    "其他未归类任务（仅审计）",
 }
 
 # rule_families不再复刻task_groups的粗任务类型，而是记录学生实际
@@ -144,6 +145,7 @@ RULE_FAMILIES = {
     "定量关系与计算",
     "方案设计或评价",
     "新信息迁移",
+    "其他未归类规则（仅审计）",
 }
 
 RESPONSE_OPERATIONS = {
@@ -162,6 +164,7 @@ RESPONSE_OPERATIONS = {
     "方案设计或评价",
     "规范原因表达",
     "开放举例或补写",
+    "其他未归类作答操作（仅审计）",
 }
 
 CROSS_SUBJECT_OPERATIONS = {
@@ -169,6 +172,7 @@ CROSS_SUBJECT_OPERATIONS = {
     "物理过程或物理量关系",
     "生物过程或健康机制",
     "数学函数、几何或统计模型",
+    "其他未归类跨学科操作（仅审计）",
 }
 CURRICULUM_UNITS = {f"U{i}" for i in range(1, 12)}
 
@@ -202,6 +206,7 @@ CURRICULUM_TOPIC_NAMES = {
     "U10-3": "常见的盐",
     "U11-1": "化学与人体健康",
     "U11-2": "化学与可持续发展",
+    "U_OTHER": "其他未归类课题（仅审计）",
 }
 CURRICULUM_TOPICS = set(CURRICULUM_TOPIC_NAMES)
 
@@ -210,6 +215,7 @@ PARALLEL_TASK_RELATIONS = {
     "同一规则下多个对象",
     "不同规则的独立任务",
     "共享同一化学模型的关联任务",
+    "其他未归类并列关系（仅审计）",
 }
 
 VISUAL_TASK_STRUCTURES = {
@@ -218,6 +224,7 @@ VISUAL_TASK_STRUCTURES = {
     "多图独立同规则识别",
     "多图独立不同规则判断",
     "共享装置流程或图表模型",
+    "其他未归类视觉结构（仅审计）",
 }
 
 ERROR_ANALYSIS_OPERATIONS = {
@@ -227,6 +234,7 @@ ERROR_ANALYSIS_OPERATIONS = {
     "操作偏差到最终结果方向",
     "多因素误差比较",
     "定量误差修正",
+    "其他未归类误差操作（仅审计）",
 }
 
 REACTION_STRUCTURES = {
@@ -236,6 +244,7 @@ REACTION_STRUCTURES = {
     "产物进入后一反应",
     "先后竞争或过量不足",
     "分情况反应模型",
+    "其他未归类反应结构（仅审计）",
 }
 
 CONDITION_OPERATIONS = {
@@ -246,6 +255,7 @@ CONDITION_OPERATIONS = {
     "范围或边界",
     "分类讨论",
     "干扰条件排除",
+    "其他未归类条件操作（仅审计）",
 }
 
 REPRESENTATION_OPERATIONS = {
@@ -259,6 +269,7 @@ REPRESENTATION_OPERATIONS = {
     "化学方程式→定量关系",
     "图表数据→化学关系",
     "文字新信息→化学关系",
+    "其他未归类表征操作（仅审计）",
 }
 
 EVIDENCE_OPERATIONS = {
@@ -268,6 +279,7 @@ EVIDENCE_OPERATIONS = {
     "排除多个候选解释",
     "处理冲突证据",
     "补充实验获得唯一结论",
+    "其他未归类证据操作（仅审计）",
 }
 
 EXPERIMENT_OPERATIONS = {
@@ -279,6 +291,7 @@ EXPERIMENT_OPERATIONS = {
     "方案设计",
     "方案评价或补充实验",
     "多阶段定量探究",
+    "其他未归类实验操作（仅审计）",
 }
 
 GRAPH_TABLE_OPERATIONS = {
@@ -288,6 +301,7 @@ GRAPH_TABLE_OPERATIONS = {
     "趋势判断",
     "拐点平台或分段",
     "多图表联合",
+    "其他未归类图表操作（仅审计）",
 }
 
 CALCULATION_OPERATIONS = {
@@ -299,6 +313,7 @@ CALCULATION_OPERATIONS = {
     "多反应定量关系",
     "联立",
     "范围或分类计算",
+    "其他未归类计算操作（仅审计）",
 }
 
 NEW_INFORMATION_OPERATIONS = {
@@ -308,6 +323,7 @@ NEW_INFORMATION_OPERATIONS = {
     "根据新信息建立一个关系",
     "新关系被多个任务共同使用",
     "依赖题干未给出的超纲化学知识",
+    "其他未归类新信息操作（仅审计）",
 }
 
 SOLUTION_TOPOLOGIES = {
@@ -318,6 +334,7 @@ SOLUTION_TOPOLOGIES = {
     "未知组分消元或组成不变量",
     "双来源交叉验证",
     "多阶段反应网络",
+    "其他未归类解题拓扑（仅审计）",
 }
 
 EXPERIMENT_TASK_STRUCTURES = {
@@ -327,12 +344,37 @@ EXPERIMENT_TASK_STRUCTURES = {
     "操作偏差因果链",
     "控制变量或数据归纳",
     "方案设计或评价",
+    "其他未归类实验结构（仅审计）",
 }
+
+
+# 中文枚举是唯一传输契约。下列值只供程序内部兜底；模型看不到，
+# 也不参与计数或触发自动升档。
+OBSERVABLE_FALLBACK_LABEL_BY_FIELD = {
+    "task_type": "其他未归类任务（仅审计）",
+    "rule_families": "其他未归类规则（仅审计）",
+    "response_operations": "其他未归类作答操作（仅审计）",
+    "cross_subject_operations": "其他未归类跨学科操作（仅审计）",
+    "parallel_task_relation": "其他未归类并列关系（仅审计）",
+    "solution_topology": "其他未归类解题拓扑（仅审计）",
+    "reaction_structure": "其他未归类反应结构（仅审计）",
+    "condition_operations": "其他未归类条件操作（仅审计）",
+    "representation_operations": "其他未归类表征操作（仅审计）",
+    "evidence_operations": "其他未归类证据操作（仅审计）",
+    "experiment_operation": "其他未归类实验操作（仅审计）",
+    "experiment_task_structure": "其他未归类实验结构（仅审计）",
+    "visual_task_structure": "其他未归类视觉结构（仅审计）",
+    "graph_table_operation": "其他未归类图表操作（仅审计）",
+    "error_analysis_operation": "其他未归类误差操作（仅审计）",
+    "calculation_operations": "其他未归类计算操作（仅审计）",
+    "new_information_operation": "其他未归类新信息操作（仅审计）",
+}
+OBSERVABLE_FALLBACK_LABELS = set(OBSERVABLE_FALLBACK_LABEL_BY_FIELD.values())
 
 
 # 与物理生产脚本相同：先把模型偶发的近义输出收敛到
 # 可审计枚举，再作严格校验。只收录语义唯一的别名；无法
-# 唯一判断的值仍会被严格校验拒绝，不会默认填低档。
+# 唯一判断的值降级为仅审计兜底值，不会默认填成任何有效难度信号。
 OBSERVABLE_FIELD_ALIASES = {
     "new_ininformation_operation": "new_information_operation",
 }
@@ -404,7 +446,7 @@ RULE_FAMILY_ALIASES = {
 
 # 合法操作枚举偶尔被模型写入rule_families。下列值都能同时确定
 # 对应规则族和原本所属操作字段，因此可无损搬回；语义不唯一的值
-# 不在这里兜底，仍交给严格校验触发重试。
+# 不在这里猜测，统一降级为内部审计值并禁止自动写回。
 RULE_FAMILY_CROSS_FIELD_MOVES = {
     "微观粒子→化学符号": (
         "化学用语书写",
@@ -511,10 +553,19 @@ OBSERVABLE_ENUM_VALUES_BY_FIELD = {
     "calculation_operations": CALCULATION_OPERATIONS,
     "new_information_operation": NEW_INFORMATION_OPERATIONS,
 }
+OBSERVABLE_KNOWN_ENUM_LABELS = set().union(
+    *OBSERVABLE_ENUM_VALUES_BY_FIELD.values()
+)
 
 
 def _clean_enum_text(value: Any) -> str:
     return "".join(str(value or "").strip().split())
+
+
+def _normalization_reason(field: str, old: Any, new: Any) -> str:
+    if new == OBSERVABLE_FALLBACK_LABEL_BY_FIELD.get(field):
+        return "未知枚举降级为仅审计兜底值"
+    return "枚举近义归一"
 
 
 def _canonical_task_type(value: Any) -> str:
@@ -533,14 +584,15 @@ def _canonical_task_type(value: Any) -> str:
         return "方案设计与评价"
     if any(word in clean for word in ("反应条件", "反应速率")):
         return "性质与反应判断"
-    return clean
+    return OBSERVABLE_FALLBACK_LABEL_BY_FIELD["task_type"]
 
 
 def _canonical_rule_family(value: Any) -> str:
     clean = _clean_enum_text(value)
     if clean in RULE_FAMILIES:
         return clean
-    return RULE_FAMILY_ALIASES.get(clean, clean)
+    aliased = RULE_FAMILY_ALIASES.get(clean)
+    return aliased or OBSERVABLE_FALLBACK_LABEL_BY_FIELD["rule_families"]
 
 
 def _canonical_enum_value(field: str, value: Any) -> str:
@@ -548,7 +600,15 @@ def _canonical_enum_value(field: str, value: Any) -> str:
     allowed = OBSERVABLE_ENUM_VALUES_BY_FIELD[field]
     if clean in allowed:
         return clean
-    return ENUM_VALUE_ALIASES.get(field, {}).get(clean, clean)
+    aliased = ENUM_VALUE_ALIASES.get(field, {}).get(clean)
+    if aliased:
+        return aliased
+    # 先保留“合法值写错字段”的情况，后续确定性串位修复会把它移回
+    # 正确字段。只有所有已知枚举都不匹配时才降级为内部兜底值。
+    if clean in OBSERVABLE_KNOWN_ENUM_LABELS:
+        return clean
+    # 先保留未知值，给后续跨字段修复机会；所有修复结束后再统一降级。
+    return clean
 
 
 def _canonical_curriculum_topic(value: Any) -> Any:
@@ -565,16 +625,16 @@ def _canonical_curriculum_topic(value: Any) -> Any:
             f"{code}（{name}）",
         }:
             return code
-    return clean
+    return "U_OTHER"
 
 
 def normalize_observable_features(
     features: Any,
 ) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    """按物理生产逻辑对常见近义枚举作确定性归一。
+    """按物理生产逻辑作确定性归一并保留可审计兜底值。
 
-    未知值不填默认值，后续严格校验仍会拒绝，避免把
-    语义不明的输出静默改成低档特征。
+    语义唯一的近义值转成正式中文契约。未知枚举不会被猜成
+    某个有效难度信号，而是转成“仅审计”兜底值；后处理据此禁用写回。
     """
     if not isinstance(features, dict):
         return features, []
@@ -609,21 +669,25 @@ def normalize_observable_features(
             continue
         normalized[key] = copy.deepcopy(value)
 
-    # solution_topology偶发收到证据操作。将证据事实移回证据数组，
-    # 同时只采用该证据能够保证成立的最低拓扑，不猜测更强结构。
+    # solution_topology偶发收到证据操作。证据类型不能唯一决定解题拓扑：
+    # “多证据共同成立”既可能是一条线性链，也可能是交叉验证；排除候选
+    # 也不必然意味着条件分支。因此只无损搬回证据字段，拓扑降级为内部
+    # 审计值，绝不为了通过Schema猜一个会参与后处理的有效枚举。
     topology_evidence_moves = {
-        "排除多个候选解释": "条件分支或范围筛选",
-        "多证据共同成立": "双来源交叉验证",
+        "排除多个候选解释",
+        "多证据共同成立",
     }
     raw_topology = normalized.get("solution_topology")
     if raw_topology in topology_evidence_moves:
-        normalized["solution_topology"] = topology_evidence_moves[raw_topology]
+        normalized["solution_topology"] = (
+            OBSERVABLE_FALLBACK_LABEL_BY_FIELD["solution_topology"]
+        )
         append_unique("evidence_operations", raw_topology)
         record(
             "solution_topology→evidence_operations",
             raw_topology,
             normalized["solution_topology"],
-            "证据操作字段串位修复",
+            "语义不唯一，降级为仅审计兜底值",
             force=True,
         )
 
@@ -637,7 +701,12 @@ def normalize_observable_features(
                 continue
             old_type = group.get("task_type")
             new_type = _canonical_task_type(old_type)
-            record("task_groups.task_type", old_type, new_type, "任务类型近义归一")
+            record(
+                "task_groups.task_type",
+                old_type,
+                new_type,
+                _normalization_reason("task_type", old_type, new_type),
+            )
             count = group.get("count")
             if isinstance(count, str) and count.strip().isdigit():
                 converted_count = int(count.strip())
@@ -683,7 +752,13 @@ def normalize_observable_features(
                 canonical = _canonical_rule_family(clean_value)
             if canonical not in new_values:
                 new_values.append(canonical)
-        record("rule_families", old_values, new_values, "规则族近义归一与去重")
+        reason = (
+            "未知枚举降级为仅审计兜底值"
+            if OBSERVABLE_FALLBACK_LABEL_BY_FIELD["rule_families"]
+            in new_values
+            else "规则族近义归一与去重"
+        )
+        record("rule_families", old_values, new_values, reason)
         normalized["rule_families"] = new_values
 
     for field in (
@@ -702,7 +777,13 @@ def normalize_observable_features(
             canonical = _canonical_enum_value(field, value)
             if canonical not in canonical_values:
                 canonical_values.append(canonical)
-        record(field, values, canonical_values, "枚举近义归一与去重")
+        reason = (
+            "未知枚举降级为仅审计兜底值"
+            if OBSERVABLE_FALLBACK_LABEL_BY_FIELD.get(field)
+            in canonical_values
+            else "枚举近义归一与去重"
+        )
+        record(field, values, canonical_values, reason)
         normalized[field] = canonical_values
 
     # “宏观现象→宏观含义”没有跨表征转换，今天的重试结果也将其删除。
@@ -724,7 +805,7 @@ def normalize_observable_features(
     # 表征转换和定量计算是两个不同侧面。模型偶尔会把合法的表征枚举
     # 写进 calculation_operations；这种串位可以无损修复，但不能凭空
     # 猜测缺失的计算方法。若移动后定量任务没有计算操作，后续一致性
-    # 校验仍会要求模型重试。
+    # 质量审计会标记证据不完整并禁止依赖它自动写回。
     representation_values = normalized.get("representation_operations")
     calculation_values = normalized.get("calculation_operations")
     if isinstance(representation_values, list) and isinstance(
@@ -844,7 +925,8 @@ def normalize_observable_features(
             )
 
         # “未知组成或量反推”是拓扑而不是计算方法。移回拓扑后不猜测
-        # 具体计算操作；若本题确有定量任务且没有方法，严格校验仍会重试。
+        # 具体计算操作；若本题确有定量任务且没有方法，质量审计会标记
+        # 证据不完整，保留首轮等级但禁止依赖计算特征自动写回。
         if "未知组成或量反推" in calculation_values:
             calculation_values.remove("未知组成或量反推")
             normalized["solution_topology"] = "未知组成或量反推"
@@ -951,23 +1033,42 @@ def normalize_observable_features(
                 force=True,
             )
 
-    # 出现图表数据转换至少意味着读取过图表。无法唯一判断是否还包含
-    # 多组比较或拐点分析时，只补最低可观测事实“直接读数”。
+    # 出现图表数据转换只能确定graph不能为“无”，不能确定究竟是直接
+    # 读数、多组比较、趋势、分段还是多图联合。使用内部兜底值，避免
+    # 把语义冲突伪装成低档“直接读数”。
     if (
         isinstance(representation_values, list)
         and "图表数据→化学关系" in representation_values
         and normalized.get("graph_table_operation") in {None, "无"}
     ):
-        normalized["graph_table_operation"] = "直接读数"
+        normalized["graph_table_operation"] = (
+            OBSERVABLE_FALLBACK_LABEL_BY_FIELD["graph_table_operation"]
+        )
         record(
             "graph_table_operation",
             "无",
-            "直接读数",
-            "由图表数据转换派生最低图表操作",
+            normalized["graph_table_operation"],
+            "语义不唯一，降级为仅审计兜底值",
             force=True,
         )
 
     raw_experiment_operation = normalized.get("experiment_operation")
+    if raw_experiment_operation in EXPERIMENT_TASK_STRUCTURES - {
+        "无实验判断",
+        "其他未归类实验结构（仅审计）",
+    }:
+        normalized["experiment_task_structure"] = raw_experiment_operation
+        normalized["experiment_operation"] = (
+            OBSERVABLE_FALLBACK_LABEL_BY_FIELD["experiment_operation"]
+        )
+        record(
+            "experiment_operation→experiment_task_structure",
+            raw_experiment_operation,
+            normalized["experiment_operation"],
+            "语义不唯一，降级为仅审计兜底值",
+            force=True,
+        )
+        raw_experiment_operation = normalized["experiment_operation"]
     if raw_experiment_operation in {
         "操作偏差因果链",
         "操作偏差到最终结果方向",
@@ -978,12 +1079,15 @@ def normalize_observable_features(
         else:
             normalized["error_analysis_operation"] = raw_experiment_operation
             normalized["experiment_task_structure"] = "操作偏差因果链"
-        normalized["experiment_operation"] = "基础操作或读数"
+        normalized["experiment_operation"] = (
+            OBSERVABLE_FALLBACK_LABEL_BY_FIELD["experiment_operation"]
+        )
         record(
             "experiment_operation",
             raw_experiment_operation,
-            "基础操作或读数",
-            "误差结构值移回对应字段",
+            normalized["experiment_operation"],
+            "语义不唯一，降级为仅审计兜底值",
+            force=True,
         )
 
     for field in (
@@ -1001,7 +1105,12 @@ def normalize_observable_features(
             continue
         old_value = normalized[field]
         new_value = _canonical_enum_value(field, old_value)
-        record(field, old_value, new_value, "枚举近义归一")
+        record(
+            field,
+            old_value,
+            new_value,
+            _normalization_reason(field, old_value, new_value),
+        )
         normalized[field] = new_value
 
     topics = normalized.get("curriculum_topics")
@@ -1013,7 +1122,11 @@ def normalize_observable_features(
             "curriculum_topics",
             topics,
             canonical_topics,
-            "剥离与教材映射匹配的课题名称后缀",
+            (
+                "未知枚举降级为仅审计兜底值"
+                if "U_OTHER" in canonical_topics
+                else "剥离与教材映射匹配的课题名称后缀"
+            ),
         )
         normalized["curriculum_topics"] = canonical_topics
 
@@ -1034,16 +1147,12 @@ def normalize_observable_features(
         graph_op in GRAPH_TABLE_OPERATIONS - {"无"}
         and normalized.get("visual_task_structure") == "无必要视觉信息"
     ):
-        visual = (
-            "单图直接识别"
-            if graph_op == "直接读数"
-            else "共享装置流程或图表模型"
-        )
+        visual = OBSERVABLE_FALLBACK_LABEL_BY_FIELD["visual_task_structure"]
         record(
             "visual_task_structure",
             normalized["visual_task_structure"],
             visual,
-            "由已填图表操作修复视觉一致性",
+            "语义不唯一，降级为仅审计兜底值",
         )
         normalized["visual_task_structure"] = visual
 
@@ -1062,45 +1171,132 @@ def normalize_observable_features(
         ) != "无误差分析"
         or experiment_structure not in {None, "无实验判断"}
     ):
-        operation_by_structure = {
-            "控制变量或数据归纳": "数据归纳",
-            "方案设计或评价": "方案评价或补充实验",
-            "操作偏差因果链": "基础操作或读数",
-            "多仪器或多条件比较": "基础操作或读数",
-            "名称或单点规范匹配": "基础操作或读数",
-        }
-        inferred = operation_by_structure.get(
-            experiment_structure,
-            "基础操作或读数",
-        )
+        inferred = OBSERVABLE_FALLBACK_LABEL_BY_FIELD["experiment_operation"]
         record(
             "experiment_operation",
             experiment_op,
             inferred,
-            "由已填实验任务事实修复内部一致性",
+            "语义不唯一，降级为仅审计兜底值",
         )
         normalized["experiment_operation"] = inferred
         experiment_op = inferred
     if experiment_op not in {None, "无"} and experiment_structure == "无实验判断":
-        structure_by_operation = {
-            "基础操作或读数": "名称或单点规范匹配",
-            "变量控制": "控制变量或数据归纳",
-            "现象解释": "控制变量或数据归纳",
-            "数据归纳": "控制变量或数据归纳",
-            "方案设计": "方案设计或评价",
-            "方案评价或补充实验": "方案设计或评价",
-            "多阶段定量探究": "方案设计或评价",
-        }
-        inferred = structure_by_operation[experiment_op]
+        inferred = OBSERVABLE_FALLBACK_LABEL_BY_FIELD[
+            "experiment_task_structure"
+        ]
         record(
             "experiment_task_structure",
             experiment_structure,
             inferred,
-            "由已填实验操作修复内部一致性",
+            "语义不唯一，降级为仅审计兜底值",
         )
         normalized["experiment_task_structure"] = inferred
 
+    # 跨字段搬运和一致性修复结束后，剩余非法枚举才进入内部兜底值。这样
+    # “控制变量”写进条件字段等可修复串位不会过早丢失原语义。
+    for field in (
+        "response_operations",
+        "cross_subject_operations",
+        "condition_operations",
+        "representation_operations",
+        "evidence_operations",
+        "calculation_operations",
+    ):
+        values = normalized.get(field)
+        if not isinstance(values, list):
+            continue
+        fallback = OBSERVABLE_FALLBACK_LABEL_BY_FIELD.get(field)
+        if not fallback:
+            continue
+        repaired: List[str] = []
+        for value in values:
+            canonical = _canonical_enum_value(field, value)
+            if canonical not in OBSERVABLE_ENUM_VALUES_BY_FIELD[field]:
+                record(
+                    field,
+                    value,
+                    fallback,
+                    "未知枚举降级为仅审计兜底值",
+                    force=True,
+                )
+                canonical = fallback
+            if canonical not in repaired:
+                repaired.append(canonical)
+        normalized[field] = repaired
+
+    for field in (
+        "parallel_task_relation",
+        "solution_topology",
+        "reaction_structure",
+        "experiment_operation",
+        "experiment_task_structure",
+        "visual_task_structure",
+        "graph_table_operation",
+        "error_analysis_operation",
+        "new_information_operation",
+    ):
+        value = normalized.get(field)
+        if field not in normalized:
+            continue
+        if value not in OBSERVABLE_ENUM_VALUES_BY_FIELD[field]:
+            fallback = OBSERVABLE_FALLBACK_LABEL_BY_FIELD[field]
+            record(
+                field,
+                value,
+                fallback,
+                "未知枚举降级为仅审计兜底值",
+                force=True,
+            )
+            normalized[field] = fallback
+
     return normalized, actions
+
+
+def observable_feature_quality_flags(
+    features: Dict[str, Any],
+    normalization_actions: Iterable[Dict[str, Any]] = (),
+) -> List[str]:
+    """返回不阻断评级、但会阻止自动写回的特征质量标记。"""
+    flags: List[str] = []
+    for group in features.get("task_groups", []):
+        if (
+            isinstance(group, dict)
+            and group.get("task_type")
+            == OBSERVABLE_FALLBACK_LABEL_BY_FIELD["task_type"]
+        ):
+            flags.append("fallback_enum:task_groups.task_type")
+    for field, fallback in OBSERVABLE_FALLBACK_LABEL_BY_FIELD.items():
+        if field == "task_type":
+            continue
+        value = features.get(field)
+        if value == fallback or (
+            isinstance(value, list) and fallback in value
+        ):
+            flags.append(f"fallback_enum:{field}")
+    if "U_OTHER" in features.get("curriculum_topics", []):
+        flags.append("fallback_enum:curriculum_topics")
+    has_quantitative_task = any(
+        isinstance(group, dict)
+        and group.get("task_type") == "定量计算"
+        for group in features.get("task_groups", [])
+    )
+    valid_calculations = [
+        value
+        for value in features.get("calculation_operations", [])
+        if value not in OBSERVABLE_FALLBACK_LABELS
+    ]
+    if has_quantitative_task and not valid_calculations:
+        flags.append("incomplete_calculation_evidence")
+    if any(
+        action.get("reason")
+        in {
+            "未知枚举降级为仅审计兜底值",
+            "语义不唯一，降级为仅审计兜底值",
+        }
+        for action in normalization_actions
+    ):
+        flags.append("ambiguous_enum_normalized_to_fallback")
+    return list(dict.fromkeys(flags))
 
 
 def _validate_unique_enum_list(
@@ -1159,8 +1355,9 @@ def _validate_single_enum(
 def validate_observable_features(features: Any) -> Dict[str, Any]:
     """严格校验正式 V5，并兼容读取历史 V6/V4/V3/V2。
 
-    校验器不静默补默认值：缺字段、多字段或枚举错误均直接
-    拒绝，便于重试提示精确修正。
+    校验器本身不猜测语义默认值。调用方应先执行确定性归一：未知中文
+    枚举会成为内部审计值；缺字段、多字段或结构错误仍拒绝，以便只修复
+    features，并冻结首轮等级和理由。
     """
     if not isinstance(features, dict):
         raise ValueError("features必须是JSON对象")
@@ -1364,14 +1561,9 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
         and validated["visual_task_structure"] == "无必要视觉信息"
     ):
         raise ValueError("存在图表任务时visual_task_structure不能为无必要视觉信息")
-    if (
-        any(
-            group["task_type"] == "定量计算"
-            for group in normalized_groups
-        )
-        and not validated["calculation_operations"]
-    ):
-        raise ValueError("定量计算任务必须记录calculation_operations")
+    # 定量任务存在但计算操作缺失属于“证据不完整”，不再让模型重生成
+    # 整份评级。observable_feature_quality_flags会记录该问题，并阻止依赖
+    # 计算字段的自动写回。
     if (
         any(
             group["task_type"] == "实验操作与探究"
@@ -1427,7 +1619,11 @@ def derive_observable_metrics(
     validated = validate_observable_features(features)
     has_topic_contract = "curriculum_topics" in validated
     if has_topic_contract:
-        curriculum_topics = validated["curriculum_topics"]
+        curriculum_topics = [
+            topic
+            for topic in validated["curriculum_topics"]
+            if topic != "U_OTHER"
+        ]
         curriculum_units = sorted(
             {topic.split("-", 1)[0] for topic in curriculum_topics}
         )
@@ -1488,38 +1684,85 @@ def derive_observable_metrics(
             + "）"
         )
 
+    effective_groups = [
+        group
+        for group in validated["task_groups"]
+        if group["task_type"]
+        != OBSERVABLE_FALLBACK_LABEL_BY_FIELD["task_type"]
+    ]
+    effective_rules = [
+        value
+        for value in validated["rule_families"]
+        if value != OBSERVABLE_FALLBACK_LABEL_BY_FIELD["rule_families"]
+    ]
+    valid_response_operations = [
+        value
+        for value in validated.get("response_operations", [])
+        if value not in OBSERVABLE_FALLBACK_LABELS
+    ]
+    valid_cross_subject_operations = [
+        value
+        for value in validated.get("cross_subject_operations", [])
+        if value not in OBSERVABLE_FALLBACK_LABELS
+    ]
+    valid_condition_operations = [
+        value
+        for value in validated["condition_operations"]
+        if value not in OBSERVABLE_FALLBACK_LABELS
+    ]
+    valid_representation_operations = [
+        value
+        for value in validated["representation_operations"]
+        if value not in OBSERVABLE_FALLBACK_LABELS
+    ]
+    valid_evidence_operations = [
+        value
+        for value in validated["evidence_operations"]
+        if value not in OBSERVABLE_FALLBACK_LABELS
+    ]
+    valid_calculation_operations = [
+        value
+        for value in validated["calculation_operations"]
+        if value not in OBSERVABLE_FALLBACK_LABELS
+    ]
+    advanced_calculation_operations = [
+        value
+        for value in valid_calculation_operations
+        if value
+        in {
+            "组分消元或组成不变量",
+            "差量",
+            "多反应定量关系",
+            "联立",
+            "范围或分类计算",
+        }
+    ]
+
     return {
         "longest_chain_steps": len(
             validated["longest_solution_chain"]
         ),
         "effective_task_count": sum(
-            group["count"] for group in validated["task_groups"]
+            group["count"] for group in effective_groups
         ),
-        "task_group_count": len(validated["task_groups"]),
-        "rule_family_count": len(validated["rule_families"]),
-        "response_operation_count": len(
-            validated.get("response_operations", [])
-        ),
+        "task_group_count": len(effective_groups),
+        "rule_family_count": len(effective_rules),
+        "response_operation_count": len(valid_response_operations),
         "cross_subject_operation_count": len(
-            validated.get("cross_subject_operations", [])
+            valid_cross_subject_operations
         ),
         "curriculum_topic_count": topic_count,
         "curriculum_unit_count": len(curriculum_units),
         "curriculum_span_type": curriculum_span_type,
         "curriculum_coupling_type": curriculum_coupling_type,
         "curriculum_span_summary": curriculum_span_summary,
-        "condition_operation_count": len(
-            validated["condition_operations"]
-        ),
+        "condition_operation_count": len(valid_condition_operations),
         "representation_operation_count": len(
-            validated["representation_operations"]
+            valid_representation_operations
         ),
-        "evidence_operation_count": len(
-            validated["evidence_operations"]
-        ),
-        "calculation_operation_count": len(
-            validated["calculation_operations"]
-        ),
+        "evidence_operation_count": len(valid_evidence_operations),
+        "calculation_operation_count": len(valid_calculation_operations),
+        "advanced_calculation_operations": advanced_calculation_operations,
         "has_task_dependency": has_task_dependency,
         "direct_retrieval_task_count": validated.get(
             "direct_retrieval_task_count"

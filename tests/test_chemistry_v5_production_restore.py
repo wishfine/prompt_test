@@ -134,7 +134,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "features中的17项只能从给定枚举中各选一个完整值",
+            "`features`必须且只能包含以下17项",
             prompt,
         )
         self.assertNotIn("features中的30项", prompt)
@@ -147,11 +147,11 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "先检查压轴题的两条路径；若压轴路径成立，不得再用拔高题的高密度综合链截停",
+            "先检查压轴两条路径",
             prompt,
         )
         self.assertIn(
-            "反应、图表、实验、计算、证据或条件中至少两类共同参与",
+            "任一路径成立后，不得再追加",
             prompt,
         )
         self.assertNotIn(
@@ -191,11 +191,11 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "差量是决定性建模方法时，应进入拔高题比较",
+            "差量法是决定性方法，不能因反应熟悉降为中等",
             prompt,
         )
         self.assertIn(
-            "不得仅因差量关系属于熟悉方法而停在中等题",
+            "差量/守恒必须由学生自主选择并成为决定性建模方法",
             prompt,
         )
 
@@ -203,7 +203,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "同一种作答形式不等于同一条具体化学命题",
+            "不能因作答形式都属于主观表达而合并成同一规则",
             prompt,
         )
 
@@ -211,15 +211,15 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "不同对象并不自动升档",
+            "多个对象、较长背景或多幅候选图片不自动增加难度",
             prompt,
         )
         self.assertIn(
-            "分别检索不同的对象—结论对应关系",
+            "四种物质分别依赖不同的性质—用途事实",
             prompt,
         )
         self.assertIn(
-            "同一课内结论的一眼识别",
+            "同一教材结论的一眼重复",
             prompt,
         )
 
@@ -238,10 +238,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             "理解应用背景→核验方程式",
             prompt,
         )
-        self.assertIn(
-            "科学家成就、元素缺乏症、性质用途或实验现象",
-            prompt,
-        )
+        self.assertIn("若两个课题只是共同支撑这一个核验结论", prompt)
 
     def test_prompt_keeps_heterogeneous_subjective_breadth_above_basic(
         self,
@@ -249,11 +246,11 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "四项以上非重复任务",
+            "四项以上非重复反应事实",
             prompt,
         )
         self.assertIn(
-            "规范现象、操作目的、失败原因、化学用语书写或含义解释",
+            "作用、目的、失败原因和规范现象分别调用不同化学依据",
             prompt,
         )
 
@@ -271,7 +268,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             prompt,
         )
         self.assertIn(
-            "由结论反推操作或控制变量方案",
+            "由结论反推操作和方案评价",
             prompt,
         )
 
@@ -413,8 +410,8 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
     ) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("若本题与某组Case在任务结构上同型", prompt)
-        self.assertIn("若不存在同型Case，直接按§二", prompt)
+        self.assertIn("有同型Case时只用它核验新增任务", prompt)
+        self.assertIn("没有同型Case时直接按§二", prompt)
         self.assertNotIn(
             "先从Case中选择结构最接近的一对低档侧/高档侧",
             prompt,
@@ -427,11 +424,9 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
 
         levels = prompt.index("## 二、教师五档难度")
         boundaries = prompt.index("## 三、教师相邻边界例题")
-        depth_breadth = prompt.index("## 四、纵向深度、横向广度与课程跨度")
-        features = prompt.index("## 五、17项可观测特征协议")
+        features = prompt.index("## 四、17项可观测特征协议")
         self.assertLess(levels, boundaries)
-        self.assertLess(boundaries, depth_breadth)
-        self.assertLess(depth_breadth, features)
+        self.assertLess(boundaries, features)
 
     def test_all_teacher_examples_keep_concrete_three_part_format(
         self,
@@ -485,11 +480,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             prompt,
         )
         self.assertIn(
-            "单主线深定量路径具体缺少哪一项",
-            prompt,
-        )
-        self.assertIn(
-            "不得只写“缺少深度耦合、多模块或多阶段”",
+            "指出缺失的具体任务边",
             prompt,
         )
 
@@ -516,10 +507,10 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
 
         self.assertIn("依赖题干未给出的超纲化学知识", prompt)
         self.assertIn(
-            "curriculum_topics数组只能输出裸编码",
+            "只输出裸编码",
             prompt,
         )
-        self.assertIn("`U3-2`（原子结构）", prompt)
+        self.assertIn("`U3-2`原子结构", prompt)
         self.assertNotIn("U3-2原子结构", prompt)
 
     def test_topic_name_suffix_is_safely_normalized_to_bare_code(self) -> None:
@@ -545,14 +536,19 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             )
         )
 
-    def test_mismatched_topic_name_is_not_silently_normalized(self) -> None:
+    def test_mismatched_topic_name_uses_internal_audit_fallback(self) -> None:
         item = production_features()
         item["curriculum_topics"] = ["U3-2元素"]
 
-        normalized, _ = self.features.normalize_observable_features(item)
+        normalized, actions = self.features.normalize_observable_features(item)
+        validated = self.features.validate_observable_features(normalized)
+        flags = self.features.observable_feature_quality_flags(
+            validated,
+            actions,
+        )
 
-        with self.assertRaisesRegex(ValueError, "curriculum_topics"):
-            self.features.validate_observable_features(normalized)
+        self.assertEqual(validated["curriculum_topics"], ["U_OTHER"])
+        self.assertIn("fallback_enum:curriculum_topics", flags)
 
     def test_prompt_does_not_require_model_to_name_derived_span(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")

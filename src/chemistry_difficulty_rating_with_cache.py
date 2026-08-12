@@ -46,8 +46,10 @@ try:
         OBSERVABLE_V3_FEATURE_FIELDS,
         OBSERVABLE_V2_FEATURE_FIELDS,
         OBSERVABLE_ENUM_VALUES_BY_FIELD,
+        OBSERVABLE_FALLBACK_LABELS,
         derive_observable_metrics,
         normalize_observable_features,
+        observable_feature_quality_flags,
         validate_observable_features,
     )
 except ModuleNotFoundError:
@@ -59,8 +61,10 @@ except ModuleNotFoundError:
         OBSERVABLE_V3_FEATURE_FIELDS,
         OBSERVABLE_V2_FEATURE_FIELDS,
         OBSERVABLE_ENUM_VALUES_BY_FIELD,
+        OBSERVABLE_FALLBACK_LABELS,
         derive_observable_metrics,
         normalize_observable_features,
+        observable_feature_quality_flags,
         validate_observable_features,
     )
 
@@ -162,6 +166,7 @@ TEACHER_GUARD_AUDIT_ONLY_RULES = frozenset(
         "teacher_basic_to_medium_multi_rule_breadth_candidate",
         "teacher_basic_to_medium_parallel_reaction_multitopic_candidate",
         "teacher_hard_to_final_qualitative_evidence_network_candidate",
+        "teacher_medium_to_hard_explicit_difference_method",
     }
 )
 if (
@@ -829,9 +834,15 @@ def build_schema_repair_feedback(
     hints = [f"上次输出未通过化学特征schema：{error_text}"]
     for field, allowed in OBSERVABLE_ENUM_VALUES_BY_FIELD.items():
         if field in error_text:
+            fallback_values = set(OBSERVABLE_FALLBACK_LABELS)
+            allowed_values = sorted(
+                value
+                for value in allowed
+                if value not in fallback_values and value != "U_OTHER"
+            )
             hints.append(
-                f"{field}只能从以下原文中复制："
-                + "、".join(sorted(allowed))
+                f"{field}只能从以下中文枚举中逐字复制："
+                + "、".join(allowed_values)
                 + "。"
             )
     if "experiment_operation" in error_text:
@@ -864,6 +875,118 @@ def build_schema_repair_feedback(
         ]
     )
     return "\n".join(hints)
+
+
+def is_feature_schema_error(error: Exception) -> bool:
+    """判断错误是否可通过只重生成17项features修复。"""
+    text = str(error)
+    top_level_markers = (
+        "模型输出必须是JSON对象",
+        "模型返回空对象",
+        "顶层字段",
+        "difficulty_level",
+        "coarse_difficulty",
+        "reasoning必须",
+        "reasoning四个字段",
+    )
+    return not any(marker in text for marker in top_level_markers)
+
+
+def classify_feature_schema_repair(error: Exception) -> str:
+    """标记需要再次调用模型的特征修复为语义修复。
+
+    空格、数字字符串、唯一近义词、重复枚举和确定性字段串位已在
+    normalize_observable_features 中本地修复，不会进入本函数。若错误仍
+    需要模型重生成 features，就意味着至少一个题目事实或结构判断不确定；
+    为避免后处理放大这种不确定性，统一禁止该候选自动写回。
+    """
+    _ = error
+    return "semantic"
+
+
+def build_feature_schema_repair_feedback(
+    error: Exception,
+    invalid_candidate: Dict[str, Any],
+) -> str:
+    """生成只修复features的请求，明确禁止重写等级和理由。"""
+    features = invalid_candidate.get("features", invalid_candidate)
+    feedback = build_schema_repair_feedback(
+        error,
+        {"features": features},
+    )
+    return (
+        feedback
+        + "\n本次只输出一个JSON对象：{\"features\": {...}}。"
+        "不得输出或改写difficulty_level、coarse_difficulty、reasoning。"
+    )
+
+
+def merge_feature_repair_candidate(
+    original_candidate: Dict[str, Any],
+    repair_candidate: Dict[str, Any],
+    repair_kind: str = "format",
+) -> Dict[str, Any]:
+    """只合并修复后的features，保持首轮难度结论和理由不变。"""
+    if not isinstance(original_candidate, dict):
+        return copy.deepcopy(original_candidate)
+    repaired_features = (
+        repair_candidate.get("features")
+        if isinstance(repair_candidate, dict)
+        else None
+    )
+    if not isinstance(repaired_features, dict):
+        return copy.deepcopy(original_candidate)
+    merged = copy.deepcopy(original_candidate)
+    merged["features"] = copy.deepcopy(repaired_features)
+    merged["feature_schema_repair_kind"] = repair_kind
+    return merged
+
+
+def build_schema_retry_audit(
+    *,
+    first_candidate: Dict[str, Any],
+    accepted_candidate: Dict[str, Any],
+    schema_candidates: List[Dict[str, Any]],
+    schema_retry_count: int,
+    repair_kinds: Sequence[str],
+) -> Dict[str, Any]:
+    """构建首轮与接纳候选的可比较审计字段。"""
+    first = copy.deepcopy(first_candidate or accepted_candidate or {})
+    accepted = copy.deepcopy(accepted_candidate or first_candidate or {})
+    if not schema_retry_count:
+        repair_mode = "none"
+        repair_kind = "none"
+    else:
+        repair_mode = (
+            "features_only"
+            if any(
+                item.get("repair_mode") == "features_only"
+                for item in schema_candidates
+            )
+            else "full_rating"
+        )
+        unique_kinds = list(dict.fromkeys(repair_kinds))
+        repair_kind = (
+            "semantic"
+            if "semantic" in unique_kinds
+            else (unique_kinds[-1] if unique_kinds else "format")
+        )
+    return {
+        "difficulty_rating_first_attempt": first,
+        "first_attempt_level": str(first.get("difficulty_level", "") or ""),
+        "accepted_attempt_level": str(
+            accepted.get("difficulty_level", "") or ""
+        ),
+        "schema_retry_changed_level": (
+            first.get("difficulty_level") != accepted.get("difficulty_level")
+        ),
+        "schema_retry_changed_features": (
+            first.get("features") != accepted.get("features")
+        ),
+        "schema_candidates": copy.deepcopy(schema_candidates),
+        "schema_repair_mode": repair_mode,
+        "schema_repair_kind": repair_kind,
+    }
 
 
 def is_observable_feature_contract(features: Any) -> bool:
@@ -993,10 +1116,16 @@ def project_observable_to_core12(
     chain_steps = metrics["longest_chain_steps"]
     rule_count = metrics["rule_family_count"]
     unit_count = metrics["curriculum_unit_count"]
-    condition_ops = set(features["condition_operations"])
-    representation_ops = set(features["representation_operations"])
-    evidence_ops = set(features["evidence_operations"])
-    calculation_ops = set(features["calculation_operations"])
+    condition_ops = set(features["condition_operations"]) - OBSERVABLE_FALLBACK_LABELS
+    representation_ops = (
+        set(features["representation_operations"])
+        - OBSERVABLE_FALLBACK_LABELS
+    )
+    evidence_ops = set(features["evidence_operations"]) - OBSERVABLE_FALLBACK_LABELS
+    calculation_ops = (
+        set(features["calculation_operations"])
+        - OBSERVABLE_FALLBACK_LABELS
+    )
 
     has_nontrivial_operation = bool(
         condition_ops
@@ -1080,7 +1209,7 @@ def project_observable_to_core12(
         "产物进入后一反应": "多反应连续转化",
         "先后竞争或过量不足": "先后、竞争或过量不足",
         "分情况反应模型": "需要分情况判断的反应模型",
-    }[features["reaction_structure"]]
+    }.get(features["reaction_structure"], "无反应关系")
 
     if len(condition_ops) >= 3:
         constraint_complexity = "多层嵌套约束"
@@ -1114,7 +1243,7 @@ def project_observable_to_core12(
         "方案设计": "方案设计、评价或补充实验",
         "方案评价或补充实验": "方案设计、评价或补充实验",
         "多阶段定量探究": "多阶段探究与定量误差",
-    }[features["experiment_operation"]]
+    }.get(features["experiment_operation"], "无")
     error_operation = features.get(
         "error_analysis_operation",
         "无误差分析",
@@ -1134,7 +1263,7 @@ def project_observable_to_core12(
         "趋势判断": "多组比较归纳",
         "拐点平台或分段": "拐点、平台或分段反推",
         "多图表联合": "多图表耦合建模",
-    }[features["graph_table_operation"]]
+    }.get(features["graph_table_operation"], "无")
 
     if calculation_ops & {
         "组分消元或组成不变量",
@@ -1163,7 +1292,7 @@ def project_observable_to_core12(
         "根据新信息建立一个关系": "迁移后建立关系",
         "新关系被多个任务共同使用": "迁移后建立关系",
         "依赖题干未给出的超纲化学知识": "完全陌生模型现场建立",
-    }[features["new_information_operation"]]
+    }.get(features["new_information_operation"], "课内直接原型")
 
     effective_task_count = metrics["effective_task_count"]
     parallel_relation = features.get("parallel_task_relation")
@@ -1479,9 +1608,23 @@ def validate_rating_contract(rating_result: Any) -> Dict[str, Any]:
         except ValueError as exc:
             raise ChemistrySchemaError(str(exc)) from exc
         prepared["feature_normalization_actions"] = normalization_actions
+        prepared["feature_contract_quality_flags"] = (
+            observable_feature_quality_flags(
+                prepared["features"],
+                normalization_actions,
+            )
+        )
     else:
         prepared["features"] = validate_feature_contract(raw_features)
         prepared["feature_normalization_actions"] = []
+        prepared["feature_contract_quality_flags"] = []
+    if prepared.get("feature_schema_repair_kind") == "semantic":
+        prepared["feature_contract_quality_flags"].append(
+            "semantic_schema_repaired"
+        )
+    prepared["feature_contract_quality_flags"] = list(
+        dict.fromkeys(prepared["feature_contract_quality_flags"])
+    )
     return prepared
 
 # -------------------------- 4. 后处理纠偏规则 --------------------------
@@ -3494,6 +3637,17 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result["teacher_distribution_guard_writeback_enabled"] = (
         CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
     )
+    feature_quality_flags = list(
+        rating_result.get("feature_contract_quality_flags", [])
+    )
+    feature_quality_blocks_writeback = bool(feature_quality_flags)
+    rating_result["feature_quality_blocks_writeback"] = (
+        feature_quality_blocks_writeback
+    )
+    rating_result["writeback_eligible"] = not feature_quality_blocks_writeback
+    rating_result["writeback_ineligible_reasons"] = (
+        feature_quality_flags if feature_quality_blocks_writeback else []
+    )
     model_features = rating_result["features"]
     observable_contract = is_observable_feature_contract(model_features)
     schema_version = ""
@@ -4244,11 +4398,14 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         raw_level,
     )
     general_writeback_applied = bool(
-        CHEMISTRY_ENABLE_LEVEL_WRITEBACK and candidate_actions
+        CHEMISTRY_ENABLE_LEVEL_WRITEBACK
+        and candidate_actions
+        and not feature_quality_blocks_writeback
     )
     final_guard_writeback_applied = bool(
         CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK
         and final_boundary_guard_action
+        and not feature_quality_blocks_writeback
     )
     legacy_v3_deep_guard_audit_only = bool(
         teacher_guard_action
@@ -4270,6 +4427,7 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK
         and teacher_guard_action
         and not teacher_guard_writeback_blocked_rule
+        and not feature_quality_blocks_writeback
     )
     writeback_applied = bool(
         general_writeback_applied
@@ -4319,7 +4477,10 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     rating_result[
         "teacher_distribution_guard_writeback_blocked_reason"
     ] = (
-        (
+        "特征存在兜底或证据不完整，禁止自动写回："
+        + "、".join(feature_quality_flags)
+        if teacher_guard_action and feature_quality_blocks_writeback
+        else (
             "历史V3反应字段与当前拓扑口径不同，"
             "深定量规则仅保留候选审计："
             if legacy_v3_deep_guard_audit_only
@@ -4370,6 +4531,11 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 "已阻止自动写回："
             )
             + teacher_guard_writeback_blocked_rule
+        )
+    elif teacher_guard_action and feature_quality_blocks_writeback:
+        rating_result["feature_audit_flags"].append(
+            "特征存在仅审计兜底或证据不完整，已阻止自动写回："
+            + "、".join(feature_quality_flags)
         )
     elif teacher_guard_action and not teacher_guard_writeback_applied:
         rating_result["feature_audit_flags"].append(
@@ -4661,6 +4827,7 @@ async def call_model_with_cache(
     retries: int,
     timeout_sec: int,
     repair_feedback: str = "",
+    features_only_repair: bool = False,
 ) -> Tuple[
     Dict[str, Any],
     str,
@@ -4705,12 +4872,19 @@ async def call_model_with_cache(
         image_status["http_retry_count"] = retry
         user_content = build_user_content(data, selected_fields)
         if repair_feedback:
+            repair_tail = (
+                "本次只能输出{\"features\": {...}}；不要输出或改写"
+                "difficulty_level、coarse_difficulty、reasoning。"
+                if features_only_repair
+                else "保持实质难度判断不变，只修复缺失字段、非法枚举或JSON格式。"
+            )
             repair_part = {
                 "type": "input_text",
                 "text": (
                     "【上次输出修复要求】\n"
                     + repair_feedback
-                    + "\n保持实质难度判断不变，只修复缺失字段、非法枚举或JSON格式。"
+                    + "\n"
+                    + repair_tail
                 ),
             }
             if isinstance(user_content, list):
@@ -4846,7 +5020,15 @@ async def process_single_question(
         total_tokens = 0
         schema_retry_count = 0
         schema_errors: List[str] = []
+        schema_attempts: List[Dict[str, Any]] = []
+        schema_candidates: List[Dict[str, Any]] = []
+        schema_repair_kinds: List[str] = []
         repair_feedback = ""
+        features_only_repair = False
+        active_repair_kind = "none"
+        first_model_candidate: Dict[str, Any] = {}
+        feature_repair_base_candidate: Dict[str, Any] = {}
+        accepted_candidate: Dict[str, Any] = {}
         raw_result: Dict[str, Any] = {}
         raw_text = ""
         image_status: Dict[str, Any] = {}
@@ -4867,8 +5049,23 @@ async def process_single_question(
                     retries,
                     timeout_sec,
                     repair_feedback=repair_feedback,
+                    features_only_repair=features_only_repair,
                 )
-                raw_result = copy.deepcopy(candidate)
+                response_candidate = copy.deepcopy(candidate)
+                if not first_model_candidate and response_candidate:
+                    first_model_candidate = copy.deepcopy(response_candidate)
+                if features_only_repair and feature_repair_base_candidate:
+                    candidate = merge_feature_repair_candidate(
+                        feature_repair_base_candidate,
+                        response_candidate,
+                        repair_kind=active_repair_kind,
+                    )
+                elif (
+                    isinstance(candidate, dict)
+                    and "features" in candidate
+                    and "difficulty_level" in candidate
+                ):
+                    feature_repair_base_candidate = copy.deepcopy(candidate)
                 total_time += time_use
                 total_prompt_tokens += prompt_tokens
                 total_completion_tokens += completion_tokens
@@ -4883,16 +5080,83 @@ async def process_single_question(
                     )
                 except ChemistrySchemaError as exc:
                     schema_errors.append(str(exc))
+                    failed_attempt = {
+                        "attempt": schema_retry_count,
+                        "error": str(exc),
+                        "repair_mode": (
+                            "features_only"
+                            if features_only_repair
+                            else "full_rating"
+                        ),
+                        "repair_kind": active_repair_kind,
+                        "candidate": response_candidate,
+                        "accepted": False,
+                    }
+                    schema_attempts.append(copy.deepcopy(failed_attempt))
+                    schema_candidates.append(copy.deepcopy(failed_attempt))
                     if schema_retry_count >= MAX_SCHEMA_RETRIES:
                         raise RuntimeError(
                             f"schema校验重试耗尽({MAX_SCHEMA_RETRIES}): {exc}"
                         ) from exc
                     schema_retry_count += 1
-                    repair_feedback = build_schema_repair_feedback(
-                        exc,
-                        candidate,
+                    feature_error = is_feature_schema_error(exc)
+                    if feature_error:
+                        repair_kind = classify_feature_schema_repair(exc)
+                        schema_repair_kinds.append(repair_kind)
+                        active_repair_kind = (
+                            "semantic"
+                            if "semantic" in schema_repair_kinds
+                            else "format"
+                        )
+                        if isinstance(candidate, dict) and candidate.get(
+                            "features"
+                        ):
+                            feature_repair_base_candidate = copy.deepcopy(
+                                candidate
+                            )
+                    else:
+                        active_repair_kind = "full_rating"
+                    features_only_repair = bool(
+                        feature_repair_base_candidate and feature_error
+                    )
+                    repair_feedback = (
+                        build_feature_schema_repair_feedback(
+                            exc,
+                            candidate,
+                        )
+                        if features_only_repair
+                        else build_schema_repair_feedback(
+                            exc,
+                            candidate,
+                        )
                     )
                     continue
+
+                accepted_candidate = copy.deepcopy(candidate)
+                raw_result = copy.deepcopy(accepted_candidate)
+                schema_candidates.append(
+                    {
+                        "attempt": schema_retry_count,
+                        "error": "",
+                        "repair_mode": (
+                            "features_only"
+                            if features_only_repair
+                            else "full_rating"
+                        ),
+                        "repair_kind": active_repair_kind,
+                        "candidate": copy.deepcopy(response_candidate),
+                        "accepted": True,
+                    }
+                )
+                schema_audit = build_schema_retry_audit(
+                    first_candidate=(
+                        first_model_candidate or accepted_candidate
+                    ),
+                    accepted_candidate=accepted_candidate,
+                    schema_candidates=schema_candidates,
+                    schema_retry_count=schema_retry_count,
+                    repair_kinds=schema_repair_kinds,
+                )
 
                 output_data = make_output_base(data)
                 output_data["rating_profile"] = RATING_PROFILE
@@ -4918,6 +5182,8 @@ async def process_single_question(
                 output_data.update(image_status)
                 output_data["schema_retry_count"] = schema_retry_count
                 output_data["schema_validation_errors"] = schema_errors
+                output_data["schema_attempts"] = schema_attempts
+                output_data.update(schema_audit)
                 output_data["feature_normalization_actions"] = copy.deepcopy(
                     rating_result.get("feature_normalization_actions", [])
                 )
@@ -4971,6 +5237,16 @@ async def process_single_question(
                 error_data.update(image_status)
                 error_data["schema_retry_count"] = schema_retry_count
                 error_data["schema_validation_errors"] = schema_errors
+                error_data["schema_attempts"] = schema_attempts
+                error_data.update(
+                    build_schema_retry_audit(
+                        first_candidate=first_model_candidate,
+                        accepted_candidate=accepted_candidate,
+                        schema_candidates=schema_candidates,
+                        schema_retry_count=schema_retry_count,
+                        repair_kinds=schema_repair_kinds,
+                    )
+                )
                 async with FILE_LOCK:
                     async with aiofiles.open(
                         error_path,

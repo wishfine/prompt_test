@@ -535,11 +535,10 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
     def test_prompt_restores_detailed_boundary_calibration(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
         required_anchors = (
-            "同一规则只表示B不增加，不表示W必为1",
             "不同化学命题或不同作答目标",
             "普通方案正误判断不等于方案评价",
-            "中间量、纯算术和重复代入不单独增加最长链",
-            "标准实验、常规计算与决定性卡点的边界",
+            "纯算术、机械配平、重复代入",
+            "只有信息、反应、实验、图表、条件或计算共同参与关键链才成立",
             "工业流程、未知组成与守恒联立",
             "同一命题的固定规则直接判断",
             "多规则综合填空的受控广度",
@@ -561,11 +560,10 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
     def test_prompt_uses_curriculum_units_as_task_boundaries(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
         for anchor in (
-            "课程单元任务边界",
-            "U1：直接仪器识别",
-            "U4/U5：物质组成、化学用语与方程式",
-            "U9/U10：溶液、酸碱盐与证据链",
-            "单元名称不是难度先验",
+            "同一U前缀的多个编码是同单元跨课题",
+            "不同U前缀才是跨单元",
+            "跨单元并列不等于跨单元耦合",
+            "不设置单元难度先验",
         ):
             self.assertIn(anchor, prompt)
 
@@ -579,11 +577,10 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
             "同单元跨课题",
             "跨学科背景不等于跨学科推理",
             "误差分析不能按关键词直接升档",
-            "覆盖跨度不等于耦合跨度",
             "跨单元并列",
             "跨单元耦合",
-            "不同U前缀绝不能写成同单元",
-            "课程跨度正式摘要由程序从curriculum_topics派生",
+            "不同U前缀才是跨单元",
+            "课程跨度正式摘要由程序根据curriculum_topics",
         ):
             self.assertIn(anchor, prompt)
 
@@ -676,7 +673,7 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
             )
         )
 
-    def test_explicit_difference_method_promotes_medium_to_hard(self) -> None:
+    def test_explicit_difference_method_is_audit_only(self) -> None:
         item = rating("中等题")
         item["features"] = observable_v4_features()
         item["features"].update(
@@ -697,10 +694,14 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
             {"stem": "根据反应前后质量差求未知物质质量。"},
         )
 
-        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(result["postprocess_actions"], [])
         self.assertEqual(
-            result["postprocess_actions"][0]["rule"],
+            result["teacher_distribution_guard_candidate_action"]["rule"],
             "teacher_medium_to_hard_explicit_difference_method",
+        )
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
         )
 
     def test_v3_difference_method_remains_unchanged(self) -> None:

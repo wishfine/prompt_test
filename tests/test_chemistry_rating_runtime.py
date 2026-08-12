@@ -1943,10 +1943,10 @@ class ChemistryRuntimeTests(unittest.TestCase):
             self.assertNotIn(f'"{legacy_field}"', prefix)
         self.assertIn("严格填写17项可观测特征", suffix)
         self.assertIn("纯算术、机械配平、重复代入", prefix)
-        self.assertIn("四个独立选项不等于四步", prefix)
-        self.assertIn("程序会从特征中派生以下指标", prefix)
+        self.assertIn("对彼此独立的选项逐项查看", prefix)
+        self.assertIn("程序会根据17项特征自动统计", prefix)
         self.assertIn("至少4个非重复有效任务", prefix)
-        self.assertIn("量筒俯仰视误差链", prefix)
+        self.assertIn("量筒或天平误差因果链", prefix)
         self.assertIn("部分变质中的守恒与差量", prefix)
         self.assertIn("不要求虚构6步以上", prefix)
 

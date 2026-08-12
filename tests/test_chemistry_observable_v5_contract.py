@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import importlib.util
+import json
 from pathlib import Path
+import tempfile
 import unittest
 
 
@@ -128,7 +131,8 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
 
     def test_rule_families_are_concrete_answer_operations(self) -> None:
         self.assertEqual(
-            self.features.RULE_FAMILIES,
+            self.features.RULE_FAMILIES
+            - {"其他未归类规则（仅审计）"},
             {
                 "教材事实直接匹配",
                 "分类或概念辨析",
@@ -147,15 +151,25 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
             },
         )
 
-    def test_prompt_exposes_only_the_concrete_rule_family_enum(self) -> None:
+    def test_prompt_uses_chinese_enums_without_machine_code_contract(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
             "`rule_families`不再复刻task_type",
             prompt,
         )
-        for family in self.features.RULE_FAMILIES:
-            self.assertIn(f"- {family}", prompt)
+        self.assertFalse(
+            hasattr(self.features, "OBSERVABLE_ENUM_CODE_TO_LABEL_BY_FIELD")
+        )
+        for family in self.features.RULE_FAMILIES - {
+            "其他未归类规则（仅审计）"
+        }:
+            self.assertIn(family, prompt)
+        for code in ("T_FACT", "R_CAUSE", "C_EXCESS", "K_DIFFERENCE"):
+            self.assertNotIn(f'"{code}"', prompt)
+            self.assertNotIn(f"`{code}`", prompt)
+        self.assertNotIn("无法归类，仅审计", prompt)
+        self.assertNotIn("*_OTHER", prompt)
         self.assertNotIn(
             "实际需要切换的回答规则族数组，枚举与task_type相同",
             prompt,
@@ -166,15 +180,15 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
 
         for instruction in (
             "控制变量只能填入experiment_operation",
-            "排除候选只能填入evidence_operations",
-            "拐点、平台或分段只能填入graph_table_operation",
+            "排除一个候选",
+            "拐点平台或分段只能填入graph_table_operation",
             "操作偏差只能填入error_analysis_operation",
-            "单一比例必须写成直接比例",
+            "单一比例必须写“直接比例”",
             "化学方程式不是task_type",
             "作用目的或原因解释只能填入rule_families",
-            "rule_families不能填写带箭头的表征转换",
-            "排除多个候选解释只能填入evidence_operations",
-            "单一分解反应必须归入单一反应",
+            "rule_families不能填写表征转换",
+            "排除多个候选解释",
+            "单一分解反应必须写“单一反应”",
             "task_groups.count必须是1到20的整数",
         ):
             self.assertIn(instruction, prompt)
@@ -489,7 +503,7 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
         self.assertEqual(normalized["calculation_operations"], [])
         self.features.validate_observable_features(normalized)
 
-    def test_normalization_derives_graph_read_floor_from_graph_conversion(
+    def test_normalization_does_not_guess_graph_operation_from_conversion(
         self,
     ) -> None:
         item = current_features()
@@ -498,7 +512,10 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
 
         normalized, _ = self.features.normalize_observable_features(item)
 
-        self.assertEqual(normalized["graph_table_operation"], "直接读数")
+        self.assertEqual(
+            normalized["graph_table_operation"],
+            "其他未归类图表操作（仅审计）",
+        )
         self.features.validate_observable_features(normalized)
 
     def test_normalization_moves_rule_family_out_of_calculation_field(
@@ -543,7 +560,7 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
             "chemistry_observable_v5",
         )
 
-    def test_new_observable_enums_are_strict_and_auditable(self) -> None:
+    def test_new_observable_enums_are_valid_and_unknowns_are_audited(self) -> None:
         item = current_features()
         item["response_operations"] = [
             "完整命题正误辨析",
@@ -559,11 +576,17 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
         self.assertEqual(metrics["cross_subject_operation_count"], 1)
 
         item["response_operations"] = ["泛泛理解题意"]
-        with self.assertRaisesRegex(
-            self.runtime.ChemistrySchemaError,
-            "response_operations",
-        ):
-            self.runtime.validate_feature_contract(item)
+        normalized, actions = self.features.normalize_observable_features(item)
+        validated = self.runtime.validate_feature_contract(normalized)
+        flags = self.features.observable_feature_quality_flags(
+            validated,
+            actions,
+        )
+        self.assertEqual(
+            validated["response_operations"],
+            ["其他未归类作答操作（仅审计）"],
+        )
+        self.assertIn("fallback_enum:response_operations", flags)
 
     def test_supercurricular_chemistry_is_not_cross_subject(self) -> None:
         item = current_features()
@@ -906,11 +929,23 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
         invalid["experiment_operation"] = "多仪器或多条件比较"
         invalid["experiment_task_structure"] = "多仪器或多条件比较"
 
-        with self.assertRaisesRegex(
-            self.runtime.ChemistrySchemaError,
-            "该值属于experiment_task_structure",
-        ):
-            self.runtime.validate_feature_contract(invalid)
+        prepared = self.runtime.validate_rating_contract(
+            {**rating(), "features": invalid}
+        )
+
+        self.assertEqual(
+            prepared["features"]["experiment_operation"],
+            "其他未归类实验操作（仅审计）",
+        )
+        self.assertEqual(
+            prepared["features"]["experiment_task_structure"],
+            "多仪器或多条件比较",
+        )
+        self.assertTrue(prepared["feature_normalization_actions"])
+        self.assertIn(
+            "fallback_enum:experiment_operation",
+            prepared["feature_contract_quality_flags"],
+        )
 
     def test_schema_repair_feedback_includes_invalid_json_and_field_hint(self) -> None:
         invalid_rating = rating()
@@ -1062,11 +1097,214 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
         invalid = current_features()
         invalid["representation_operations"] = ["看起来很难的转换"]
 
-        with self.assertRaisesRegex(
-            self.runtime.ChemistrySchemaError,
-            "representation_operations",
-        ):
-            self.runtime.validate_feature_contract(invalid)
+        prepared = self.runtime.validate_rating_contract(
+            {
+                **rating(),
+                "features": invalid,
+            }
+        )
+
+        self.assertEqual(
+            prepared["features"]["representation_operations"],
+            ["其他未归类表征操作（仅审计）"],
+        )
+        self.assertIn(
+            "fallback_enum:representation_operations",
+            prepared["feature_contract_quality_flags"],
+        )
+
+    def test_internal_fallbacks_are_audited_and_excluded_from_counts(self) -> None:
+        coded = stable_v5_features()
+        coded["task_groups"] = [
+            {"task_type": "直接事实与概念", "count": 2},
+            {"task_type": "模型自造任务", "count": 5},
+        ]
+        coded["rule_families"] = ["教材事实直接匹配", "模型自造规则"]
+        coded["condition_operations"] = ["模型自造条件"]
+        coded["calculation_operations"] = ["模型自造计算"]
+
+        normalized, actions = self.features.normalize_observable_features(coded)
+        validated = self.features.validate_observable_features(normalized)
+        metrics = self.features.derive_observable_metrics(validated)
+        flags = self.features.observable_feature_quality_flags(
+            validated,
+            actions,
+        )
+
+        self.assertEqual(metrics["effective_task_count"], 2)
+        self.assertEqual(metrics["task_group_count"], 1)
+        self.assertEqual(metrics["rule_family_count"], 1)
+        self.assertNotIn(
+            "其他未归类计算操作（仅审计）",
+            metrics["advanced_calculation_operations"],
+        )
+        self.assertIn("fallback_enum:task_groups.task_type", flags)
+        self.assertIn("fallback_enum:rule_families", flags)
+        self.assertIn("fallback_enum:condition_operations", flags)
+        self.assertIn("fallback_enum:calculation_operations", flags)
+
+    def test_open_list_fields_use_internal_fallback_without_schema_retry(self) -> None:
+        item = current_features()
+        item["response_operations"] = ["模型自造主观作答动作"]
+        item["cross_subject_operations"] = ["模型自造跨学科动作"]
+
+        normalized, actions = self.features.normalize_observable_features(item)
+        validated = self.features.validate_observable_features(normalized)
+        flags = self.features.observable_feature_quality_flags(
+            validated,
+            actions,
+        )
+        metrics = self.features.derive_observable_metrics(validated)
+
+        self.assertEqual(
+            validated["response_operations"],
+            ["其他未归类作答操作（仅审计）"],
+        )
+        self.assertEqual(
+            validated["cross_subject_operations"],
+            ["其他未归类跨学科操作（仅审计）"],
+        )
+        self.assertIn("fallback_enum:response_operations", flags)
+        self.assertIn("fallback_enum:cross_subject_operations", flags)
+        self.assertEqual(metrics["response_operation_count"], 0)
+        self.assertEqual(metrics["cross_subject_operation_count"], 0)
+
+    def test_missing_calculation_evidence_is_quality_flag_not_schema_error(self) -> None:
+        item = stable_v5_features()
+        item["task_groups"] = [{"task_type": "定量计算", "count": 1}]
+        item["calculation_operations"] = []
+
+        normalized, actions = self.features.normalize_observable_features(item)
+        validated = self.features.validate_observable_features(normalized)
+        flags = self.features.observable_feature_quality_flags(
+            validated,
+            actions,
+        )
+
+        self.assertEqual(validated["calculation_operations"], [])
+        self.assertIn("incomplete_calculation_evidence", flags)
+
+    def test_ambiguous_graph_consistency_uses_internal_fallback(self) -> None:
+        item = stable_v5_features()
+        item["representation_operations"] = ["图表数据→化学关系"]
+        item["graph_table_operation"] = "无"
+        item["visual_task_structure"] = "无必要视觉信息"
+
+        normalized, actions = self.features.normalize_observable_features(item)
+        validated = self.features.validate_observable_features(normalized)
+        flags = self.features.observable_feature_quality_flags(
+            validated,
+            actions,
+        )
+
+        self.assertEqual(
+            validated["graph_table_operation"],
+            "其他未归类图表操作（仅审计）",
+        )
+        self.assertEqual(
+            validated["visual_task_structure"],
+            "其他未归类视觉结构（仅审计）",
+        )
+        self.assertNotEqual(validated["graph_table_operation"], "直接读数")
+        self.assertIn("fallback_enum:graph_table_operation", flags)
+        self.assertIn("fallback_enum:visual_task_structure", flags)
+
+    def test_semantic_feature_repair_blocks_writeback(self) -> None:
+        item = rating("拔高题")
+        item["features"] = stable_v5_features()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "建立总量关系",
+                    "利用差量确定反应量",
+                    "反推未知组成",
+                    "把中间量代入后一反应",
+                    "联立并核验最终结果",
+                ],
+                "solution_topology": "未知组成或量反推",
+                "reaction_structure": "产物进入后一反应",
+                "calculation_operations": [
+                    "差量",
+                    "多反应定量关系",
+                ],
+            }
+        )
+        item["feature_schema_repair_kind"] = "semantic"
+
+        result = self.runtime.postprocess_chemistry_difficulty(item, {})
+
+        self.assertIn(
+            "semantic_schema_repaired",
+            result["feature_contract_quality_flags"],
+        )
+        self.assertFalse(result["writeback_eligible"])
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+
+    def test_feature_repair_merge_preserves_first_rating_decision(self) -> None:
+        original = rating("中等题")
+        repaired = {
+            "features": {
+                **stable_v5_features(),
+                "calculation_operations": ["差量"],
+            },
+            "difficulty_level": "压轴题",
+            "reasoning": {
+                "core_basis": "重试时改写了理由",
+            },
+        }
+
+        merged = self.runtime.merge_feature_repair_candidate(
+            original,
+            repaired,
+        )
+
+        self.assertEqual(merged["difficulty_level"], "中等题")
+        self.assertEqual(merged["reasoning"], original["reasoning"])
+        self.assertEqual(
+            merged["coarse_difficulty"],
+            original["coarse_difficulty"],
+        )
+        self.assertEqual(
+            merged["features"]["calculation_operations"],
+            ["差量"],
+        )
+
+    def test_fallback_quality_blocks_automatic_teacher_writeback(self) -> None:
+        item = rating("拔高题")
+        item["features"] = stable_v5_features()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "建立总量关系",
+                    "利用差量确定反应量",
+                    "反推未知组成",
+                    "把中间量代入后一反应",
+                    "联立并核验最终结果",
+                ],
+                "solution_topology": "未知组成或量反推",
+                "reaction_structure": "产物进入后一反应",
+                "condition_operations": [
+                    "其他未归类条件操作（仅审计）"
+                ],
+                "calculation_operations": ["差量", "多反应定量关系"],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(item, {})
+
+        self.assertIsNotNone(
+            result["teacher_distribution_guard_candidate_action"]
+        )
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+        self.assertIn(
+            "fallback_enum:condition_operations",
+            result["feature_contract_quality_flags"],
+        )
 
     def test_rating_records_normalization_actions_without_schema_retry(self) -> None:
         item = rating()
@@ -1095,6 +1333,181 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
 
         self.assertIn("representation_operations只能从", feedback)
         self.assertIn("宏观对象→化学符号", feedback)
+        self.assertNotIn("X_OBJECT_TO_SYMBOL", feedback)
+        self.assertNotIn("其他未归类表征操作", feedback)
+
+    def test_model_feature_repairs_are_semantic_after_local_normalization(self) -> None:
+        self.assertEqual(
+            self.runtime.classify_feature_schema_repair(
+                self.runtime.ChemistrySchemaError(
+                    "task_groups.count必须是1到20的整数"
+                )
+            ),
+            "semantic",
+        )
+        self.assertEqual(
+            self.runtime.classify_feature_schema_repair(
+                self.runtime.ChemistrySchemaError(
+                    "存在图表转换时graph_table_operation不能为无"
+                )
+            ),
+            "semantic",
+        )
+        self.assertEqual(
+            self.runtime.classify_feature_schema_repair(
+                self.runtime.ChemistrySchemaError(
+                    "可观测特征字段集不匹配; "
+                    "missing=['experiment_operation']; extra=[]"
+                )
+            ),
+            "semantic",
+        )
+        self.assertEqual(
+            self.runtime.classify_feature_schema_repair(
+                self.runtime.ChemistrySchemaError(
+                    "rule_families不能为空"
+                )
+            ),
+            "semantic",
+        )
+        self.assertEqual(
+            self.runtime.classify_feature_schema_repair(
+                self.runtime.ChemistrySchemaError(
+                    "longest_solution_chain必须包含1到12个必要化学决策步骤"
+                )
+            ),
+            "semantic",
+        )
+
+    def test_schema_retry_audit_preserves_first_and_accepted_candidates(self) -> None:
+        first = rating("基础题")
+        first["features"] = stable_v5_features()
+        accepted = copy.deepcopy(first)
+        accepted["features"]["calculation_operations"] = ["差量"]
+        candidates = [
+            {
+                "attempt": 0,
+                "repair_mode": "full_rating",
+                "repair_kind": "semantic",
+                "candidate": copy.deepcopy(first),
+                "accepted": False,
+                "error": "字段语义冲突",
+            },
+            {
+                "attempt": 1,
+                "repair_mode": "features_only",
+                "repair_kind": "semantic",
+                "candidate": {"features": accepted["features"]},
+                "accepted": True,
+                "error": "",
+            },
+        ]
+
+        audit = self.runtime.build_schema_retry_audit(
+            first_candidate=first,
+            accepted_candidate=accepted,
+            schema_candidates=candidates,
+            schema_retry_count=1,
+            repair_kinds=["semantic"],
+        )
+
+        self.assertEqual(audit["first_attempt_level"], "基础题")
+        self.assertEqual(audit["accepted_attempt_level"], "基础题")
+        self.assertFalse(audit["schema_retry_changed_level"])
+        self.assertTrue(audit["schema_retry_changed_features"])
+        self.assertEqual(audit["schema_repair_mode"], "features_only")
+        self.assertEqual(audit["schema_repair_kind"], "semantic")
+        self.assertEqual(
+            audit["difficulty_rating_first_attempt"]["difficulty_level"],
+            "基础题",
+        )
+
+    def test_process_retry_only_replaces_features_and_freezes_first_judgment(self) -> None:
+        first = rating("基础题")
+        first["features"] = stable_v5_features()
+        first["features"].pop("calculation_operations")
+        repaired_features = stable_v5_features()
+        calls = []
+
+        async def fake_call(*args, **kwargs):
+            features_only = bool(kwargs.get("features_only_repair"))
+            calls.append(features_only)
+            candidate = (
+                {"features": copy.deepcopy(repaired_features)}
+                if features_only
+                else copy.deepcopy(first)
+            )
+            return (
+                candidate,
+                json.dumps(candidate, ensure_ascii=False),
+                0.01,
+                10,
+                5,
+                15,
+                {
+                    "image_input_used": False,
+                    "question_text_char_count": 8,
+                    "explicit_subquestion_count": 1,
+                },
+            )
+
+        async def run_case(output_path: str, error_path: str) -> None:
+            await self.runtime.process_single_question(
+                {"question_id": "schema-repair-1", "stem": "判断水的组成。"},
+                object(),
+                asyncio.Semaphore(1),
+                output_path,
+                error_path,
+                retries=1,
+                timeout_sec=1,
+            )
+
+        original_call = self.runtime.call_model_with_cache
+        original_schema_retries = self.runtime.MAX_SCHEMA_RETRIES
+        writeback_names = (
+            "CHEMISTRY_ENABLE_LEVEL_WRITEBACK",
+            "CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD",
+            "CHEMISTRY_ENABLE_FINAL_BOUNDARY_GUARD_WRITEBACK",
+            "CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS",
+            "CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK",
+        )
+        original_writebacks = {
+            name: getattr(self.runtime, name) for name in writeback_names
+        }
+        try:
+            self.runtime.call_model_with_cache = fake_call
+            self.runtime.MAX_SCHEMA_RETRIES = 2
+            for name in writeback_names:
+                setattr(self.runtime, name, False)
+            with tempfile.TemporaryDirectory() as tmpdir:
+                output_path = str(Path(tmpdir) / "output.jsonl")
+                error_path = str(Path(tmpdir) / "errors.jsonl")
+                asyncio.run(run_case(output_path, error_path))
+                row = json.loads(
+                    Path(output_path).read_text(encoding="utf-8").strip()
+                )
+                self.assertFalse(Path(error_path).exists())
+        finally:
+            self.runtime.call_model_with_cache = original_call
+            self.runtime.MAX_SCHEMA_RETRIES = original_schema_retries
+            for name, value in original_writebacks.items():
+                setattr(self.runtime, name, value)
+
+        self.assertEqual(calls, [False, True])
+        self.assertEqual(row["schema_retry_count"], 1)
+        self.assertEqual(row["schema_repair_mode"], "features_only")
+        self.assertEqual(row["first_attempt_level"], "基础题")
+        self.assertEqual(row["accepted_attempt_level"], "基础题")
+        self.assertFalse(row["schema_retry_changed_level"])
+        self.assertTrue(row["schema_retry_changed_features"])
+        self.assertEqual(
+            row["difficulty_rating_raw"]["reasoning"],
+            first["reasoning"],
+        )
+        self.assertEqual(
+            row["difficulty_rating_first_attempt"]["reasoning"],
+            first["reasoning"],
+        )
 
     def test_historical_nineteen_field_v4_remains_readable(self) -> None:
         historical = copy.deepcopy(current_features())
@@ -1139,16 +1552,21 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
         self.assertNotIn('"direct_retrieval_task_count"', prompt)
         self.assertNotIn('"rule_application_task_count"', prompt)
         self.assertIn("不同化学命题或不同作答目标", prompt)
-        self.assertIn("同一规则只表示B不增加", prompt)
-        self.assertIn("独立选项不增加D", prompt)
+        self.assertIn("同一规则下多个对象", prompt)
+        self.assertIn("对彼此独立的选项逐项查看", prompt)
+        self.assertIn("不得虚构成跨单元连续链", prompt)
         self.assertNotIn("response_operations", prompt)
         self.assertNotIn("cross_subject_operations", prompt)
 
     def test_prompt_decouples_task_count_from_easy_level(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("W只记录任务量事实，不设置最低难度", prompt)
-        self.assertIn("W=4仍可判为送分题", prompt)
+        self.assertIn(
+            "任何单一数字、题长、选项数、图数或课程跨度都不能自动升档",
+            prompt,
+        )
+        self.assertIn("多幅候选图片不自动增加难度", prompt)
+        self.assertIn("仍可为送分题", prompt)
         self.assertIn("固定分类规则", prompt)
 
     def test_prompt_keeps_dense_linear_chain_as_hard_candidate(self) -> None:
