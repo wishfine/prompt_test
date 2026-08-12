@@ -947,12 +947,10 @@ async def main_batch_run() -> None:
     parser.add_argument(
         "--no-cache",
         action="store_true",
-        help="仅用于最多3题的缓存成本诊断；正式批量运行禁止关闭缓存",
+        help="关闭前缀缓存并逐题发送完整提示词；全量运行会显著增加输入token成本",
     )
     args = parser.parse_args()
 
-    if args.no_cache and (args.num is None or args.num < 1 or args.num > 3):
-        parser.error("--no-cache 仅允许与 -n 1、-n 2 或 -n 3 一起使用")
     USE_CACHE = not args.no_cache
 
     random.seed(args.seed)
@@ -969,7 +967,7 @@ async def main_batch_run() -> None:
         + (
             "强制启用（正式运行不允许逐题重复发送完整提示词）"
             if USE_CACHE
-            else "诊断性关闭（最多3题，逐题发送完整提示词）"
+            else "已关闭（逐题发送完整提示词，输入token成本显著增加）"
         )
     )
 

@@ -1127,7 +1127,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertNotIn("--retries", runtime)
         self.assertNotIn("args.retries", runtime)
         self.assertIn('"--no-cache"', runtime)
-        self.assertIn("--no-cache 仅允许与 -n 1、-n 2 或 -n 3 一起使用", runtime)
+        self.assertIn("全量运行会显著增加输入token成本", runtime)
         self.assertIn("USE_CACHE = not args.no_cache", runtime)
         self.assertIn("USE_CACHE = True", runtime)
         self.assertIn("正在用第一道真实题验证前缀缓存与JSON输出兼容性", runtime)
