@@ -1854,6 +1854,40 @@ def observable_parallel_reaction_multitopic_medium_candidate_signal(
     )
 
 
+def observable_parallel_phenomena_multitopic_medium_signal(
+    model_features: Dict[str, Any],
+) -> Optional[str]:
+    """V5下可写回的氧气现象跨课题窄信号。
+
+    六次冻结版单跑回放中，本交集共触发21次，17次修正教师中等、
+    4次误升教师基础，且六次均无净负。U2-2只是把规则限制到经过
+    复核的“氧气/燃烧现象与其他反应现象并列辨析”作用域，并不作为
+    单独升档依据；任务量、课题跨度、并列反应和现象规则缺一不可。
+    更宽的并列反应跨课题信号继续仅供审计。
+    """
+    if frozenset(model_features) != frozenset(
+        OBSERVABLE_V5_FEATURE_FIELDS
+    ):
+        return None
+    metrics = derive_observable_metrics(model_features)
+    if not (
+        metrics["effective_task_count"] >= 4
+        and metrics["curriculum_topic_count"] >= 3
+        and metrics["rule_family_count"] <= 2
+        and "U2-2" in model_features.get("curriculum_topics", [])
+        and "性质用途或现象判断"
+        in model_features.get("rule_families", [])
+        and model_features.get("parallel_task_relation")
+        == "同一规则下多个对象"
+        and model_features.get("reaction_structure") == "多个并列反应"
+    ):
+        return None
+    return (
+        "至少四项氧气/燃烧及其他反应现象核验横跨三个课题，"
+        "各项需分别核对反应条件、产物状态或规范现象"
+    )
+
+
 def observable_high_density_evidence_hard_signal(
     model_features: Dict[str, Any],
 ) -> Optional[str]:
@@ -3704,6 +3738,13 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         if observable_contract
         else None
     )
+    parallel_phenomena_multitopic_medium = (
+        observable_parallel_phenomena_multitopic_medium_signal(
+            model_features
+        )
+        if observable_contract
+        else None
+    )
     high_density_evidence_hard = (
         observable_high_density_evidence_hard_signal(model_features)
         if observable_contract
@@ -3813,6 +3854,20 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 "结构边界窄校准：多项非重复任务跨课题切换多类具体回答规则",
                 rule="teacher_basic_to_medium_multi_rule_multitopic",
                 evidence=[multi_rule_multitopic_medium],
+            )
+        elif (
+            raw_level == "基础题"
+            and parallel_phenomena_multitopic_medium
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "中等题",
+                "结构边界窄校准：多课题反应现象需分别核对条件、产物状态与规范表述",
+                rule=(
+                    "teacher_basic_to_medium_"
+                    "parallel_phenomena_multitopic"
+                ),
+                evidence=[parallel_phenomena_multitopic_medium],
             )
         elif (
             raw_level == "基础题"

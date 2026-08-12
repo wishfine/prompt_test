@@ -312,6 +312,38 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             prompt,
         )
 
+    def test_prompt_treats_distinct_normative_explanations_as_real_rules(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "作用、目的、失败原因和规范现象分别调用不同化学依据时，必须按不同具体回答规则记录",
+            prompt,
+        )
+        self.assertIn(
+            "不能因作答形式都属于主观表达而合并成同一规则",
+            prompt,
+        )
+
+    def test_prompt_treats_symbol_positions_as_distinct_rules(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "左前方、正上方、右上角和右下角数字",
+            prompt,
+        )
+        self.assertIn(
+            "原子个数、化合价、离子电荷和分子中原子个数",
+            prompt,
+        )
+        self.assertIn(
+            "不能因都在解释数字含义而合并成同一规则",
+            prompt,
+        )
+
     def test_prompt_final_paths_do_not_require_unrelated_extra_signals(
         self,
     ) -> None:

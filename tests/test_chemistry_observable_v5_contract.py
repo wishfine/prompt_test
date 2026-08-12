@@ -473,6 +473,62 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
             result["teacher_distribution_guard_writeback_applied"]
         )
 
+    def test_v5_oxygen_parallel_phenomena_multitopic_writes_to_medium(
+        self,
+    ) -> None:
+        item = rating("基础题")
+        item["features"] = stable_v5_features()
+        item["features"].update(
+            {
+                "task_groups": [
+                    {"task_type": "性质与反应判断", "count": 4},
+                ],
+                "rule_families": ["性质用途或现象判断"],
+                "curriculum_topics": ["U2-2", "U4-2", "U10-2"],
+                "parallel_task_relation": "同一规则下多个对象",
+                "reaction_structure": "多个并列反应",
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(item, {})
+
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_basic_to_medium_parallel_phenomena_multitopic",
+        )
+        self.assertTrue(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+
+    def test_v5_parallel_phenomena_without_oxygen_stays_audit_only(
+        self,
+    ) -> None:
+        item = rating("基础题")
+        item["features"] = stable_v5_features()
+        item["features"].update(
+            {
+                "task_groups": [
+                    {"task_type": "性质与反应判断", "count": 4},
+                ],
+                "rule_families": ["性质用途或现象判断"],
+                "curriculum_topics": ["U5-2", "U6-2", "U8-2"],
+                "parallel_task_relation": "同一规则下多个对象",
+                "reaction_structure": "多个并列反应",
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(item, {})
+
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_basic_to_medium_parallel_reaction_multitopic_candidate",
+        )
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+
     def test_v5_parallel_reaction_multitopic_candidate_requires_all_signals(
         self,
     ) -> None:
