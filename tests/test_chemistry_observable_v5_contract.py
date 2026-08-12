@@ -171,6 +171,10 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
             "操作偏差只能填入error_analysis_operation",
             "单一比例必须写成直接比例",
             "化学方程式不是task_type",
+            "作用目的或原因解释只能填入rule_families",
+            "rule_families不能填写带箭头的表征转换",
+            "排除多个候选解释只能填入evidence_operations",
+            "单一分解反应必须归入单一反应",
             "task_groups.count必须是1到20的整数",
         ):
             self.assertIn(instruction, prompt)
@@ -267,6 +271,249 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
                 {"task_type": "性质与反应判断", "count": 1},
             ],
         )
+
+    def test_normalization_repairs_rule_family_values_in_task_type(self) -> None:
+        expected_task_types = {
+            "教材事实直接匹配": "直接事实与概念",
+            "分类或概念辨析": "直接事实与概念",
+            "化学用语书写": "化学用语",
+            "化学用语含义辨析": "化学用语",
+            "性质用途或现象判断": "性质与反应判断",
+            "反应关系或条件判断": "性质与反应判断",
+            "实验操作规范": "实验操作与探究",
+            "作用目的或原因解释": "实验操作与探究",
+            "异常失败或误差诊断": "实验操作与探究",
+            "图表读取或数据归纳": "图表与数据",
+            "证据推断或鉴别除杂": "证据推断",
+            "定量关系与计算": "定量计算",
+            "方案设计或评价": "方案设计与评价",
+            "新信息迁移": "新信息应用",
+        }
+
+        for rule_family, task_type in expected_task_types.items():
+            item = current_features()
+            item["rule_families"] = [rule_family]
+            item["task_groups"] = [
+                {"task_type": rule_family, "count": 1},
+                {"task_type": task_type, "count": 2},
+            ]
+
+            with self.subTest(rule_family=rule_family):
+                normalized, actions = (
+                    self.features.normalize_observable_features(item)
+                )
+                self.assertEqual(
+                    normalized["task_groups"],
+                    [{"task_type": task_type, "count": 3}],
+                )
+                self.assertTrue(
+                    any(
+                        action["field"] == "task_groups.task_type"
+                        and action["from"] == rule_family
+                        and action["to"] == task_type
+                        for action in actions
+                    )
+                )
+                validated = self.features.validate_observable_features(
+                    normalized
+                )
+                self.assertEqual(
+                    validated["task_groups"], normalized["task_groups"]
+                )
+
+    def test_normalization_repairs_today_task_type_aliases(self) -> None:
+        item = current_features()
+        item["task_groups"] = [
+            {"task_type": "概念辨析", "count": 1},
+            {"task_type": "能量转化判断", "count": 2},
+            {"task_type": "成分推断", "count": 3},
+        ]
+
+        normalized, _ = self.features.normalize_observable_features(item)
+
+        self.assertEqual(
+            normalized["task_groups"],
+            [
+                {"task_type": "直接事实与概念", "count": 1},
+                {"task_type": "性质与反应判断", "count": 2},
+                {"task_type": "证据推断", "count": 3},
+            ],
+        )
+        self.features.validate_observable_features(normalized)
+
+    def test_normalization_repairs_today_single_enum_aliases(self) -> None:
+        item = current_features()
+        item["reaction_structure"] = "单一分解反应"
+        item["error_analysis_operation"] = "读数偏差到最终结果方向"
+
+        normalized, _ = self.features.normalize_observable_features(item)
+
+        self.assertEqual(normalized["reaction_structure"], "单一反应")
+        self.assertEqual(
+            normalized["error_analysis_operation"],
+            "操作偏差到最终结果方向",
+        )
+        self.features.validate_observable_features(normalized)
+
+    def test_normalization_repairs_rule_family_cross_field_drift(self) -> None:
+        item = current_features()
+        item["rule_families"] = [
+            "微观粒子→化学符号",
+            "化学符号→定量关系",
+            "范围或边界判断",
+            "微观粒子表征分析",
+        ]
+        item["representation_operations"] = []
+        item["condition_operations"] = []
+
+        normalized, _ = self.features.normalize_observable_features(item)
+
+        self.assertEqual(
+            normalized["rule_families"],
+            [
+                "化学用语书写",
+                "定量关系与计算",
+                "反应关系或条件判断",
+                "分类或概念辨析",
+            ],
+        )
+        self.assertEqual(
+            normalized["representation_operations"],
+            ["微观粒子→化学符号", "化学符号→定量关系"],
+        )
+        self.assertEqual(
+            normalized["condition_operations"], ["范围或边界"]
+        )
+        self.features.validate_observable_features(normalized)
+
+    def test_normalization_repairs_today_cross_field_operations(self) -> None:
+        item = current_features()
+        item["solution_topology"] = "排除多个候选解释"
+        item["condition_operations"] = [
+            "拐点分段",
+            "差量",
+            "单一守恒",
+            "排除干扰条件排除",
+            "反应条件判断",
+        ]
+        item["evidence_operations"] = [
+            "范围条件筛选",
+            "排除三个候选",
+            "组分消元或组成不变量",
+        ]
+        item["graph_table_operation"] = "无"
+        item["calculation_operations"] = []
+
+        normalized, _ = self.features.normalize_observable_features(item)
+
+        self.assertEqual(
+            normalized["solution_topology"],
+            "未知组分消元或组成不变量",
+        )
+        self.assertEqual(
+            normalized["condition_operations"],
+            ["干扰条件排除", "条件直接读取", "范围或边界"],
+        )
+        self.assertEqual(
+            normalized["evidence_operations"], ["排除多个候选解释"]
+        )
+        self.assertEqual(
+            normalized["calculation_operations"],
+            ["差量", "单一守恒", "组分消元或组成不变量"],
+        )
+        self.assertEqual(
+            normalized["graph_table_operation"], "拐点平台或分段"
+        )
+        self.features.validate_observable_features(normalized)
+
+    def test_normalization_repairs_today_operation_aliases(self) -> None:
+        item = current_features()
+        item["representation_operations"] = [
+            "微观粒子→宏观现象",
+            "宏观对象→微观粒子",
+        ]
+        item["calculation_operations"] = [
+            "质量守恒",
+            "未知组分消元或组成不变量",
+            "多个反应定量关系",
+        ]
+        item["solution_topology"] = "未知组分消元或组成不变量"
+
+        normalized, _ = self.features.normalize_observable_features(item)
+
+        self.assertEqual(
+            normalized["representation_operations"],
+            ["微观粒子→宏观含义", "宏观现象→微观粒子"],
+        )
+        self.assertEqual(
+            normalized["calculation_operations"],
+            ["单一守恒", "组分消元或组成不变量", "多反应定量关系"],
+        )
+        self.features.validate_observable_features(normalized)
+
+    def test_normalization_repairs_remaining_today_field_drift(self) -> None:
+        item = current_features()
+        item["task_groups"] = [{"task_type": "证据推断", "count": 2}]
+        item["solution_topology"] = "多证据共同成立"
+        item["representation_operations"] = [
+            "宏观现象→化学关系",
+            "宏观现象→宏观含义",
+        ]
+        item["evidence_operations"] = [
+            "排除干扰条件",
+            "排除干扰",
+        ]
+        item["condition_operations"] = ["分段条件", "拐点边界"]
+        item["calculation_operations"] = ["未知组成或量反推"]
+        item["graph_table_operation"] = "无"
+
+        normalized, _ = self.features.normalize_observable_features(item)
+
+        self.assertEqual(
+            normalized["solution_topology"], "未知组成或量反推"
+        )
+        self.assertEqual(
+            normalized["representation_operations"],
+            ["宏观现象→化学符号"],
+        )
+        self.assertEqual(
+            normalized["evidence_operations"], ["多证据共同成立"]
+        )
+        self.assertCountEqual(
+            normalized["condition_operations"],
+            ["干扰条件排除", "条件切换", "范围或边界"],
+        )
+        self.assertEqual(
+            normalized["graph_table_operation"], "拐点平台或分段"
+        )
+        self.assertEqual(normalized["calculation_operations"], [])
+        self.features.validate_observable_features(normalized)
+
+    def test_normalization_derives_graph_read_floor_from_graph_conversion(
+        self,
+    ) -> None:
+        item = current_features()
+        item["representation_operations"] = ["图表数据→化学关系"]
+        item["graph_table_operation"] = "无"
+
+        normalized, _ = self.features.normalize_observable_features(item)
+
+        self.assertEqual(normalized["graph_table_operation"], "直接读数")
+        self.features.validate_observable_features(normalized)
+
+    def test_normalization_moves_rule_family_out_of_calculation_field(
+        self,
+    ) -> None:
+        item = current_features()
+        item["task_groups"] = [{"task_type": "直接事实与概念", "count": 1}]
+        item["rule_families"] = []
+        item["calculation_operations"] = ["定量关系与计算"]
+
+        normalized, _ = self.features.normalize_observable_features(item)
+
+        self.assertEqual(normalized["calculation_operations"], [])
+        self.assertEqual(normalized["rule_families"], ["定量关系与计算"])
+        self.features.validate_observable_features(normalized)
 
     def test_historical_v6_contract_remains_readable(self) -> None:
         validated = self.runtime.validate_feature_contract(current_features())

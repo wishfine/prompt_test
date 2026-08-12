@@ -167,7 +167,7 @@ curriculum_topics数组只能输出裸编码，例如`["U3-2", "U3-3"]`；不得
 
 同一种任务类型只能出现一次，count为1至20的整数。
 
-常见子类必须归入上述枚举：误差分析归入“实验操作与探究”；微观粒子表征、微观—符号转换和化学式推断归入“化学用语”；反应条件或速率分析归入“性质与反应判断”；不得自创更细的task_type。
+常见子类必须归入上述枚举：误差分析归入“实验操作与探究”；微观粒子表征、微观—符号转换和化学式推断归入“化学用语”；反应条件或速率分析归入“性质与反应判断”；不得自创更细的task_type。作用目的或原因解释只能填入rule_families；若题目要求解释实验装置、操作或步骤的作用与原因，task_type必须填“实验操作与探究”，不得把“作用目的或原因解释”复制到task_type。
 
 ### 3. rule_families
 
@@ -306,7 +306,7 @@ experiment_task_structure回答“任务怎样组织”，不能填写“基础�
 
 只能复制本节和上文列出的枚举原文，不得自创近义词、用斜杠拼接多个枚举，也不得把解释句写进枚举字段。
 
-最近高频字段错位必须按以下规则避免：控制变量只能填入experiment_operation；排除候选只能填入evidence_operations；拐点、平台或分段只能填入graph_table_operation；操作偏差只能填入error_analysis_operation。单一比例必须写成直接比例。化学方程式不是task_type，应按实际任务归入“化学用语”或“定量计算”。task_groups.count必须是1到20的整数，不能输出数字字符串、小数、0或范围。
+最近高频字段错位必须按以下规则避免：控制变量只能填入experiment_operation；排除候选只能填入evidence_operations；多证据共同成立只能填入evidence_operations；排除多个候选解释只能填入evidence_operations，不能填入solution_topology；拐点、平台或分段只能填入graph_table_operation；分段条件或拐点边界也不能填入condition_operations；差量、守恒和多反应定量关系只能填入calculation_operations；“未知组成或量反推”只能填入solution_topology；“定量关系与计算”只能填入rule_families；操作偏差只能填入error_analysis_operation。rule_families不能填写带箭头的表征转换，所有“X→Y”转换只能从representation_operations合法枚举中复制；“宏观现象→宏观含义”不是跨表征转换，不要输出。单一比例必须写成直接比例。单一分解反应必须归入单一反应，不能自造reaction_structure。化学方程式不是task_type，应按实际任务归入“化学用语”或“定量计算”。task_groups.count必须是1到20的整数，不能输出数字字符串、小数、0或范围。
 
 - 合法：`representation_operations=["化学方程式→定量关系"]`；非法：`["化学式与质量转换"]`。
 - 合法：`representation_operations=["宏观对象→化学符号"]`；非法：`["宏观名称→化学符号"]`。

@@ -339,6 +339,9 @@ OBSERVABLE_FIELD_ALIASES = {
 
 TASK_TYPE_ALIASES = {
     "误差分析": "实验操作与探究",
+    "概念辨析": "直接事实与概念",
+    "能量转化判断": "性质与反应判断",
+    "成分推断": "证据推断",
     "微观粒子表征": "化学用语",
     "微观粒子与符号转换": "化学用语",
     "化学式推断": "化学用语",
@@ -347,6 +350,27 @@ TASK_TYPE_ALIASES = {
     "性质与应用推断": "性质与反应判断",
     "反应条件与速率分析": "性质与反应判断",
     "方案评价": "方案设计与评价",
+}
+
+# 模型偶尔会把合法的细粒度rule_families值写进粗粒度task_type。
+# 这些值与粗任务类型存在唯一语义归属，可以在本地无损归一，避免为
+# 字段串位消耗一次Schema重试。这里只修复task_type，不反向补写
+# rule_families，避免凭空增加规则族并影响后处理阈值。
+RULE_FAMILY_TO_TASK_TYPE = {
+    "教材事实直接匹配": "直接事实与概念",
+    "分类或概念辨析": "直接事实与概念",
+    "化学用语书写": "化学用语",
+    "化学用语含义辨析": "化学用语",
+    "性质用途或现象判断": "性质与反应判断",
+    "反应关系或条件判断": "性质与反应判断",
+    "实验操作规范": "实验操作与探究",
+    "作用目的或原因解释": "实验操作与探究",
+    "异常失败或误差诊断": "实验操作与探究",
+    "图表读取或数据归纳": "图表与数据",
+    "证据推断或鉴别除杂": "证据推断",
+    "定量关系与计算": "定量计算",
+    "方案设计或评价": "方案设计与评价",
+    "新信息迁移": "新信息应用",
 }
 
 RULE_FAMILY_ALIASES = {
@@ -364,6 +388,8 @@ RULE_FAMILY_ALIASES = {
     "教材事实或名称直接匹配": "教材事实直接匹配",
     "分类标准应用": "分类或概念辨析",
     "完整命题正误辨析": "分类或概念辨析",
+    "概念辨析": "分类或概念辨析",
+    "微观粒子表征分析": "分类或概念辨析",
     "化学用语含义解释": "化学用语含义辨析",
     "性质用途或现象解释": "性质用途或现象判断",
     "反应条件判断": "反应关系或条件判断",
@@ -374,6 +400,42 @@ RULE_FAMILY_ALIASES = {
     "图表读取或归纳": "图表读取或数据归纳",
     "证据推断或物质鉴别": "证据推断或鉴别除杂",
     "定量计算": "定量关系与计算",
+}
+
+# 合法操作枚举偶尔被模型写入rule_families。下列值都能同时确定
+# 对应规则族和原本所属操作字段，因此可无损搬回；语义不唯一的值
+# 不在这里兜底，仍交给严格校验触发重试。
+RULE_FAMILY_CROSS_FIELD_MOVES = {
+    "微观粒子→化学符号": (
+        "化学用语书写",
+        "representation_operations",
+        "微观粒子→化学符号",
+    ),
+    "宏观对象→化学符号": (
+        "化学用语书写",
+        "representation_operations",
+        "宏观对象→化学符号",
+    ),
+    "化学符号→定量关系": (
+        "定量关系与计算",
+        "representation_operations",
+        "化学符号→定量关系",
+    ),
+    "微观粒子→宏观含义": (
+        "化学用语含义辨析",
+        "representation_operations",
+        "微观粒子→宏观含义",
+    ),
+    "宏观现象→微观粒子": (
+        "分类或概念辨析",
+        "representation_operations",
+        "宏观现象→微观粒子",
+    ),
+    "范围或边界判断": (
+        "反应关系或条件判断",
+        "condition_operations",
+        "范围或边界",
+    ),
 }
 
 ENUM_VALUE_ALIASES = {
@@ -388,15 +450,21 @@ ENUM_VALUE_ALIASES = {
         "化学方程式→宏观含义": "化学符号→宏观含义",
         "实验现象→微观粒子": "宏观现象→微观粒子",
         "宏观特征→微观粒子": "宏观现象→微观粒子",
+        "微观粒子→宏观现象": "微观粒子→宏观含义",
+        "宏观对象→微观粒子": "宏观现象→微观粒子",
+        "宏观现象→化学关系": "宏观现象→化学符号",
     },
     "evidence_operations": {
         "双来源交叉验证": "多证据共同成立",
         "排除干扰物质": "排除一个候选",
         "排除干扰候选解释": "排除多个候选解释",
+        "排除三个候选": "排除多个候选解释",
     },
     "condition_operations": {
         "条件对比": "条件切换",
         "多条件比较": "条件切换",
+        "排除干扰条件排除": "干扰条件排除",
+        "反应条件判断": "条件直接读取",
     },
     "experiment_operation": {
         "方案设计与评价": "方案评价或补充实验",
@@ -411,6 +479,15 @@ ENUM_VALUE_ALIASES = {
     },
     "calculation_operations": {
         "单一比例": "直接比例",
+        "质量守恒": "单一守恒",
+        "未知组分消元或组成不变量": "组分消元或组成不变量",
+        "多个反应定量关系": "多反应定量关系",
+    },
+    "reaction_structure": {
+        "单一分解反应": "单一反应",
+    },
+    "error_analysis_operation": {
+        "读数偏差到最终结果方向": "操作偏差到最终结果方向",
     },
 }
 
@@ -446,6 +523,8 @@ def _canonical_task_type(value: Any) -> str:
         return clean
     if clean in TASK_TYPE_ALIASES:
         return TASK_TYPE_ALIASES[clean]
+    if clean in RULE_FAMILY_TO_TASK_TYPE:
+        return RULE_FAMILY_TO_TASK_TYPE[clean]
     if "误差" in clean:
         return "实验操作与探究"
     if any(word in clean for word in ("微观", "化学式", "化学符号")):
@@ -515,6 +594,13 @@ def normalize_observable_features(
                 {"field": field, "from": old, "to": new, "reason": reason}
             )
 
+    def append_unique(field: str, value: str) -> None:
+        values = normalized.get(field)
+        if not isinstance(values, list):
+            return
+        if value not in values:
+            values.append(value)
+
     for raw_key, value in features.items():
         clean_key = _clean_enum_text(raw_key)
         key = OBSERVABLE_FIELD_ALIASES.get(clean_key, clean_key)
@@ -522,6 +608,24 @@ def normalize_observable_features(
         if key in normalized and clean_key != key:
             continue
         normalized[key] = copy.deepcopy(value)
+
+    # solution_topology偶发收到证据操作。将证据事实移回证据数组，
+    # 同时只采用该证据能够保证成立的最低拓扑，不猜测更强结构。
+    topology_evidence_moves = {
+        "排除多个候选解释": "条件分支或范围筛选",
+        "多证据共同成立": "双来源交叉验证",
+    }
+    raw_topology = normalized.get("solution_topology")
+    if raw_topology in topology_evidence_moves:
+        normalized["solution_topology"] = topology_evidence_moves[raw_topology]
+        append_unique("evidence_operations", raw_topology)
+        record(
+            "solution_topology→evidence_operations",
+            raw_topology,
+            normalized["solution_topology"],
+            "证据操作字段串位修复",
+            force=True,
+        )
 
     groups = normalized.get("task_groups")
     if isinstance(groups, list):
@@ -561,7 +665,22 @@ def normalize_observable_features(
         old_values = normalized["rule_families"]
         new_values: List[str] = []
         for value in old_values:
-            canonical = _canonical_rule_family(value)
+            clean_value = _clean_enum_text(value)
+            cross_field_move = RULE_FAMILY_CROSS_FIELD_MOVES.get(
+                clean_value
+            )
+            if cross_field_move:
+                canonical, target_field, target_value = cross_field_move
+                append_unique(target_field, target_value)
+                record(
+                    f"rule_families→{target_field}",
+                    clean_value,
+                    target_value,
+                    "规则族中的操作枚举移回所属字段",
+                    force=True,
+                )
+            else:
+                canonical = _canonical_rule_family(clean_value)
             if canonical not in new_values:
                 new_values.append(canonical)
         record("rule_families", old_values, new_values, "规则族近义归一与去重")
@@ -585,6 +704,22 @@ def normalize_observable_features(
                 canonical_values.append(canonical)
         record(field, values, canonical_values, "枚举近义归一与去重")
         normalized[field] = canonical_values
+
+    # “宏观现象→宏观含义”没有跨表征转换，今天的重试结果也将其删除。
+    # 本地丢弃这个伪操作比臆造一种化学转换更安全。
+    representation_values = normalized.get("representation_operations")
+    if isinstance(representation_values, list):
+        for no_conversion in ("宏观现象→宏观含义",):
+            if no_conversion not in representation_values:
+                continue
+            representation_values.remove(no_conversion)
+            record(
+                "representation_operations",
+                no_conversion,
+                None,
+                "同一表征内部释义，不计作表征转换",
+                force=True,
+            )
 
     # 表征转换和定量计算是两个不同侧面。模型偶尔会把合法的表征枚举
     # 写进 calculation_operations；这种串位可以无损修复，但不能凭空
@@ -612,9 +747,115 @@ def normalize_observable_features(
                 force=True,
             )
 
+        if "定量关系与计算" in calculation_values:
+            calculation_values.remove("定量关系与计算")
+            append_unique("rule_families", "定量关系与计算")
+            record(
+                "calculation_operations→rule_families",
+                "定量关系与计算",
+                "定量关系与计算",
+                "规则族从计算操作字段移回规则族字段",
+                force=True,
+            )
+
     conditions = normalized.get("condition_operations")
     evidence = normalized.get("evidence_operations")
-    if isinstance(conditions, list) and isinstance(evidence, list):
+    calculation_values = normalized.get("calculation_operations")
+    if (
+        isinstance(conditions, list)
+        and isinstance(evidence, list)
+        and isinstance(calculation_values, list)
+    ):
+        # 图表分段描述、计算方法和证据操作不能留在条件数组中。
+        graph_condition_moves = {
+            "拐点分段",
+            "分段或拐点确定",
+            "分段条件",
+            "拐点边界",
+        }
+        moved_graph_conditions = set()
+        for misplaced in list(conditions):
+            if misplaced not in graph_condition_moves:
+                continue
+            conditions.remove(misplaced)
+            if normalized.get("graph_table_operation") in {None, "无"}:
+                normalized["graph_table_operation"] = "拐点平台或分段"
+            moved_graph_conditions.add(misplaced)
+            record(
+                "condition_operations→graph_table_operation",
+                misplaced,
+                "拐点平台或分段",
+                "图表分段操作字段串位修复",
+                force=True,
+            )
+
+        # 分段条件和拐点边界除图表操作外，还分别表达条件切换与范围。
+        # 上面的移动已从conditions删除原值；补写其确定性条件含义。
+        if "分段条件" in moved_graph_conditions:
+            append_unique("condition_operations", "条件切换")
+        if "拐点边界" in moved_graph_conditions:
+            append_unique("condition_operations", "范围或边界")
+
+        for misplaced in ("差量", "单一守恒"):
+            if misplaced not in conditions:
+                continue
+            conditions.remove(misplaced)
+            if misplaced not in calculation_values:
+                calculation_values.append(misplaced)
+            record(
+                "condition_operations→calculation_operations",
+                misplaced,
+                misplaced,
+                "计算方法字段串位修复",
+                force=True,
+            )
+
+        evidence_to_condition = {
+            "范围条件筛选": "范围或边界",
+            "范围或边界筛选": "范围或边界",
+            "排除干扰条件": "干扰条件排除",
+            "排除干扰": "干扰条件排除",
+        }
+        for misplaced, target in evidence_to_condition.items():
+            if misplaced not in evidence:
+                continue
+            evidence.remove(misplaced)
+            if target not in conditions:
+                conditions.append(target)
+            record(
+                "evidence_operations→condition_operations",
+                misplaced,
+                target,
+                "范围筛选操作字段串位修复",
+                force=True,
+            )
+
+        if "组分消元或组成不变量" in evidence:
+            evidence.remove("组分消元或组成不变量")
+            if "组分消元或组成不变量" not in calculation_values:
+                calculation_values.append("组分消元或组成不变量")
+            normalized["solution_topology"] = "未知组分消元或组成不变量"
+            record(
+                "evidence_operations→calculation_operations",
+                "组分消元或组成不变量",
+                "组分消元或组成不变量",
+                "组分消元方法字段串位修复",
+                force=True,
+            )
+
+        # “未知组成或量反推”是拓扑而不是计算方法。移回拓扑后不猜测
+        # 具体计算操作；若本题确有定量任务且没有方法，严格校验仍会重试。
+        if "未知组成或量反推" in calculation_values:
+            calculation_values.remove("未知组成或量反推")
+            normalized["solution_topology"] = "未知组成或量反推"
+            record(
+                "calculation_operations→solution_topology",
+                "未知组成或量反推",
+                "未知组成或量反推",
+                "反推拓扑字段串位修复",
+                force=True,
+            )
+
         for misplaced in ("多证据共同成立", "排除多个候选解释"):
             if misplaced in conditions:
                 conditions.remove(misplaced)
@@ -709,6 +950,22 @@ def normalize_observable_features(
                 "图表分段操作字段串位修复",
                 force=True,
             )
+
+    # 出现图表数据转换至少意味着读取过图表。无法唯一判断是否还包含
+    # 多组比较或拐点分析时，只补最低可观测事实“直接读数”。
+    if (
+        isinstance(representation_values, list)
+        and "图表数据→化学关系" in representation_values
+        and normalized.get("graph_table_operation") in {None, "无"}
+    ):
+        normalized["graph_table_operation"] = "直接读数"
+        record(
+            "graph_table_operation",
+            "无",
+            "直接读数",
+            "由图表数据转换派生最低图表操作",
+            force=True,
+        )
 
     raw_experiment_operation = normalized.get("experiment_operation")
     if raw_experiment_operation in {
