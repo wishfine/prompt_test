@@ -17,6 +17,7 @@ import html
 import json
 import os
 import random
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
@@ -163,6 +164,21 @@ def _display_value(value: Any, *, field: str | None = None) -> str:
     return str(value)
 
 
+CURRICULUM_TOPIC_PATTERN = re.compile(r"U(?:10|11|[1-9])-[1-3]")
+
+
+def _display_curriculum_span(value: Any) -> str:
+    """在课程跨度摘要中同时展示课题编码及教材课题名称。"""
+    text = _display_value(value)
+
+    def replace_topic(match: re.Match[str]) -> str:
+        code = match.group(0)
+        name = CURRICULUM_TOPIC_NAMES.get(code)
+        return f"{code} {name}" if name else code
+
+    return CURRICULUM_TOPIC_PATTERN.sub(replace_topic, text)
+
+
 def build_priority_feature_items(
     item: Dict[str, Any],
     rating: Dict[str, Any],
@@ -171,26 +187,37 @@ def build_priority_feature_items(
     features = rating.get("features") or {}
     metrics = rating.get("observable_metrics") or {}
     stem_image_count = len(split_image_urls(item.get("stem_pic_url")))
-    fields: List[Tuple[str, str]] = [
-        ("最长解题链", str(metrics.get("longest_chain_steps", len(features.get("longest_solution_chain", []))))),
-        ("有效任务数", str(metrics.get("effective_task_count", "无"))),
-        ("明示小问数", str(item.get("explicit_subquestion_count", metrics.get("explicit_subquestion_count", "无")))),
-        ("知识课题数", str(metrics.get("curriculum_topic_count", len(features.get("curriculum_topics", []))))),
-        ("规则族数", str(metrics.get("rule_family_count", len(features.get("rule_families", []))))),
+    text_fields: List[Tuple[str, str]] = [
+        (
+            "最长解题链",
+            _display_value(
+                features.get("longest_solution_chain"),
+                field="longest_solution_chain",
+            ),
+        ),
+        (
+            "任务组",
+            _display_value(features.get("task_groups"), field="task_groups"),
+        ),
         ("解题拓扑", _display_value(features.get("solution_topology"))),
         ("误差分析", _display_value(features.get("error_analysis_operation"))),
         ("计算操作", _display_value(features.get("calculation_operations"))),
         ("条件操作", _display_value(features.get("condition_operations"))),
         ("图像任务结构", _display_value(features.get("visual_task_structure"))),
         ("并列/关联任务", _display_value(features.get("parallel_task_relation"))),
-        ("课程跨度", _display_value(metrics.get("curriculum_span_summary"))),
+        ("课程跨度", _display_curriculum_span(metrics.get("curriculum_span_summary"))),
         ("作答规则族", _display_value(features.get("rule_families"))),
         ("实验任务结构", _display_value(features.get("experiment_task_structure"))),
         ("图表操作", _display_value(features.get("graph_table_operation"))),
+    ]
+    numeric_fields: List[Tuple[str, str]] = [
+        ("小问数", str(item.get("explicit_subquestion_count", metrics.get("explicit_subquestion_count", "无")))),
+        ("知识课题数", str(metrics.get("curriculum_topic_count", len(features.get("curriculum_topics", []))))),
+        ("规则族数", str(metrics.get("rule_family_count", len(features.get("rule_families", []))))),
         ("题干字数", str(item.get("question_text_char_count", metrics.get("question_text_char_count", "无")))),
         ("题干图片资源数", str(stem_image_count)),
     ]
-    return fields
+    return text_fields + numeric_fields
 
 
 def build_full_feature_items(
@@ -218,6 +245,9 @@ EXTRA_CSS = """
         .priority-details .rating-detail-item {
             border-color: #b9e6df; background: linear-gradient(180deg,#fff,#f4fffc);
             min-height: 72px;
+        }
+        .priority-details .feature-wide {
+            grid-column: 1 / -1; min-height: 0;
         }
         .priority-details .label { color: #0b766e; font-weight: 700; }
         .all-feature-details {
@@ -258,8 +288,11 @@ def _render_feature_grid(
 ) -> str:
     blocks = []
     for label, value in items:
+        item_class = "rating-detail-item"
+        if css_class == "priority-details" and label in {"最长解题链", "任务组"}:
+            item_class += " feature-wide"
         blocks.append(
-            '<div class="rating-detail-item">'
+            f'<div class="{item_class}">'
             f'<div class="label">{escape(label)}</div>'
             f'<div class="value">{escape(value)}</div>'
             "</div>"

@@ -414,11 +414,50 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn("若本题与某组Case在任务结构上同型", prompt)
-        self.assertIn("若不存在同型Case，直接按§四", prompt)
+        self.assertIn("若不存在同型Case，直接按§二", prompt)
         self.assertNotIn(
             "先从Case中选择结构最接近的一对低档侧/高档侧",
             prompt,
         )
+
+    def test_teacher_levels_and_boundaries_precede_feature_protocol(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        levels = prompt.index("## 二、教师五档难度")
+        boundaries = prompt.index("## 三、教师相邻边界例题")
+        depth_breadth = prompt.index("## 四、纵向深度、横向广度与课程跨度")
+        features = prompt.index("## 五、17项可观测特征协议")
+        self.assertLess(levels, boundaries)
+        self.assertLess(boundaries, depth_breadth)
+        self.assertLess(depth_breadth, features)
+
+    def test_all_teacher_examples_keep_concrete_three_part_format(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        levels = [
+            ("### 难度1——送分题", "### 难度2——基础题", "送分题", 13),
+            ("### 难度2——基础题", "### 难度3——中等题", "基础题", 17),
+            ("### 难度3——中等题", "### 难度4——拔高题", "中等题", 13),
+            ("### 难度4——拔高题", "### 难度5——压轴题", "拔高题", 10),
+            ("### 难度5——压轴题", "## 三、教师相邻边界例题", "压轴题", 7),
+        ]
+
+        self.assertNotIn("#### 来自教师复核分支的真实锚点", prompt)
+        for start_marker, end_marker, level, expected_cases in levels:
+            start = prompt.index(start_marker)
+            end = prompt.index(end_marker, start + len(start_marker))
+            section = prompt[start:end]
+            self.assertIn("#### 代表性例题", section)
+            self.assertEqual(section.count("【Case "), expected_cases)
+            self.assertEqual(section.count("题目："), expected_cases)
+            self.assertEqual(
+                section.count(f"教师等级：{level}。"),
+                expected_cases,
+            )
+            self.assertEqual(section.count("判定："), expected_cases)
 
     def test_prompt_output_example_covers_all_declared_task_groups(
         self,

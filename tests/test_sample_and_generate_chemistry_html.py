@@ -127,21 +127,39 @@ class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
         labels = [field[0] for field in fields]
 
         self.assertEqual(
-            labels[:10],
+            labels[:12],
             [
                 "最长解题链",
-                "有效任务数",
-                "明示小问数",
-                "知识课题数",
-                "规则族数",
+                "任务组",
                 "解题拓扑",
                 "误差分析",
                 "计算操作",
                 "条件操作",
                 "图像任务结构",
+                "并列/关联任务",
+                "课程跨度",
+                "作答规则族",
+                "实验任务结构",
+                "图表操作",
+            ],
+        )
+        self.assertEqual(
+            labels[12:],
+            [
+                "小问数",
+                "知识课题数",
+                "规则族数",
+                "题干字数",
+                "题干图片资源数",
             ],
         )
         values = dict(fields)
+        self.assertEqual(values["最长解题链"], "1.a → 2.b → 3.c")
+        self.assertEqual(values["任务组"], "实验操作与探究×4")
+        self.assertEqual(
+            values["课程跨度"],
+            "跨单元并列（U1-2 化学实验与科学探究、U9-3 溶质的质量分数）",
+        )
         self.assertEqual(values["题干字数"], "128")
         self.assertEqual(values["题干图片资源数"], "4")
 
@@ -202,6 +220,12 @@ class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
         self.assertNotIn('src="first.png"', rendered)
         self.assertIn("关键可观测证据", rendered)
         self.assertIn("全部17项特征", rendered)
+        self.assertIn("小问数", rendered)
+        self.assertNotIn("明示小问数", rendered)
+        self.assertNotIn("有效任务数", rendered)
+        self.assertIn("任务组", rendered)
+        self.assertIn("1.读取数据", rendered)
+        self.assertIn("U9-3 溶质的质量分数", rendered)
 
 
 if __name__ == "__main__":
