@@ -1,27 +1,47 @@
 # -*- coding: utf-8 -*-
-"""
-@File    : sample_and_generate_chemistry_html.py
-@Description:
-    从已打标的 3000 道初中化学题中，精准抽样 500 道生成交互式评议验收网页。
-    - 评级判定：依据 V1 纯文本打标与后处理纠偏结果。
-    - 可视化优化：题干和解析完全采用 V2 对应的图片 URL 进行渲染展示，不再渲染任何纯文本，规避 LaTeX 乱码。
+"""初中化学冻结版难度验收可视化。
+
+页面工作流与物理验收页保持一致：
+- 未标注默认模型判定合理，教师只需标记异常题；
+- 可选正确档位、填写理由并导出 JSONL/TXT；
+- 题干或解析有多张图时只展示最后一张；
+- 先展示与教师难度口径最相关的可观测证据，再展开全部17项特征。
+
+该脚本只负责可视化，不修改 Prompt、模型原始等级或后处理结果。
 """
 
+from __future__ import annotations
+
+import argparse
+import html
 import json
 import os
-import html
 import random
-import argparse
 from collections import defaultdict
-from typing import Dict, Any, List
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Tuple
 
-# 抽样配比计划 (对齐物理 500 题配比)
+try:
+    from sample_and_generate_html import HTML_TEMPLATE as PHYSICS_HTML_TEMPLATE
+except ImportError:  # 作为 src.* 模块导入时
+    from src.sample_and_generate_html import (
+        HTML_TEMPLATE as PHYSICS_HTML_TEMPLATE,
+    )
+
+try:
+    from chemistry_observable_features import CURRICULUM_TOPIC_NAMES
+except ImportError:
+    from src.chemistry_observable_features import CURRICULUM_TOPIC_NAMES
+
+
+CHEMISTRY_FROZEN_RELEASE = "d7fc644"
+
 SAMPLE_PLAN = {
     "送分题": 100,
     "基础题": 120,
     "中等题": 120,
     "拔高题": 100,
-    "压轴题": 60
+    "压轴题": 60,
 }
 
 LEVEL_MAP = {
@@ -40,937 +60,478 @@ LEVEL_NAMES = {
     5: "难度5 — 压轴题",
 }
 
-def escape(text: str) -> str:
-    if not text:
-        return ""
-    return html.escape(text)
+FULL_FEATURE_FIELDS: Tuple[Tuple[str, str], ...] = (
+    ("longest_solution_chain", "最长解题链"),
+    ("task_groups", "任务组"),
+    ("rule_families", "作答规则族"),
+    ("curriculum_topics", "课程课题"),
+    ("parallel_task_relation", "并列任务关系"),
+    ("solution_topology", "解题拓扑"),
+    ("reaction_structure", "反应结构"),
+    ("condition_operations", "条件操作"),
+    ("representation_operations", "表征转换"),
+    ("evidence_operations", "证据操作"),
+    ("experiment_operation", "实验操作"),
+    ("experiment_task_structure", "实验任务结构"),
+    ("visual_task_structure", "图像任务结构"),
+    ("graph_table_operation", "图表操作"),
+    ("error_analysis_operation", "误差分析"),
+    ("calculation_operations", "计算操作"),
+    ("new_information_operation", "新信息迁移"),
+)
 
-# HTML 网页基础骨架模板 (针对化学优化)
-HTML_TEMPLATE = """<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>初中化学评级验收面板 (500题纯图片可视化优化版)</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: #f5f7fb;
-            color: #333;
-            line-height: 1.6;
-            padding-top: 160px;
-        }
 
-        /* ===== Header ===== */
-        .header {
-            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-            color: white;
-            padding: 18px 20px;
-            text-align: center;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            z-index: 1000;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        .header h1 { font-size: 20px; margin-bottom: 0; font-weight: 700; letter-spacing: 1px; }
+def escape(value: Any) -> str:
+    return html.escape(str(value or ""))
 
-        /* ===== Stats Bar ===== */
-        .stats-bar {
-            background: white;
-            padding: 10px 20px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 20px;
-            flex-wrap: wrap;
-            border-bottom: 1px solid #e0e0e0;
-            position: fixed;
-            top: 56px;
-            left: 0;
-            right: 0;
-            z-index: 999;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.04);
-        }
-        .stats-item {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 13px;
-            color: #555;
-        }
-        .stats-item .stats-value {
-            font-weight: 700;
-            color: #11998e;
-        }
-        .stats-level {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            font-size: 12px;
-            padding: 3px 10px;
-            border-radius: 12px;
-        }
-        .stats-level-1 { background: #E8F5E9; color: #2E7D32; }
-        .stats-level-2 { background: #F1F8E9; color: #558B2F; }
-        .stats-level-3 { background: #FFF8E1; color: #F9A825; }
-        .stats-level-4 { background: #FFF3E0; color: #EF6C00; }
-        .stats-level-5 { background: #FFEBEE; color: #C62828; }
 
-        /* ===== Nav ===== */
-        .nav {
-            background: white;
-            padding: 10px 20px;
-            display: flex;
-            justify-content: center;
-            gap: 8px;
-            flex-wrap: wrap;
-            border-bottom: 1px solid #e0e0e0;
-            position: fixed;
-            top: 100px;
-            left: 0;
-            right: 0;
-            z-index: 998;
-        }
-        .nav a {
-            padding: 8px 18px;
-            border-radius: 8px;
-            text-decoration: none;
-            color: #666;
-            background: #f5f5f5;
-            transition: all 0.25s;
-            font-size: 14px;
-            font-weight: 500;
-            border: 1px solid transparent;
-        }
-        .nav a:hover {
-            background: #11998e;
-            color: white;
-            border-color: #11998e;
-            transform: translateY(-1px);
-            box-shadow: 0 2px 8px rgba(17,153,142,0.3);
-        }
-        .nav a.nav-active {
-            background: #11998e;
-            color: white;
-            border-color: #11998e;
-        }
+def split_image_urls(value: Any) -> List[str]:
+    """把图片字段归一化为去重且保持原顺序的 URL 列表。"""
+    if isinstance(value, (list, tuple)):
+        candidates = [str(item).strip() for item in value]
+    else:
+        candidates = [part.strip() for part in str(value or "").split(",")]
+    return list(dict.fromkeys(url for url in candidates if url))
 
-        /* ===== Export Bar ===== */
-        .export-bar {
-            position: fixed;
-            top: 56px;
-            right: 16px;
-            z-index: 1001;
-            display: flex;
-            gap: 8px;
-        }
-        .export-btn {
-            padding: 6px 14px;
-            border-radius: 8px;
-            border: 1px solid #ddd;
-            background: white;
-            color: #555;
-            font-size: 12px;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-weight: 500;
-        }
-        .export-btn:hover {
-            background: #11998e;
-            color: white;
-            border-color: #11998e;
-        }
 
-        /* ===== Level Section ===== */
-        .level-section {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        .level-header {
-            background: white;
-            padding: 20px;
-            margin-bottom: 20px;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-            border-left: 5px solid;
-        }
-        .level-1 { border-left-color: #4CAF50; }
-        .level-2 { border-left-color: #8BC34A; }
-        .level-3 { border-left-color: #FFC107; }
-        .level-4 { border-left-color: #FF9800; }
-        .level-5 { border-left-color: #F44336; }
-        .level-title { font-size: 22px; font-weight: bold; margin-bottom: 4px; }
-        .level-desc { color: #666; font-size: 14px; }
-
-        /* ===== Question Card ===== */
-        .question-card {
-            background: white;
-            margin-bottom: 25px;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-            overflow: hidden;
-            border: 1px solid #eef2f6;
-        }
-        .question-header {
-            padding: 12px 20px;
-            background: #fafbfc;
-            border-bottom: 1px solid #eee;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        .question-id {
-            font-family: monospace;
-            font-size: 12px;
-            color: #999;
-        }
-        .question-tags {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            align-items: center;
-        }
-        .tag {
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: 500;
-        }
-        .tag-raw { background: #eceff1; color: #37474f; }
-        .tag-time { background: #E3F2FD; color: #1565C0; }
-        .tag-tokens { background: #F3E5F5; color: #6A1B9A; }
-
-        /* ===== Big Difficulty Badge ===== */
-        .difficulty-badge {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            padding: 6px 20px;
-            border-radius: 8px;
-            font-size: 22px;
-            font-weight: 800;
-            letter-spacing: 2px;
-            margin: 12px 0;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        }
-        .badge-1 { background: #4CAF50; color: white; }
-        .badge-2 { background: #8BC34A; color: white; }
-        .badge-3 { background: #FFC107; color: #333; }
-        .badge-4 { background: #FF9800; color: white; }
-        .badge-5 { background: #F44336; color: white; }
-
-        .question-body { padding: 20px; }
-
-        /* ===== Images Container ===== */
-        .image-container {
-            margin: 10px 0 20px 0;
-            text-align: left;
-            background: #fff;
-            padding: 12px;
-            border-radius: 8px;
-            border: 1px solid #e2e8f0;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-        .image-container img {
-            max-width: 100%;
-            max-height: 500px;
-            object-fit: contain;
-            border-radius: 4px;
-            border: 1px solid #f1f5f9;
-        }
-
-        /* ===== Rating Section ===== */
-        .rating-section {
-            margin-top: 20px;
-            padding: 15px;
-            background: #f4faf4;
-            border-radius: 8px;
-            border: 1px solid #d4eed5;
-        }
-        .rating-title {
-            font-weight: bold;
-            color: #2E7D32;
-            margin-bottom: 10px;
-            font-size: 14px;
-        }
-        .rating-reasoning {
-            font-size: 13px;
-            color: #555;
-            margin-bottom: 12px;
-            line-height: 1.5;
-            background: white;
-            padding: 10px;
-            border-radius: 6px;
-            border: 1px solid #e2f0d9;
-        }
-        .rating-details {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 8px;
-            font-size: 12px;
-        }
-        .rating-detail-item {
-            padding: 6px 10px;
-            background: white;
-            border-radius: 6px;
-            border: 1px solid #e2f0d9;
-        }
-        .rating-detail-item .label {
-            color: #7f8c8d;
-            font-size: 11px;
-        }
-        .rating-detail-item .value {
-            color: #2c3e50;
-            margin-top: 2px;
-            font-weight: 500;
-        }
-
-        /* ===== Annotation Section ===== */
-        .annotation-section {
-            margin-top: 20px;
-            padding: 15px;
-            background: #fff9e6;
-            border-radius: 8px;
-            border: 1px solid #ffe8a3;
-        }
-        .annotation-title {
-            font-weight: bold;
-            color: #b78a00;
-            margin-bottom: 10px;
-            font-size: 14px;
-        }
-        .annotation-row {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 10px;
-            flex-wrap: wrap;
-        }
-        .annotation-row label {
-            font-size: 13px;
-            color: #555;
-            font-weight: 500;
-        }
-        .annotation-btn {
-            padding: 6px 18px;
-            border-radius: 8px;
-            border: 2px solid #ccc;
-            background: white;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .annotation-btn:hover { transform: translateY(-1px); }
-        .annotation-btn.btn-correct {
-            border-color: #4CAF50;
-            color: #4CAF50;
-        }
-        .annotation-btn.btn-correct.active {
-            background: #4CAF50;
-            color: white;
-            box-shadow: 0 2px 8px rgba(76,175,80,0.3);
-        }
-        .annotation-btn.btn-wrong {
-            border-color: #F44336;
-            color: #F44336;
-        }
-        .annotation-btn.btn-wrong.active {
-            background: #F44336;
-            color: white;
-            box-shadow: 0 2px 8px rgba(244,67,54,0.3);
-        }
-        .annotation-btn.btn-unmark {
-            border-color: #999;
-            color: #999;
-        }
-        .annotation-btn.btn-unmark.active {
-            background: #999;
-            color: white;
-        }
-        .annotation-textarea {
-            width: 100%;
-            min-height: 60px;
-            padding: 8px 12px;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            font-size: 13px;
-            resize: vertical;
-            font-family: inherit;
-            line-height: 1.5;
-        }
-        .annotation-textarea:focus {
-            outline: none;
-            border-color: #FF9800;
-            box-shadow: 0 0 0 3px rgba(255,152,0,0.1);
-        }
-
-        /* ===== Back to Top ===== */
-        .back-to-top {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            width: 50px;
-            height: 50px;
-            background: #11998e;
-            color: white;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-            text-decoration: none;
-            font-size: 20px;
-            transition: all 0.3s;
-            z-index: 100;
-        }
-        .back-to-top:hover {
-            background: #38ef7d;
-            transform: translateY(-3px);
-        }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>初中化学评级验收面板 (500题纯图片可视化优化版)</h1>
-    </div>
-
-    <div class="stats-bar" id="statsBar">
-        <!-- JS 动态计算填充 -->
-    </div>
-
-    <div class="nav" id="navBar">
-__NAV_ITEMS_PLACEHOLDER__
-    </div>
-
-    <div class="export-bar">
-        <button class="export-btn" onclick="exportJSONL()">导出 JSONL 标注修正包</button>
-        <button class="export-btn" onclick="exportTXT()">导出 TXT 摘要报表</button>
-    </div>
-
-__QUESTION_CARDS_PLACEHOLDER__
-
-    <a href="#" class="back-to-top">↑</a>
-
-    <script>
-    // ===== 标注数据管理 (独立缓存 key: chemistry_difficulty_annotations_500) =====
-    const LEVEL_NAMES = __LEVEL_NAMES_PLACEHOLDER__;
-    const LEVEL_MAP = __LEVEL_MAP_PLACEHOLDER__;
-    const allQuestions = __QUESTIONS_JSON_PLACEHOLDER__;
-
-    function loadAnnotations() {
-        try {
-            return JSON.parse(localStorage.getItem('chemistry_difficulty_annotations_500') || '{}');
-        } catch { return {}; }
-    }
-
-    function saveAnnotations(annotations) {
-        localStorage.setItem('chemistry_difficulty_annotations_500', JSON.stringify(annotations));
-        updateStats();
-    }
-
-    function setAnnotation(btn, action) {
-        const qid = btn.getAttribute('data-qid');
-        const annotations = loadAnnotations();
-        const card = btn.closest('.question-card');
-        const textarea = card.querySelector('.annotation-textarea');
-
-        if (action === 'unmark') {
-            delete annotations[qid];
-            textarea.value = '';
-        } else {
-            if (!annotations[qid]) annotations[qid] = {};
-            annotations[qid].verdict = action;
-        }
-
-        const buttons = card.querySelectorAll('.annotation-btn');
-        buttons.forEach(b => b.classList.remove('active'));
-        if (action !== 'unmark') {
-            btn.classList.add('active');
-        }
-
-        saveAnnotations(annotations);
-    }
-
-    // 保存键盘输入的文字修改意见
-    function saveAnnotationText(textarea) {
-        const qid = textarea.getAttribute('data-qid');
-        const annotations = loadAnnotations();
-        if (!annotations[qid]) annotations[qid] = {};
-        annotations[qid].reason = textarea.value;
-        saveAnnotations(annotations);
-    }
-
-    // ===== 仪表盘汇总 =====
-    function updateStats() {
-        const annotations = loadAnnotations();
-        const total = allQuestions.length;
-        const annotated = Object.keys(annotations).filter(k => annotations[k].verdict).length;
-        const correct = Object.keys(annotations).filter(k => annotations[k].verdict === 'correct').length;
-
-        const levelStats = {};
-        for (let lvl = 1; lvl <= 5; lvl++) {
-            levelStats[lvl] = { total: 0, annotated: 0, correct: 0 };
-        }
-        allQuestions.forEach(q => {
-            const lvl = q.level_num;
-            if (lvl >= 1 && lvl <= 5) {
-                levelStats[lvl].total++;
-                const ann = annotations[q.question_id];
-                if (ann && ann.verdict) {
-                    levelStats[lvl].annotated++;
-                    if (ann.verdict === 'correct') levelStats[lvl].correct++;
-                }
-            }
-        });
-
-        let html = '<div class="stats-item">评估总数 <span class="stats-value">' + total + '</span> 题</div>';
-        html += '<div class="stats-item">已评审数 <span class="stats-value">' + annotated + '</span> 题</div>';
-        html += '<div class="stats-item">模型难度合理率 <span class="stats-value">' + (annotated > 0 ? (correct / annotated * 100).toFixed(1) + '%' : '—') + '</span></div>';
-        html += '<span style="color:#ddd;">|</span>';
-
-        for (let lvl = 1; lvl <= 5; lvl++) {
-            const s = levelStats[lvl];
-            const acc = s.annotated > 0 ? (s.correct / s.annotated * 100).toFixed(1) + '%' : '—';
-            html += '<span class="stats-level stats-level-' + lvl + '">' +
-                LEVEL_NAMES[lvl].replace('难度' + lvl + ' — ', '') +
-                ': 抽样' + s.total + ' / 评审' + s.annotated + ' / 合理率' + acc + '</span>';
-        }
-
-        document.getElementById('statsBar').innerHTML = html;
-    }
-
-    function restoreAnnotations() {
-        const annotations = loadAnnotations();
-        document.querySelectorAll('.question-card').forEach(card => {
-            const qid = card.getAttribute('data-qid');
-            const ann = annotations[qid];
-            if (ann) {
-                if (ann.verdict) {
-                    const btn = card.querySelector('.annotation-btn[data-action="' + ann.verdict + '"]');
-                    if (btn) btn.classList.add('active');
-                }
-                if (ann.reason) {
-                    const textarea = card.querySelector('.annotation-textarea');
-                    if (textarea) textarea.value = ann.reason;
-                }
-            }
-        });
-        updateStats();
-    }
-
-    function exportJSONL() {
-        const annotations = loadAnnotations();
-        let exportLines = [];
-        allQuestions.forEach(q => {
-            const ann = annotations[q.question_id];
-            if (ann && ann.verdict) {
-                exportLines.push(JSON.stringify({
-                    question_id: q.question_id,
-                    model_difficulty_level: q.difficulty_level,
-                    verdict: ann.verdict,
-                    human_notes: ann.reason || ""
-                }, null, 0));
-            }
-        });
-
-        if (exportLines.length === 0) {
-            alert("目前没有任何标注修改意见，请先点击 ✓ 或 ✗ 选项！");
-            return;
-        }
-
-        const blob = new Blob([exportLines.join('\\n')], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'chemistry_difficulty_human_annotations_500.jsonl';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    }
-
-    function exportTXT() {
-        const annotations = loadAnnotations();
-        let text = "==================================================\\n";
-        text += "        初中化学验收 500 题人工评议摘要报表\\n";
-        text += "==================================================\\n\\n";
-        
-        let correctCount = 0;
-        let wrongCount = 0;
-        let details = "";
-
-        allQuestions.forEach(q => {
-            const ann = annotations[q.question_id];
-            if (ann && ann.verdict) {
-                const statusStr = ann.verdict === 'correct' ? "【判定合理】" : "【判定有误】";
-                if (ann.verdict === 'correct') correctCount++; else wrongCount++;
-                
-                details += `题目ID: ${q.question_id}\\n`;
-                details += `模型定位: ${q.difficulty_level} (原始教师定位: ${q.raw_difficulty}档)\\n`;
-                details += `评议结论: ${statusStr}\\n`;
-                if (ann.reason) details += `评审备注: ${ann.reason}\\n`;
-                details += "--------------------------------------------------\\n";
-            }
-        });
-
-        text += `评审总数: ${correctCount + wrongCount} 道\\n`;
-        text += `判定合理: ${correctCount} 道\\n`;
-        text += `判定不准: ${wrongCount} 道\\n`;
-        text += `合理率: ${correctCount + wrongCount > 0 ? (correctCount / (correctCount + wrongCount) * 100).toFixed(1) + '%' : 'N/A'}\\n\\n`;
-        text += "================== 详细评议列表 ==================\\n\\n";
-        text += details;
-
-        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'chemistry_difficulty_review_report_500.txt';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    }
-
-    // 导航栏平滑滑动
-    document.querySelectorAll('.nav a').forEach(anchor => {
-        anchor.addEventListener('click', function(e) {
-            e.preventDefault();
-            const targetId = this.getAttribute('href');
-            document.querySelector(targetId).scrollIntoView({
-                behavior: 'smooth'
-            });
-            document.querySelectorAll('.nav a').forEach(a => a.classList.remove('nav-active'));
-            this.classList.add('nav-active');
-        });
-    });
-
-    window.onload = restoreAnnotations;
-    </script>
-</body>
-</html>
+def render_chemistry_image_section(
+    value: Any,
+    *,
+    title: str,
+    kind: str,
+) -> str:
+    """渲染图片区；题干多图按教师要求只取最后一张。"""
+    urls = split_image_urls(value)
+    if not urls:
+        return f"""
+                <div class="media-section media-section-empty">
+                    <div class="media-empty">【该题无{escape(title)}】</div>
+                </div>
 """
 
-def generate_html_file(samples: Dict[int, List[Dict[str, Any]]], output_path: str):
-    # 1. 构造导航栏
-    nav_html = ""
-    for level in sorted(samples.keys()):
-        count = len(samples[level])
-        nav_html += f'        <a href="#level-{level}" data-level="{level}">{LEVEL_NAMES[level]} ({count})</a>\n'
+    selected = urls[-1]
+    count_hint = (
+        f"共{len(urls)}张，题干多图时仅展示最后一张"
+        if len(urls) > 1
+        else "点击图片可放大查看"
+    )
+    return f"""
+                <div class="media-section chemistry-media-section">
+                    <div class="media-heading">
+                        <span>{escape(title)}</span>
+                        <span class="media-hint">{escape(count_hint)}</span>
+                    </div>
+                    <div class="image-container image-container-primary">
+                        <figure class="image-frame primary-image">
+                            <img src="{html.escape(selected)}"
+                                 alt="{escape(title)}"
+                                 data-image-role="{escape(kind)}-primary"
+                                 onclick="openImagePreview(this)"
+                                 onerror="markImageFailed(this)">
+                            <figcaption>{escape(title)}·最后一张</figcaption>
+                        </figure>
+                    </div>
+                </div>
+"""
 
-    # 2. 构造题目 Cards 列表
-    cards_html = ""
-    all_questions_list = []
-    
-    for level in sorted(samples.keys()):
+
+def _display_value(value: Any, *, field: str | None = None) -> str:
+    if value is None or value == "" or value == []:
+        return "无"
+    if field == "curriculum_topics" and isinstance(value, list):
+        return "、".join(
+            f"{code} {CURRICULUM_TOPIC_NAMES.get(code, '')}".strip()
+            for code in value
+        )
+    if field == "task_groups" and isinstance(value, list):
+        return "；".join(
+            f"{item.get('task_type', '未知任务')}×{item.get('count', '?')}"
+            if isinstance(item, dict)
+            else str(item)
+            for item in value
+        ) or "无"
+    if field == "longest_solution_chain" and isinstance(value, list):
+        return " → ".join(
+            f"{index}.{step}" for index, step in enumerate(value, 1)
+        ) or "无"
+    if isinstance(value, list):
+        return "、".join(str(item) for item in value) or "无"
+    if isinstance(value, dict):
+        return "；".join(f"{key}：{val}" for key, val in value.items())
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    return str(value)
+
+
+def build_priority_feature_items(
+    item: Dict[str, Any],
+    rating: Dict[str, Any],
+) -> List[Tuple[str, str]]:
+    """按教师评级口径的优先级组装首屏证据。"""
+    features = rating.get("features") or {}
+    metrics = rating.get("observable_metrics") or {}
+    stem_image_count = len(split_image_urls(item.get("stem_pic_url")))
+    fields: List[Tuple[str, str]] = [
+        ("最长解题链", str(metrics.get("longest_chain_steps", len(features.get("longest_solution_chain", []))))),
+        ("有效任务数", str(metrics.get("effective_task_count", "无"))),
+        ("明示小问数", str(item.get("explicit_subquestion_count", metrics.get("explicit_subquestion_count", "无")))),
+        ("知识课题数", str(metrics.get("curriculum_topic_count", len(features.get("curriculum_topics", []))))),
+        ("规则族数", str(metrics.get("rule_family_count", len(features.get("rule_families", []))))),
+        ("解题拓扑", _display_value(features.get("solution_topology"))),
+        ("误差分析", _display_value(features.get("error_analysis_operation"))),
+        ("计算操作", _display_value(features.get("calculation_operations"))),
+        ("条件操作", _display_value(features.get("condition_operations"))),
+        ("图像任务结构", _display_value(features.get("visual_task_structure"))),
+        ("并列/关联任务", _display_value(features.get("parallel_task_relation"))),
+        ("课程跨度", _display_value(metrics.get("curriculum_span_summary"))),
+        ("作答规则族", _display_value(features.get("rule_families"))),
+        ("实验任务结构", _display_value(features.get("experiment_task_structure"))),
+        ("图表操作", _display_value(features.get("graph_table_operation"))),
+        ("题干字数", str(item.get("question_text_char_count", metrics.get("question_text_char_count", "无")))),
+        ("题干图片资源数", str(stem_image_count)),
+    ]
+    return fields
+
+
+def build_full_feature_items(
+    rating: Dict[str, Any],
+) -> List[Tuple[str, str]]:
+    features = rating.get("features") or {}
+    return [
+        (label, _display_value(features.get(key), field=key))
+        for key, label in FULL_FEATURE_FIELDS
+    ]
+
+
+EXTRA_CSS = """
+        .freeze-ribbon {
+            display: inline-flex; align-items: center; gap: 8px;
+            margin-top: 7px; padding: 4px 11px; border-radius: 999px;
+            background: rgba(255,255,255,.15); font-size: 12px;
+            letter-spacing: .4px;
+        }
+        .feature-block-title {
+            margin: 16px 0 9px; color: #0b6e69; font-size: 15px;
+            font-weight: 800; letter-spacing: .3px;
+        }
+        .priority-details { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+        .priority-details .rating-detail-item {
+            border-color: #b9e6df; background: linear-gradient(180deg,#fff,#f4fffc);
+            min-height: 72px;
+        }
+        .priority-details .label { color: #0b766e; font-weight: 700; }
+        .all-feature-details {
+            margin-top: 15px; border-top: 1px dashed #b7dcd5; padding-top: 12px;
+        }
+        .all-feature-details summary {
+            cursor: pointer; font-weight: 750; color: #315f5b; margin-bottom: 10px;
+        }
+        .all-feature-details[open] summary { color: #0b766e; }
+        .feature-contract-note {
+            margin-top: 10px; color: #64748b; font-size: 12px; line-height: 1.65;
+        }
+"""
+
+
+HTML_TEMPLATE = (
+    PHYSICS_HTML_TEMPLATE
+    .replace("初中物理", "初中化学")
+    .replace("physics_difficulty", "chemistry_difficulty")
+    .replace("原始教师定位", "原始模型等级")
+    .replace("#1e3c72", "#075e54")
+    .replace("#2a5298", "#0f9d87")
+    .replace("rgba(42,82,152", "rgba(15,157,135")
+    .replace("</style>", EXTRA_CSS + "\n    </style>")
+    .replace(
+        "</h1>",
+        "</h1><div class=\"freeze-ribbon\">"
+        "冻结评级版本 __RELEASE_LABEL__ · 可视化不改档</div>",
+        1,
+    )
+)
+
+
+def _render_feature_grid(
+    items: Iterable[Tuple[str, str]],
+    *,
+    css_class: str = "",
+) -> str:
+    blocks = []
+    for label, value in items:
+        blocks.append(
+            '<div class="rating-detail-item">'
+            f'<div class="label">{escape(label)}</div>'
+            f'<div class="value">{escape(value)}</div>'
+            "</div>"
+        )
+    return f'<div class="rating-details {css_class}">' + "".join(blocks) + "</div>"
+
+
+def generate_html_file(
+    samples: Dict[int, List[Dict[str, Any]]],
+    output_path: str,
+    *,
+    review_scope: str | None = None,
+    release_label: str = CHEMISTRY_FROZEN_RELEASE,
+) -> None:
+    nav_html = "".join(
+        f'        <a href="#level-{level}" data-level="{level}">'
+        f'{LEVEL_NAMES[level]} ({len(samples[level])})</a>\n'
+        for level in sorted(samples)
+    )
+    cards: List[str] = []
+    all_questions: List[Dict[str, Any]] = []
+
+    for level in sorted(samples):
         items = samples[level]
-        cards_html += f"""
-    <div id="level-{level}" class="level-section">
-        <div class="level-header level-{level}">
-            <div class="level-title">{LEVEL_NAMES[level]}</div>
-            <div class="level-desc">本档抽样验证共 {len(items)} 道题目 (已全面采用图片 URL 渲染)</div>
-        </div>
-"""
-        for idx, item in enumerate(items, 1):
-            rating = item.get('difficulty_rating', {})
-            features_obj = rating.get('features', {})
-            reasoning = rating.get('reasoning', {})
-            difficulty_level = rating.get('difficulty_level', '')
-            level_num = LEVEL_MAP.get(difficulty_level, 0)
+        cards.append(
+            f'<div id="level-{level}" class="level-section">'
+            f'<div class="level-header level-{level}">'
+            f'<div class="level-title">{LEVEL_NAMES[level]}</div>'
+            f'<div class="level-desc">本档验收 {len(items)} 题；'
+            '题干多图时仅展示最后一张</div></div>'
+        )
+        for index, item in enumerate(items, 1):
+            rating = item.get("difficulty_rating") or {}
+            reasoning = rating.get("reasoning") or {}
+            final_level = rating.get("difficulty_level", "")
+            level_num = LEVEL_MAP.get(final_level, level)
+            raw_level = item.get("difficulty_level_raw", final_level)
+            question_id = str(item.get("question_id", "unknown"))
+            postprocess_actions = item.get("postprocess_actions") or []
+            action_names = [
+                str(action.get("rule") or action.get("name") or action)
+                if isinstance(action, dict)
+                else str(action)
+                for action in postprocess_actions
+            ]
 
-            question_id = item.get('question_id', 'unknown')
-            parent_id = item.get('parent_id', question_id)
-            api_time = item.get('api_time_use', 0)
-            api_tokens = item.get('api_total_tokens', 0)
-            raw_diff = item.get('difficulty', '无')
+            all_questions.append(
+                {
+                    "question_id": question_id,
+                    "parent_id": str(item.get("parent_id", question_id)),
+                    "level_num": level_num,
+                    "difficulty_level": final_level,
+                    "raw_difficulty": raw_level,
+                    "reasoning": reasoning,
+                    "features": rating.get("features") or {},
+                }
+            )
 
-            stem_url = item.get('stem_pic_url', '')
-            analysis_url = item.get('analysis_pic_url', '')
+            cards.append(
+                f'<div class="question-card" data-qid="{escape(question_id)}">'
+                '<div class="question-header">'
+                f'<span class="question-id">#{index} | ID: {escape(question_id)}</span>'
+                '<div class="question-tags">'
+                f'<span class="tag tag-raw">原始模型: {escape(raw_level)}</span>'
+                f'<span class="tag tag-time">后处理: {escape("、".join(action_names) or "无")}</span>'
+                f'<span class="tag tag-tokens">{escape(item.get("api_total_tokens", 0))} tokens</span>'
+                "</div></div><div class=\"question-body\">"
+                f'<div class="difficulty-badge badge-{level_num}">{escape(final_level)}</div>'
+            )
+            cards.append(
+                render_chemistry_image_section(
+                    item.get("stem_pic_url"), title="题干图示", kind="stem"
+                )
+            )
+            cards.append(
+                render_chemistry_image_section(
+                    item.get("analysis_pic_url"), title="解析图示", kind="analysis"
+                )
+            )
 
-            # 存入 JS 变量的数据（省略繁杂文本）
-            all_questions_list.append({
-                'question_id': question_id,
-                'parent_id': parent_id,
-                'level_num': level_num,
-                'difficulty_level': difficulty_level,
-                'reasoning': reasoning,
-                'features': features_obj,
-                'stem_url': stem_url,
-                'analysis_url': analysis_url,
-                'api_time': api_time,
-                'api_tokens': api_tokens,
-                'raw_difficulty': raw_diff
-            })
+            cards.append(
+                '<div class="rating-section">'
+                '<div class="rating-title">化学可观测特征 & 判定理由</div>'
+                '<div class="feature-block-title">关键可观测证据（按定档价值排序）</div>'
+                + _render_feature_grid(
+                    build_priority_feature_items(item, rating),
+                    css_class="priority-details",
+                )
+            )
+            if reasoning:
+                if isinstance(reasoning, dict):
+                    cards.append(
+                        '<div class="rating-reasoning">'
+                        f'<strong>1. 核心判定依据：</strong>{escape(reasoning.get("core_basis"))}<br/>'
+                        f'<strong>2. 易错卡点：</strong>{escape(reasoning.get("hard_point"))}<br/>'
+                        f'<strong>3. 为什么不低判一档：</strong>{escape(reasoning.get("why_not_lower"))}<br/>'
+                        f'<strong>4. 为什么不高判一档：</strong>{escape(reasoning.get("why_not_higher"))}'
+                        "</div>"
+                    )
+                else:
+                    cards.append(
+                        f'<div class="rating-reasoning">{escape(reasoning)}</div>'
+                    )
+            cards.append(
+                '<details class="all-feature-details">'
+                '<summary>展开全部17项特征</summary>'
+                + _render_feature_grid(build_full_feature_items(rating))
+                + '<div class="feature-contract-note">'
+                '数量指标由程序从数组派生，不使用模型自报难度摘要。'
+                "</div></details></div>"
+            )
 
-            cards_html += f"""
-        <div class="question-card" data-qid="{escape(question_id)}">
-            <div class="question-header">
-                <span class="question-id">#{idx} | ID: {question_id}</span>
-                <div class="question-tags">
-                    <span class="tag tag-raw">原始教师难度: {raw_diff}档</span>
-                    <span class="tag tag-time">消耗: {api_time}s</span>
-                    <span class="tag tag-tokens">{api_tokens} tokens</span>
-                </div>
-            </div>
-            <div class="question-body">
-                <div class="difficulty-badge badge-{level_num}">{escape(difficulty_level)}</div>
-"""
-            # 渲染题干图片 (多图支持)
-            if stem_url:
-                cards_html += """
-                <div style="margin-bottom: 20px;">
-                    <div style="font-weight: bold; color: #555; margin-bottom: 6px;">题干图示：</div>
-                    <div class="image-container">
-"""
-                for u in stem_url.split(','):
-                    if u.strip():
-                        cards_html += f'                        <img src="{html.escape(u.strip())}" alt="题干图示" onerror="this.outerHTML=\'<div style=\\\'color:#e53e3e;font-style:italic\\\'>(图示加载失败，可能为局域网内网地址)</div>\'">\n'
-                cards_html += """                    </div>
-                </div>
-"""
-            else:
-                cards_html += """
-                <div style="margin-bottom: 20px;">
-                    <div style="font-weight: bold; color: #999; font-style: italic; margin-bottom: 6px;">【该题无题干图示】</div>
-                </div>
-"""
+            cards.append(
+                '<div class="annotation-section">'
+                '<div class="annotation-title">'
+                '人工评议验收（未标注即视为“模型判定合理”）</div>'
+                '<div class="annotation-row"><label>验收意见：</label>'
+                f'<button class="annotation-btn btn-wrong" data-qid="{escape(question_id)}" '
+                'data-action="wrong" onclick="setAnnotation(this, \'wrong\')">'
+                '✗ 模型判定不准</button>'
+                f'<button class="annotation-btn btn-unmark" data-qid="{escape(question_id)}" '
+                'data-action="unmark" onclick="setAnnotation(this, \'unmark\')">'
+                '✓ 恢复默认合理</button></div>'
+                '<div class="annotation-row"><label>建议正确档位：</label>'
+                f'<select class="corrected-level-select" data-qid="{escape(question_id)}" '
+                'onchange="saveCorrectedLevel(this)">'
+                '<option value="">仅标错，暂不指定档位</option>'
+                + "".join(
+                    f'<option value="{name}">{name}</option>'
+                    for name in LEVEL_MAP
+                )
+                + "</select></div>"
+                '<div class="annotation-row"><label>'
+                '修改意见与错误原因（输入后自动标记为判定不准）：</label></div>'
+                f'<textarea class="annotation-textarea" data-qid="{escape(question_id)}" '
+                'placeholder="请说明错误原因及推荐档位..." '
+                'oninput="saveAnnotationText(this)"></textarea>'
+                "</div></div></div>"
+            )
+        cards.append("</div>")
 
-            # 渲染解析图片 (多图支持)
-            if analysis_url:
-                cards_html += """
-                <div style="margin-bottom: 20px;">
-                    <div style="font-weight: bold; color: #11998e; margin-bottom: 6px;">解析图示：</div>
-                    <div class="image-container">
-"""
-                for u in analysis_url.split(','):
-                    if u.strip():
-                        cards_html += f'                        <img src="{html.escape(u.strip())}" alt="解析图示" onerror="this.outerHTML=\'<div style=\\\'color:#e53e3e;font-style:italic\\\'>(图示加载失败)</div>\'">\n'
-                cards_html += """                    </div>
-                </div>
-"""
-            else:
-                cards_html += """
-                <div style="margin-bottom: 20px;">
-                    <div style="font-weight: bold; color: #999; font-style: italic; margin-bottom: 6px;">【该题无解析图示】</div>
-                </div>
-"""
+    content = HTML_TEMPLATE
+    replacements = {
+        "__NAV_ITEMS_PLACEHOLDER__": nav_html,
+        "__QUESTION_CARDS_PLACEHOLDER__": "".join(cards),
+        "__LEVEL_NAMES_PLACEHOLDER__": json.dumps(LEVEL_NAMES, ensure_ascii=False),
+        "__LEVEL_MAP_PLACEHOLDER__": json.dumps(LEVEL_MAP, ensure_ascii=False),
+        "__QUESTIONS_JSON_PLACEHOLDER__": json.dumps(all_questions, ensure_ascii=False),
+        "__REVIEW_COUNT__": str(len(all_questions)),
+        "__REVIEW_SCOPE__": review_scope or str(len(all_questions)),
+        "__RELEASE_LABEL__": release_label,
+    }
+    for placeholder, value in replacements.items():
+        content = content.replace(placeholder, value)
 
-            # 理由与特征 (针对化学维度修改说明)
-            if features_obj or reasoning:
-                cards_html += """
-                <div class="rating-section">
-                    <div class="rating-title">化学特征维度 & 判定理由</div>
-"""
-                if reasoning:
-                    if isinstance(reasoning, dict):
-                        basis_txt = reasoning.get('core_basis', '')
-                        hard_txt = reasoning.get('hard_point', '')
-                        why_l = reasoning.get('why_not_lower', '')
-                        why_h = reasoning.get('why_not_higher', '')
-                        cards_html += f"""
-                        <div class="rating-reasoning">
-                            <strong>1. 核心判定依据：</strong>{escape(basis_txt)}<br/>
-                            <strong>2. 易错卡点：</strong>{escape(hard_txt)}<br/>
-                            <strong>3. 为什么不低判定一档：</strong>{escape(why_l)}<br/>
-                            <strong>4. 为什么不高判定一档：</strong>{escape(why_h)}
-                        </div>
-                        """
-                    else:
-                        cards_html += f'                    <div class="rating-reasoning"><strong>判定依据与理由：</strong>{escape(str(reasoning))}</div>\n'
-
-                if features_obj:
-                    cards_html += '                    <div class="rating-details">\n'
-                    # 对齐化学打标中的 18 维归一化特征
-                    feature_fields = [
-                        ('step_count', '解析步骤数'),
-                        ('equation_count', '化学方程式数量'),
-                        ('calculation_complexity', '计算复杂度'),
-                        ('reasoning_chain', '推理链条'),
-                        ('problem_structure', '题型结构'),
-                        ('additional_structure', '附加结构'),
-                        ('information_carrier', '信息载体'),
-                        ('reality_question', '现实生活情境'),
-                        ('subquestion_dependency', '子问依赖性'),
-                        ('knowledge_count', '知识点个数'),
-                        ('knowledge_diff', '知识点难度'),
-                        ('cross_module', '跨模块综合'),
-                        ('chemistry_process_count', '化学反应/转化过程数'),
-                        ('constraint_count', '反应约束条件'),
-                        ('evidence_relation', '证据推理关系'),
-                        ('experiment_requirement', '实验探究要求'),
-                        ('graph_table_requirement', '图像分析要求'),
-                        ('error_risk', '易错风险'),
-                    ]
-                    for key, label in feature_fields:
-                        value = features_obj.get(key, '')
-                        if isinstance(value, list):
-                            value = '、'.join(str(v) for v in value)
-                        if value:
-                            display_value = str(value)[:150]
-                            cards_html += f"""                        <div class="rating-detail-item">
-                            <div class="label">{label}</div>
-                            <div class="value">{escape(display_value)}</div>
-                        </div>
-"""
-                    cards_html += '                    </div>\n'
-                cards_html += '                </div>\n'
-
-            # 验收意见栏
-            cards_html += f"""
-                <div class="annotation-section">
-                    <div class="annotation-title">人工评议验收</div>
-                    <div class="annotation-row">
-                        <label>验收意见：</label>
-                        <button class="annotation-btn btn-correct" data-qid="{escape(question_id)}" data-action="correct" onclick="setAnnotation(this, 'correct')">✓ 模型判定合理</button>
-                        <button class="annotation-btn btn-wrong" data-qid="{escape(question_id)}" data-action="wrong" onclick="setAnnotation(this, 'wrong')">✗ 模型判定不准</button>
-                        <button class="annotation-btn btn-unmark" data-qid="{escape(question_id)}" data-action="unmark" onclick="setAnnotation(this, 'unmark')">— 清除状态</button>
-                    </div>
-                    <div class="annotation-row">
-                        <label>修改意见与错误原因归类 (如有错误，请指出正确档位与缺陷，如模型把送分判为基础)：</label>
-                    </div>
-                    <textarea class="annotation-textarea" data-qid="{escape(question_id)}" placeholder="请说明缺陷具体原因及您的推荐档级..." oninput="saveAnnotationText(this)"></textarea>
-                </div>
-            </div>
-        </div>
-"""
-        cards_html += "    </div>\n"
-
-    # 3. 组合并执行占位替换
-    questions_json = json.dumps(all_questions_list, ensure_ascii=False)
-    
-    html_content = HTML_TEMPLATE
-    html_content = html_content.replace("__NAV_ITEMS_PLACEHOLDER__", nav_html)
-    html_content = html_content.replace("__QUESTION_CARDS_PLACEHOLDER__", cards_html)
-    html_content = html_content.replace("__LEVEL_NAMES_PLACEHOLDER__", json.dumps(LEVEL_NAMES, ensure_ascii=False))
-    html_content = html_content.replace("__LEVEL_MAP_PLACEHOLDER__", json.dumps(LEVEL_MAP, ensure_ascii=False))
-    html_content = html_content.replace("__QUESTIONS_JSON_PLACEHOLDER__", questions_json)
-
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write(html_content)
-    print(f"✨ 成功渲染生成纯图片交互可视化网页: {os.path.abspath(output_path)}")
+    target = Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    print(f"✨ 成功生成化学冻结版验收页: {target.resolve()}")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="基于 V1 评级、V2 纯图片可视化的 500 道初中化学题抽样生成网页工具")
-    parser.add_argument("-i", "--input", type=str, default="chemistry_difficulty_rated_results.jsonl",
-                        help="输入的化学已打标 V1 结果 JSONL 路径")
-    parser.add_argument("-v2", "--v2-source", type=str, default="../data/chemistry_sampled_5000_per_difficulty_v2.jsonl",
-                        help="含有化学全量图片的 V2 数据集路径")
-    parser.add_argument("-oj", "--output-jsonl", type=str, default="chemistry_sampled_500_results.jsonl",
-                        help="输出抽样后的 500 题 JSONL 数据集路径")
-    parser.add_argument("-oh", "--output-html", type=str, default="chemistry_difficulty_rated_validation_500.html",
-                        help="生成的化学可视化 HTML 验收网页保存路径")
-    parser.add_argument("--seed", type=int, default=42, help="随机种子数")
+def build_sample_plan(sample_size: int) -> Dict[str, int]:
+    if sample_size <= 0:
+        raise ValueError("sample_size 必须大于0")
+    total = sum(SAMPLE_PLAN.values())
+    exact = {
+        level: sample_size * weight / total
+        for level, weight in SAMPLE_PLAN.items()
+    }
+    plan = {level: int(value) for level, value in exact.items()}
+    remainder = sample_size - sum(plan.values())
+    for level in sorted(
+        SAMPLE_PLAN,
+        key=lambda name: exact[name] - plan[name],
+        reverse=True,
+    )[:remainder]:
+        plan[level] += 1
+    return plan
 
+
+def _load_jsonl(path: Path) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path}:{line_number} JSON无效: {exc}") from exc
+    return rows
+
+
+def _align_optional_image_source(
+    rows: List[Dict[str, Any]],
+    source_path: Path | None,
+) -> None:
+    if source_path is None:
+        return
+    image_index = {
+        str(row.get("question_id")): row
+        for row in _load_jsonl(source_path)
+        if row.get("question_id") is not None
+    }
+    for row in rows:
+        source = image_index.get(str(row.get("question_id")))
+        if not source:
+            continue
+        for field in ("stem_pic_url", "analysis_pic_url"):
+            if split_image_urls(source.get(field)):
+                row[field] = source[field]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="初中化学冻结版难度评级 HTML 验收工具"
+    )
+    parser.add_argument("-i", "--input", required=True, help="冻结版评级 JSONL")
+    parser.add_argument("-oh", "--output-html", required=True, help="输出 HTML")
+    parser.add_argument("-oj", "--output-jsonl", help="可选：输出页面使用的 JSONL")
+    parser.add_argument("-v2", "--v2-source", help="可选：题干/解析图片补充源")
+    parser.add_argument("--all-results", action="store_true", help="渲染全部有效结果")
+    parser.add_argument("--sample-size", type=int, default=500)
+    parser.add_argument("--seed", type=int, default=20260812)
+    parser.add_argument("--release-label", default=CHEMISTRY_FROZEN_RELEASE)
     args = parser.parse_args()
 
-    # 设置随机数种子，实现结果可复现
-    random.seed(args.seed)
-
-    if not os.path.exists(args.input):
-        print(f"错误: 找不到打标输入文件 {args.input}！")
-        return
-    if not os.path.exists(args.v2_source):
-        print(f"错误: 找不到 V2 图片资源文件 {args.v2_source}！")
-        return
-
-    # 1. 载入所有打标数据 (V1 结果)
-    print(f"正在读取 V1 打标数据: {args.input} ...")
-    raw_data = []
-    with open(args.input, 'r', encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    raw_data.append(json.loads(line))
-                except Exception:
-                    continue
-
-    print(f"成功载入 {len(raw_data)} 条打标记录。正在建立 V2 全量图片索引...")
-
-    # 2. 建立 V2 图片库索引 (以 question_id 为 Key)
-    v2_image_index = {}
-    with open(args.v2_source, 'r', encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    item = json.loads(line)
-                    qid = item.get("question_id")
-                    if qid:
-                        v2_image_index[qid] = {
-                            "stem_pic_url": item.get("stem_pic_url", ""),
-                            "analysis_pic_url": item.get("analysis_pic_url", "")
-                        }
-                except Exception:
-                    continue
-    print(f"图片索引建立完成，共索引 {len(v2_image_index)} 道题的图片。")
-
-    # 3. 将 V1 数据映射并对齐图片资源
-    aligned_data = []
-    missing_pics = 0
-    for item in raw_data:
-        qid = item.get("question_id")
-        if qid in v2_image_index:
-            item["stem_pic_url"] = v2_image_index[qid]["stem_pic_url"]
-            item["analysis_pic_url"] = v2_image_index[qid]["analysis_pic_url"]
-        else:
-            missing_pics += 1
-        aligned_data.append(item)
-    
-    if missing_pics > 0:
-        print(f"⚠️ 提示: 有 {missing_pics} 道化学题目在 V2 数据集中没有对齐到图片 URL。")
-
-    # 4. 按大模型打标难度分组
-    grouped_data = defaultdict(list)
-    for item in aligned_data:
-        rating = item.get('difficulty_rating', {})
-        if not rating or not isinstance(rating, dict):
-            continue
-        level = rating.get('difficulty_level', '')
+    rows = _load_jsonl(Path(args.input))
+    _align_optional_image_source(
+        rows,
+        Path(args.v2_source) if args.v2_source else None,
+    )
+    grouped: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        level = (row.get("difficulty_rating") or {}).get("difficulty_level")
         if level in LEVEL_MAP:
-            grouped_data[level].append(item)
+            grouped[LEVEL_MAP[level]].append(row)
 
-    # 5. 精准抽样 (500 题)
-    sampled_data = []
-    sampled_for_html = defaultdict(list)
+    selected: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    if args.all_results:
+        selected.update({level: list(grouped[level]) for level in range(1, 6)})
+    else:
+        rng = random.Random(args.seed)
+        plan = build_sample_plan(args.sample_size)
+        for level_name, target_count in plan.items():
+            level = LEVEL_MAP[level_name]
+            pool = grouped[level]
+            selected[level] = (
+                rng.sample(pool, target_count)
+                if len(pool) >= target_count
+                else list(pool)
+            )
 
-    print("\n================ 抽样计划执行 ================")
-    for level, target_count in SAMPLE_PLAN.items():
-        pool = grouped_data[level]
-        pool_size = len(pool)
-        
-        if pool_size >= target_count:
-            sampled_items = random.sample(pool, target_count)
-            print(f"  🎯 {level}: 池内共有 {pool_size} 道，精准抽样 {target_count} 道")
-        else:
-            sampled_items = pool
-            print(f"  ⚠️ {level}: 不足！池内仅有 {pool_size} 道，全部保留 (计划抽 {target_count} 道)")
-            
-        sampled_data.extend(sampled_items)
-        level_num = LEVEL_MAP[level]
-        sampled_for_html[level_num] = sampled_items
+    selected_rows = [row for level in range(1, 6) for row in selected[level]]
+    if args.output_jsonl:
+        output_jsonl = Path(args.output_jsonl)
+        output_jsonl.parent.mkdir(parents=True, exist_ok=True)
+        with output_jsonl.open("w", encoding="utf-8") as handle:
+            for row in selected_rows:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-    # 6. 导出抽样 JSONL
-    print(f"\n正在导出抽样后的 JSONL 副本至: {args.output_jsonl} ...")
-    with open(args.output_jsonl, 'w', encoding='utf-8') as f:
-        for item in sampled_data:
-            f.write(json.dumps(item, ensure_ascii=False) + '\n')
-    print(f"👉 成功写入 {len(sampled_data)} 条抽样数据。")
+    generate_html_file(
+        selected,
+        args.output_html,
+        review_scope=str(len(selected_rows)),
+        release_label=args.release_label,
+    )
+    print(f"已渲染 {len(selected_rows)} 题：" + "、".join(
+        f"{LEVEL_NAMES[level]} {len(selected[level])}题"
+        for level in range(1, 6)
+    ))
 
-    # 7. 渲染纯图片 HTML
-    print(f"正在渲染纯图片可视化验收网页至: {args.output_html} ...")
-    generate_html_file(sampled_for_html, args.output_html)
-    print("✨ 纯图片可视化优化网页生成已顺利完成！")
 
 if __name__ == "__main__":
     main()
