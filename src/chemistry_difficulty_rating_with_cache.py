@@ -590,6 +590,12 @@ async def call_model_with_cache(
         "json_parse_mode": "failed",
         "token_usage_consistent": True,
         "token_anomaly_flags": [],
+        "cache_usage_reported": False,
+        "cache_hit_confirmed": False,
+        "api_cached_input_tokens": 0,
+        "api_uncached_input_tokens": 0,
+        "cache_hit_ratio": None,
+        "api_input_tokens_details": {},
     }
 
     response_id: Optional[str] = None
@@ -642,6 +648,29 @@ async def call_model_with_cache(
                     prompt_tokens = usage.get("input_tokens", 0)
                     completion_tokens = usage.get("output_tokens", 0)
                     total_tokens = usage.get("total_tokens", 0)
+                    input_token_details = usage.get("input_tokens_details", {})
+                    if not isinstance(input_token_details, dict):
+                        input_token_details = {}
+                    cache_usage_reported = "cached_tokens" in input_token_details
+                    cached_tokens = input_token_details.get("cached_tokens", 0)
+                    if not isinstance(cached_tokens, (int, float)):
+                        cached_tokens = 0
+                    cached_tokens = max(0, min(int(cached_tokens), prompt_tokens))
+                    uncached_tokens = max(prompt_tokens - cached_tokens, 0)
+                    image_status["cache_usage_reported"] = cache_usage_reported
+                    image_status["cache_hit_confirmed"] = (
+                        cache_usage_reported and cached_tokens > 0
+                    )
+                    image_status["api_cached_input_tokens"] = cached_tokens
+                    image_status["api_uncached_input_tokens"] = uncached_tokens
+                    image_status["cache_hit_ratio"] = (
+                        round(cached_tokens / prompt_tokens, 6)
+                        if cache_usage_reported and prompt_tokens > 0
+                        else None
+                    )
+                    image_status["api_input_tokens_details"] = copy.deepcopy(
+                        input_token_details
+                    )
                     image_status["response_status"] = str(
                         result.get("status", "") or ""
                     )
@@ -672,6 +701,10 @@ async def call_model_with_cache(
                         anomaly_flags.append("structured_output_json_incomplete")
                     if not image_status["token_usage_consistent"]:
                         anomaly_flags.append("token_usage_sum_mismatch")
+                    if USE_CACHE and cache_usage_reported and cached_tokens == 0:
+                        anomaly_flags.append("prefix_cache_not_hit")
+                    if USE_CACHE and not cache_usage_reported:
+                        anomaly_flags.append("cache_usage_details_missing")
                     if completion_tokens > COMPLETION_TOKEN_ANOMALY_THRESHOLD:
                         anomaly_flags.append("completion_tokens_abnormally_high")
                     image_status["token_anomaly_flags"] = anomaly_flags
@@ -889,7 +922,7 @@ def get_processed_question_ids(output_path: str) -> set:
 
 # -------------------------- 6. 主执行流 --------------------------
 async def main_batch_run() -> None:
-    global CURRENT_RUN_SIGNATURE, CURRENT_RUN_CONFIG
+    global CURRENT_RUN_SIGNATURE, CURRENT_RUN_CONFIG, USE_CACHE
     parser = argparse.ArgumentParser(description="初中化学难度评级多线程并发批量打标脚本 (带 Cache 优化)")
     parser.add_argument(
         "-p",
@@ -911,7 +944,16 @@ async def main_batch_run() -> None:
     parser.add_argument("-t", "--timeout", type=int, default=180, help="单次 API 调用超时时间，默认 180 秒")
     parser.add_argument("-n", "--num", type=int, default=None, help="测试打标的限制数量（留空表示全部打标）")
     parser.add_argument("--seed", type=int, default=42, help="随机抽样/打乱的种子，默认 42")
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="仅用于最多3题的缓存成本诊断；正式批量运行禁止关闭缓存",
+    )
     args = parser.parse_args()
+
+    if args.no_cache and (args.num is None or args.num < 1 or args.num > 3):
+        parser.error("--no-cache 仅允许与 -n 1、-n 2 或 -n 3 一起使用")
+    USE_CACHE = not args.no_cache
 
     random.seed(args.seed)
     load_prompt_config(args.prompt)
@@ -922,7 +964,14 @@ async def main_batch_run() -> None:
         + ("服务端默认" if TEMPERATURE is None else str(TEMPERATURE))
     )
     print(f"图片模式: {CHEMISTRY_IMAGE_MODE}")
-    print("前缀缓存: 强制启用（正式运行不允许逐题重复发送完整提示词）")
+    print(
+        "前缀缓存: "
+        + (
+            "强制启用（正式运行不允许逐题重复发送完整提示词）"
+            if USE_CACHE
+            else "诊断性关闭（最多3题，逐题发送完整提示词）"
+        )
+    )
 
     if not os.path.exists(args.input):
         print(f"错误: 输入文件 {args.input} 不存在，终止运行！")
@@ -978,32 +1027,35 @@ async def main_batch_run() -> None:
 
     connector = aiohttp.TCPConnector(limit=args.concurrency * 2)
     async with aiohttp.ClientSession(connector=connector) as session:
-        response_id = await get_or_create_cache(session, args.timeout)
-        if not response_id:
-            raise RuntimeError("前缀缓存创建失败，批量任务未启动")
+        first_task_index = 0
+        if USE_CACHE:
+            response_id = await get_or_create_cache(session, args.timeout)
+            if not response_id:
+                raise RuntimeError("前缀缓存创建失败，批量任务未启动")
 
-        print("正在用第一道真实题验证前缀缓存与JSON输出兼容性...")
-        preflight_status = await process_single_question(
-            to_process[0],
-            session,
-            semaphore,
-            args.output,
-            args.error,
-            args.timeout,
-        )
-        pbar.update(1)
-        if preflight_status == "request_error":
-            raise RuntimeError(
-                "启动验证失败，仅处理1题并已写入错误文件；"
-                "为避免批量无效请求，本次运行已终止"
+            print("正在用第一道真实题验证前缀缓存与JSON输出兼容性...")
+            preflight_status = await process_single_question(
+                to_process[0],
+                session,
+                semaphore,
+                args.output,
+                args.error,
+                args.timeout,
             )
-        if preflight_status == "model_validation_error":
-            print(
-                "启动验证确认API与缓存兼容；第一题未通过本地Schema，"
-                "已写入错误文件且不重试，继续处理剩余题目。"
-            )
-        else:
-            print("启动验证通过，开始处理剩余题目。")
+            pbar.update(1)
+            first_task_index = 1
+            if preflight_status == "request_error":
+                raise RuntimeError(
+                    "启动验证失败，仅处理1题并已写入错误文件；"
+                    "为避免批量无效请求，本次运行已终止"
+                )
+            if preflight_status == "model_validation_error":
+                print(
+                    "启动验证确认API与缓存兼容；第一题未通过本地Schema，"
+                    "已写入错误文件且不重试，继续处理剩余题目。"
+                )
+            else:
+                print("启动验证通过，开始处理剩余题目。")
         tasks = [
             asyncio.create_task(
                 process_with_progress(
@@ -1016,7 +1068,7 @@ async def main_batch_run() -> None:
                     args.timeout,
                 )
             )
-            for q in to_process[1:]
+            for q in to_process[first_task_index:]
         ]
         if tasks:
             await asyncio.gather(*tasks)
