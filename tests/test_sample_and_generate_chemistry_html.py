@@ -183,17 +183,17 @@ class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
             labels,
             [
                 "最长解题链",
-                "任务组",
+                "考查任务",
                 "解题方法",
-                "计算操作",
+                "计算方法",
                 "误差分析",
                 "知识点跨度",
                 "审题条件与陷阱",
                 "选项/小问关联方式",
-                "图表操作",
                 "解题任务结构",
                 "实验任务结构",
                 "图像任务结构",
+                "图表信息处理",
                 "题干字数",
             ],
         )
@@ -203,7 +203,7 @@ class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
         self.assertNotIn("题干图片资源数", labels)
         values = dict(fields)
         self.assertEqual(values["最长解题链"], "1.a → 2.b → 3.c")
-        self.assertEqual(values["任务组"], "实验操作与探究×4")
+        self.assertEqual(values["考查任务"], "实验操作与探究×4")
         self.assertEqual(
             values["知识点跨度"],
             "跨单元并列（U1-2 化学实验与科学探究、U9-3 溶质的质量分数）",
@@ -216,6 +216,11 @@ class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
         )
         self.assertIn("task-structure-start", rendered_grid)
         self.assertEqual(rendered_grid.count("task-structure-card"), 3)
+        self.assertLess(
+            rendered_grid.index("图像任务结构"),
+            rendered_grid.index("图表信息处理"),
+        )
+        self.assertIn("compact-tail-start", rendered_grid)
 
     def test_generated_page_matches_physics_review_workflow(self) -> None:
         samples = {
@@ -279,7 +284,7 @@ class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
         self.assertNotIn("有效任务数", rendered)
         self.assertNotIn("知识课题数", rendered)
         self.assertNotIn("题干图片资源数", rendered)
-        self.assertIn("任务组", rendered)
+        self.assertIn("考查任务", rendered)
         self.assertIn("解题方法", rendered)
         self.assertIn("审题条件与陷阱", rendered)
         self.assertNotIn("关键条件处理", rendered)
@@ -287,6 +292,11 @@ class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
         self.assertNotIn("并列/关联任务", rendered)
         self.assertNotIn("并列任务关系", rendered)
         self.assertIn("解题任务结构", rendered)
+        self.assertIn("图表信息处理", rendered)
+        self.assertIn("反应之间的关系", rendered)
+        self.assertIn("化学信息转换", rendered)
+        self.assertIn("证据推理方式", rendered)
+        self.assertIn("实验考查要求", rendered)
         self.assertNotIn("作答规则族", rendered)
         self.assertNotIn(">作答规则<", rendered)
         self.assertNotIn(">条件操作<", rendered)

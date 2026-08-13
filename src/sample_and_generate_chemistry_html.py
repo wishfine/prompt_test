@@ -63,21 +63,21 @@ LEVEL_NAMES = {
 
 FULL_FEATURE_FIELDS: Tuple[Tuple[str, str], ...] = (
     ("longest_solution_chain", "最长解题链"),
-    ("task_groups", "任务组"),
+    ("task_groups", "考查任务"),
     ("rule_families", "解题方法"),
-    ("curriculum_topics", "课程课题"),
+    ("curriculum_topics", "涉及教材课题"),
     ("parallel_task_relation", "选项/小问关联方式"),
     ("solution_topology", "解题任务结构"),
-    ("reaction_structure", "反应结构"),
+    ("reaction_structure", "反应之间的关系"),
     ("condition_operations", "审题条件与陷阱"),
-    ("representation_operations", "表征转换"),
-    ("evidence_operations", "证据操作"),
-    ("experiment_operation", "实验操作"),
+    ("representation_operations", "化学信息转换"),
+    ("evidence_operations", "证据推理方式"),
+    ("experiment_operation", "实验考查要求"),
     ("experiment_task_structure", "实验任务结构"),
     ("visual_task_structure", "图像任务结构"),
-    ("graph_table_operation", "图表操作"),
+    ("graph_table_operation", "图表信息处理"),
     ("error_analysis_operation", "误差分析"),
-    ("calculation_operations", "计算操作"),
+    ("calculation_operations", "计算方法"),
     ("new_information_operation", "新信息迁移"),
 )
 
@@ -195,19 +195,19 @@ def build_priority_feature_items(
             ),
         ),
         (
-            "任务组",
+            "考查任务",
             _display_value(features.get("task_groups"), field="task_groups"),
         ),
         ("解题方法", _display_value(features.get("rule_families"))),
-        ("计算操作", _display_value(features.get("calculation_operations"))),
+        ("计算方法", _display_value(features.get("calculation_operations"))),
         ("误差分析", _display_value(features.get("error_analysis_operation"))),
         ("知识点跨度", _display_curriculum_span(metrics.get("curriculum_span_summary"))),
         ("审题条件与陷阱", _display_value(features.get("condition_operations"))),
         ("选项/小问关联方式", _display_value(features.get("parallel_task_relation"))),
-        ("图表操作", _display_value(features.get("graph_table_operation"))),
         ("解题任务结构", _display_value(features.get("solution_topology"))),
         ("实验任务结构", _display_value(features.get("experiment_task_structure"))),
         ("图像任务结构", _display_value(features.get("visual_task_structure"))),
+        ("图表信息处理", _display_value(features.get("graph_table_operation"))),
     ]
     numeric_fields: List[Tuple[str, str]] = [
         ("题干字数", str(item.get("question_text_char_count", metrics.get("question_text_char_count", "无")))),
@@ -239,9 +239,11 @@ EXTRA_CSS = """
             grid-column: 1 / -1; min-height: 0;
         }
         .priority-details .task-structure-start { grid-column: 1; }
+        .priority-details .compact-tail-start { grid-column: 1; }
         @media (max-width: 760px) {
             .priority-details { grid-template-columns: 1fr; }
             .priority-details .task-structure-start { grid-column: auto; }
+            .priority-details .compact-tail-start { grid-column: auto; }
         }
         .priority-details .label { color: #0b766e; font-weight: 700; }
         .all-feature-details {
@@ -284,12 +286,14 @@ def _render_feature_grid(
     blocks = []
     for label, value in items:
         item_class = "rating-detail-item"
-        if css_class == "priority-details" and label in {"最长解题链", "任务组"}:
+        if css_class == "priority-details" and label in {"最长解题链", "考查任务"}:
             item_class += " feature-wide"
         if css_class == "priority-details" and label in TASK_STRUCTURE_LABELS:
             item_class += " task-structure-card"
             if label == "解题任务结构":
                 item_class += " task-structure-start"
+        if css_class == "priority-details" and label == "图表信息处理":
+            item_class += " compact-tail-start"
         blocks.append(
             f'<div class="{item_class}">'
             f'<div class="label">{escape(label)}</div>'
