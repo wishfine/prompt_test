@@ -95,6 +95,32 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             else:
                 self.assertIn(value, options)
 
+    def test_solution_process_sets_deterministic_step_floor_without_changing_level(self):
+        value = rating("中等题")
+        value["features"]["step_count"] = "2-3步"
+        value["reasoning"]["solution_process"] = [
+            "识别共同守恒对象",
+            "建立盐增量与硫酸根质量关系",
+            "计算硫酸根质量",
+            "换算硫酸质量",
+            "计算溶质质量分数",
+        ]
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["features"]["step_count"], "4-5步")
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertIn(
+            "solution_process逐项列出的最长必要链已超过模型选择的步骤档位",
+            [item["reason"] for item in result["postprocess"]["feature_normalization_actions"]],
+        )
+
+    def test_single_direct_recognition_does_not_force_one_step(self):
+        value = rating("送分题")
+        value["features"]["step_count"] = "0步（直接识记）"
+        value["reasoning"]["solution_process"] = ["直接识别教材结论"]
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["features"]["step_count"], "0步（直接识记）")
+        self.assertEqual(result["difficulty_level"], "送分题")
+
     def test_legacy_calculation_fields_merge_without_retry(self):
         value = rating()
         del value["features"]["calculation_structure"]

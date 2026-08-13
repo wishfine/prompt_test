@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v26"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v27"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -380,6 +380,10 @@ def rating_json_schema() -> dict[str, Any]:
             }
         else:
             feature_properties[field] = {"type": "string", "enum": list(options)}
+    feature_properties["step_count"]["description"] = (
+        "按普通初中学生完成标准解答所需的最长连续显性步骤选择；"
+        "不得按模型熟练解法合并识别规律、建立关系、求中间量和继续推导。"
+    )
     feature_properties["curriculum_scope"] = _object_schema({
         "scope": {"type": "string", "enum": list(SCOPES)},
         "extra_points": {
@@ -396,7 +400,13 @@ def rating_json_schema() -> dict[str, Any]:
         ),
         "reasoning": _object_schema({
             "solution_process": {
-                "type": "array", "items": {"type": "string"}, "minItems": 1,
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "description": (
+                    "只列最难小问的最长必要解题链；每项恰好一个学生必须完成的动作，"
+                    "不得把识别规律、建立关系、求中间量和使用中间结果合并在同一项。"
+                ),
             },
             "level_basis": {"type": "string"},
         }, reasoning_fields),
@@ -889,6 +899,27 @@ def _normalize_feature_consistency(result: dict[str, Any]) -> list[dict[str, Any
 
     if features["calculation_structure"] == "无计算":
         replace("special_method", "无", "无计算时特殊方法唯一确定")
+
+    # solution_process在新契约中只列最长必要链，且一项对应一个显性动作。
+    # 因而数组长度是step_count的确定性下限；这里只修正相互矛盾的特征，
+    # 不根据题目关键词猜测模型没有列出的隐含步骤，也不直接修改难度等级。
+    process_length = len(result["reasoning"]["solution_process"])
+    if process_length >= 6:
+        process_floor = "6步及以上"
+    elif process_length >= 4:
+        process_floor = "4-5步"
+    elif process_length >= 2:
+        process_floor = "2-3步"
+    else:
+        process_floor = None
+    if process_floor is not None:
+        step_options = list(FEATURE_OPTIONS["step_count"])
+        if step_options.index(features["step_count"]) < step_options.index(process_floor):
+            replace(
+                "step_count",
+                process_floor,
+                "solution_process逐项列出的最长必要链已超过模型选择的步骤档位",
+            )
     return actions
 
 
