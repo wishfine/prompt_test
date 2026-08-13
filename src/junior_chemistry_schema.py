@@ -9,13 +9,21 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v27"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v28"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
 LEVELS = ("送分题", "基础题", "中等题", "拔高题", "压轴题")
 SCOPES = ("within_junior", "out_of_scope")
 LEVEL_INDEX = {level: index for index, level in enumerate(LEVELS)}
+ADJACENT_LEVEL_PAIRS = tuple(
+    f"{LEVELS[index]}/{LEVELS[index + 1]}" for index in range(len(LEVELS) - 1)
+)
+REVIEW_DIMENSIONS = (
+    "无", "知识覆盖", "任务关系", "实质步骤", "信息处理", "反应结构",
+    "实验任务", "误差分析", "计算结构或方法", "条件障碍", "表达要求",
+)
+REVIEW_RESOLUTIONS = ("维持较低档", "升至较高档")
 
 # knowledge.topic_ids 是第 1 个核心特征；以下12个字段中，4个天然并列字段
 # 使用受控枚举数组，其余字段为单选。知识覆盖由topic_id确定性计算，不重复要求模型判断。
@@ -234,7 +242,7 @@ def _repair_missing_reasoning_quotes(text: str) -> str:
     fields = (
         "level_basis",
     )
-    next_fields = "|".join((*fields, "difficulty_level"))
+    next_fields = "|".join((*fields, "feature_review", "difficulty_level"))
     for field in fields:
         pattern = re.compile(
             rf'("{field}"\s*:\s*)([^"\s].*?)(?=,\s*"(?:{next_fields})"\s*:)',
@@ -313,7 +321,7 @@ def parse_model_json_text(text: str) -> tuple[dict[str, Any], str]:
                 continue
             if not isinstance(recovered, dict):
                 continue
-            if not {"features", "reasoning", "difficulty_level"}.issubset(recovered):
+            if not {"features", "reasoning", "feature_review", "difficulty_level"}.issubset(recovered):
                 continue
             if repaired[end:].strip():
                 continue
@@ -392,26 +400,44 @@ def rating_json_schema() -> dict[str, Any]:
         },
     }, ("scope", "extra_points"))
 
-    reasoning_fields = ("solution_process", "level_basis")
+    reasoning_fields = ("longest_substantive_chain", "level_basis")
+    feature_review_fields = (
+        "adjacent_pair", "supports_higher_level", "limits_higher_level",
+        "resolution", "review_basis",
+    )
     return _object_schema({
         "features": _object_schema(
             feature_properties,
             ("knowledge", *FEATURE_OPTIONS.keys(), "curriculum_scope"),
         ),
         "reasoning": _object_schema({
-            "solution_process": {
+            "longest_substantive_chain": {
                 "type": "array",
                 "items": {"type": "string"},
                 "minItems": 1,
                 "description": (
-                    "只列最难小问的最长必要解题链；每项恰好一个学生必须完成的动作，"
-                    "不得把识别规律、建立关系、求中间量和使用中间结果合并在同一项。"
+                    "只列最难任务的最长实质解题链；每项是一个会改变后续解法的学生化学决策。"
+                    "不得合并规律识别、关系建立和必要中间量，也不得把抄写、重复代入、"
+                    "纯算术整理或最终填答案机械拆成新步骤。"
                 ),
             },
             "level_basis": {"type": "string"},
         }, reasoning_fields),
+        "feature_review": _object_schema({
+            "adjacent_pair": {"type": "string", "enum": list(ADJACENT_LEVEL_PAIRS)},
+            "supports_higher_level": {
+                "type": "array", "items": {"type": "string", "enum": list(REVIEW_DIMENSIONS)},
+                "minItems": 1, "uniqueItems": True,
+            },
+            "limits_higher_level": {
+                "type": "array", "items": {"type": "string", "enum": list(REVIEW_DIMENSIONS)},
+                "minItems": 1, "uniqueItems": True,
+            },
+            "resolution": {"type": "string", "enum": list(REVIEW_RESOLUTIONS)},
+            "review_basis": {"type": "string"},
+        }, feature_review_fields),
         "difficulty_level": {"type": "string", "enum": list(LEVELS)},
-    }, ("features", "reasoning", "difficulty_level"))
+    }, ("features", "reasoning", "feature_review", "difficulty_level"))
 
 
 def rating_tool_definition() -> dict[str, Any]:
@@ -793,7 +819,11 @@ def normalize_rating_contract(
 
 def validate_rating_contract(value: Any) -> dict[str, Any]:
     """严格接受工具 schema 的原始输出；不猜测、不补词、不做近义映射。"""
-    value = _exact_dict(value, {"features", "reasoning", "difficulty_level"}, "顶层")
+    value = _exact_dict(
+        value,
+        {"features", "reasoning", "feature_review", "difficulty_level"},
+        "顶层",
+    )
     if value["difficulty_level"] not in LEVELS:
         raise ChemistrySchemaError("difficulty_level非法")
 
@@ -843,29 +873,77 @@ def validate_rating_contract(value: Any) -> dict[str, Any]:
         "scope": scope["scope"], "extra_points": extra_points,
     }
 
-    reasoning_fields = {"solution_process", "level_basis"}
+    reasoning_fields = {"longest_substantive_chain", "level_basis"}
     if isinstance(value.get("reasoning"), dict):
         value["reasoning"] = {
             key: item for key, item in value["reasoning"].items()
             if key in reasoning_fields
         }
     reasoning = _exact_dict(value["reasoning"], reasoning_fields, "reasoning")
-    solution_process = _string_list(
-        reasoning["solution_process"], "reasoning.solution_process", deduplicate=True,
+    substantive_chain = _string_list(
+        reasoning["longest_substantive_chain"],
+        "reasoning.longest_substantive_chain",
+        deduplicate=True,
     )
     normalized_reasoning = {
-        "solution_process": solution_process,
+        "longest_substantive_chain": substantive_chain,
         "level_basis": str(reasoning["level_basis"]).strip(),
     }
     if (
-        not solution_process
+        not substantive_chain
         or not normalized_reasoning["level_basis"]
     ):
         raise ChemistrySchemaError("reasoning字段不得为空")
 
+    review_fields = {
+        "adjacent_pair", "supports_higher_level", "limits_higher_level",
+        "resolution", "review_basis",
+    }
+    review = _exact_dict(value["feature_review"], review_fields, "feature_review")
+    if review["adjacent_pair"] not in ADJACENT_LEVEL_PAIRS:
+        raise ChemistrySchemaError("feature_review.adjacent_pair非法")
+    supports = _string_list(
+        review["supports_higher_level"],
+        "feature_review.supports_higher_level",
+        deduplicate=True,
+    )
+    limits = _string_list(
+        review["limits_higher_level"],
+        "feature_review.limits_higher_level",
+        deduplicate=True,
+    )
+    if (
+        not supports or not limits
+        or any(item not in REVIEW_DIMENSIONS for item in (*supports, *limits))
+        or (len(supports) > 1 and "无" in supports)
+        or (len(limits) > 1 and "无" in limits)
+    ):
+        raise ChemistrySchemaError("feature_review证据维度非法")
+    if review["resolution"] not in REVIEW_RESOLUTIONS:
+        raise ChemistrySchemaError("feature_review.resolution非法")
+    lower_level, higher_level = review["adjacent_pair"].split("/")
+    expected_level = (
+        higher_level if review["resolution"] == "升至较高档" else lower_level
+    )
+    if value["difficulty_level"] != expected_level:
+        raise ChemistrySchemaError(
+            "feature_review.resolution与difficulty_level不一致"
+        )
+    review_basis = str(review["review_basis"]).strip()
+    if not review_basis:
+        raise ChemistrySchemaError("feature_review.review_basis不得为空")
+    normalized_review = {
+        "adjacent_pair": review["adjacent_pair"],
+        "supports_higher_level": supports,
+        "limits_higher_level": limits,
+        "resolution": review["resolution"],
+        "review_basis": review_basis,
+    }
+
     return {
         "features": validated_features,
         "reasoning": normalized_reasoning,
+        "feature_review": normalized_review,
         "difficulty_level": value["difficulty_level"],
     }
 
@@ -900,10 +978,10 @@ def _normalize_feature_consistency(result: dict[str, Any]) -> list[dict[str, Any
     if features["calculation_structure"] == "无计算":
         replace("special_method", "无", "无计算时特殊方法唯一确定")
 
-    # solution_process在新契约中只列最长必要链，且一项对应一个显性动作。
-    # 因而数组长度是step_count的确定性下限；这里只修正相互矛盾的特征，
-    # 不根据题目关键词猜测模型没有列出的隐含步骤，也不直接修改难度等级。
-    process_length = len(result["reasoning"]["solution_process"])
+    # longest_substantive_chain只列最长实质链，一项对应一个会改变后续解法的
+    # 学生化学决策。因此数组长度是step_count的确定性下限；不从题目关键词
+    # 猜测未列出的步骤，也不把机械书写或算术拆分成步骤，更不直接修改难度。
+    process_length = len(result["reasoning"]["longest_substantive_chain"])
     if process_length >= 6:
         process_floor = "6步及以上"
     elif process_length >= 4:
@@ -918,7 +996,7 @@ def _normalize_feature_consistency(result: dict[str, Any]) -> list[dict[str, Any
             replace(
                 "step_count",
                 process_floor,
-                "solution_process逐项列出的最长必要链已超过模型选择的步骤档位",
+                "longest_substantive_chain列出的实质决策已超过模型选择的步骤档位",
             )
     return actions
 

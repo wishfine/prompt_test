@@ -11,6 +11,13 @@ import junior_chemistry_schema as schema
 
 
 def rating(level="基础题", topic_ids=None):
+    index = schema.LEVEL_INDEX[level]
+    if index == 0:
+        lower, higher = schema.LEVELS[0], schema.LEVELS[1]
+        resolution = "维持较低档"
+    else:
+        lower, higher = schema.LEVELS[index - 1], schema.LEVELS[index]
+        resolution = "升至较高档"
     return {
         "features": {
             "knowledge": {"topic_ids": topic_ids or ["U02_T03"]},
@@ -29,8 +36,15 @@ def rating(level="基础题", topic_ids=None):
             "curriculum_scope": {"scope": "within_junior", "extra_points": []},
         },
         "reasoning": {
-            "solution_process": ["应用一条规则完成判断"],
+            "longest_substantive_chain": ["应用一条规则完成判断"],
             "level_basis": "按教师边界判为基础题。",
+        },
+        "feature_review": {
+            "adjacent_pair": f"{lower}/{higher}",
+            "supports_higher_level": ["知识覆盖"],
+            "limits_higher_level": ["实质步骤"],
+            "resolution": resolution,
+            "review_basis": "综合相邻档位特征后确定。",
         },
         "difficulty_level": level,
     }
@@ -77,11 +91,13 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             "experiment_design", "error_analysis",
         }.issubset(schema.FEATURE_OPTIONS))
 
-    def test_schema_requires_every_enum_and_solution_process_list(self):
+    def test_schema_requires_every_enum_and_substantive_chain_list(self):
         validated = schema.validate_rating_contract(rating())
-        self.assertIsInstance(validated["reasoning"]["solution_process"], list)
+        self.assertIsInstance(
+            validated["reasoning"]["longest_substantive_chain"], list
+        )
         bad = rating()
-        bad["reasoning"]["solution_process"] = "一步判断"
+        bad["reasoning"]["longest_substantive_chain"] = "一步判断"
         with self.assertRaises(schema.ChemistrySchemaError):
             schema.validate_rating_contract(bad)
 
@@ -95,10 +111,10 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             else:
                 self.assertIn(value, options)
 
-    def test_solution_process_sets_deterministic_step_floor_without_changing_level(self):
+    def test_substantive_chain_sets_deterministic_step_floor_without_changing_level(self):
         value = rating("中等题")
         value["features"]["step_count"] = "2-3步"
-        value["reasoning"]["solution_process"] = [
+        value["reasoning"]["longest_substantive_chain"] = [
             "识别共同守恒对象",
             "建立盐增量与硫酸根质量关系",
             "计算硫酸根质量",
@@ -109,17 +125,32 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertEqual(result["features"]["step_count"], "4-5步")
         self.assertEqual(result["difficulty_level"], "中等题")
         self.assertIn(
-            "solution_process逐项列出的最长必要链已超过模型选择的步骤档位",
+            "longest_substantive_chain列出的实质决策已超过模型选择的步骤档位",
             [item["reason"] for item in result["postprocess"]["feature_normalization_actions"]],
         )
 
     def test_single_direct_recognition_does_not_force_one_step(self):
         value = rating("送分题")
         value["features"]["step_count"] = "0步（直接识记）"
-        value["reasoning"]["solution_process"] = ["直接识别教材结论"]
+        value["reasoning"]["longest_substantive_chain"] = ["直接识别教材结论"]
         result = schema.postprocess_chemistry_difficulty(value, {})
         self.assertEqual(result["features"]["step_count"], "0步（直接识记）")
         self.assertEqual(result["difficulty_level"], "送分题")
+
+    def test_feature_review_resolution_must_match_final_level(self):
+        value = rating("中等题")
+        value["feature_review"]["resolution"] = "维持较低档"
+        with self.assertRaisesRegex(
+            schema.ChemistrySchemaError,
+            "feature_review.resolution与difficulty_level不一致",
+        ):
+            schema.validate_rating_contract(value)
+
+    def test_feature_review_rejects_none_mixed_with_real_evidence(self):
+        value = rating("中等题")
+        value["feature_review"]["supports_higher_level"] = ["无", "实验任务"]
+        with self.assertRaisesRegex(schema.ChemistrySchemaError, "证据维度非法"):
+            schema.validate_rating_contract(value)
 
     def test_legacy_calculation_fields_merge_without_retry(self):
         value = rating()
@@ -332,12 +363,13 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             "**识别具体任务类型。**",
             "**确认抽象特征。**",
             "**用档内真实例题校准。**",
-            "**比较相邻档位。**",
-            "**用共用误判警示兜底。**",
+            "**完成相邻档位特征复核。**",
+            "**用候选档位的误判警示兜底。**",
         )
         positions = [prompt.index(marker) for marker in ordered_markers]
         self.assertEqual(positions, sorted(positions))
-        self.assertGreater(prompt.index("### 五档共用误判警示"), prompt.index("### 4 / 5：拔高题与压轴题"))
+        self.assertEqual(prompt.count("#### 常见误判警示"), 5)
+        self.assertNotIn("### 五档共用误判警示", prompt)
 
     def test_case_coverage_is_not_lost_after_prompt_simplification(self):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
@@ -360,7 +392,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         }
         starts = [(name, boundary.index(name)) for name in minimum_boundary_cases]
         for index, (name, start) in enumerate(starts):
-            end = starts[index + 1][1] if index + 1 < len(starts) else boundary.index("### 五档共用误判警示")
+            end = starts[index + 1][1] if index + 1 < len(starts) else len(boundary)
             self.assertGreaterEqual(boundary[start:end].count("【Case "), minimum_boundary_cases[name])
 
     def test_runtime_has_no_source_label_or_retry_logic(self):
