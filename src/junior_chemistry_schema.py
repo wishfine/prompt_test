@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v28"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v29"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -19,11 +19,7 @@ LEVEL_INDEX = {level: index for index, level in enumerate(LEVELS)}
 ADJACENT_LEVEL_PAIRS = tuple(
     f"{LEVELS[index]}/{LEVELS[index + 1]}" for index in range(len(LEVELS) - 1)
 )
-REVIEW_DIMENSIONS = (
-    "无", "知识覆盖", "任务关系", "实质步骤", "信息处理", "反应结构",
-    "实验任务", "误差分析", "计算结构或方法", "条件障碍", "表达要求",
-)
-REVIEW_RESOLUTIONS = ("维持较低档", "升至较高档")
+REVIEW_RESOLUTIONS = ("选择较低档", "选择较高档")
 
 # knowledge.topic_ids 是第 1 个核心特征；以下12个字段中，4个天然并列字段
 # 使用受控枚举数组，其余字段为单选。知识覆盖由topic_id确定性计算，不重复要求模型判断。
@@ -78,6 +74,11 @@ FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
         "原因或结论规范表达", "计算过程书写",
     ),
 }
+
+# 相邻档位复核直接引用上面的模型特征字段，不再维护第二套同义维度。
+REVIEW_FEATURE_FIELDS = (
+    "knowledge", *FEATURE_OPTIONS.keys(), "curriculum_scope",
+)
 
 MULTI_FEATURE_FIELDS = frozenset({
     "experiment_operation", "experiment_analysis", "experiment_design",
@@ -402,7 +403,7 @@ def rating_json_schema() -> dict[str, Any]:
 
     reasoning_fields = ("longest_substantive_chain", "level_basis")
     feature_review_fields = (
-        "adjacent_pair", "supports_higher_level", "limits_higher_level",
+        "adjacent_pair", "supporting_feature_fields", "limiting_feature_fields",
         "resolution", "review_basis",
     )
     return _object_schema({
@@ -425,13 +426,13 @@ def rating_json_schema() -> dict[str, Any]:
         }, reasoning_fields),
         "feature_review": _object_schema({
             "adjacent_pair": {"type": "string", "enum": list(ADJACENT_LEVEL_PAIRS)},
-            "supports_higher_level": {
-                "type": "array", "items": {"type": "string", "enum": list(REVIEW_DIMENSIONS)},
-                "minItems": 1, "uniqueItems": True,
+            "supporting_feature_fields": {
+                "type": "array", "items": {"type": "string", "enum": list(REVIEW_FEATURE_FIELDS)},
+                "uniqueItems": True,
             },
-            "limits_higher_level": {
-                "type": "array", "items": {"type": "string", "enum": list(REVIEW_DIMENSIONS)},
-                "minItems": 1, "uniqueItems": True,
+            "limiting_feature_fields": {
+                "type": "array", "items": {"type": "string", "enum": list(REVIEW_FEATURE_FIELDS)},
+                "uniqueItems": True,
             },
             "resolution": {"type": "string", "enum": list(REVIEW_RESOLUTIONS)},
             "review_basis": {"type": "string"},
@@ -896,34 +897,31 @@ def validate_rating_contract(value: Any) -> dict[str, Any]:
         raise ChemistrySchemaError("reasoning字段不得为空")
 
     review_fields = {
-        "adjacent_pair", "supports_higher_level", "limits_higher_level",
+        "adjacent_pair", "supporting_feature_fields", "limiting_feature_fields",
         "resolution", "review_basis",
     }
     review = _exact_dict(value["feature_review"], review_fields, "feature_review")
     if review["adjacent_pair"] not in ADJACENT_LEVEL_PAIRS:
         raise ChemistrySchemaError("feature_review.adjacent_pair非法")
     supports = _string_list(
-        review["supports_higher_level"],
-        "feature_review.supports_higher_level",
+        review["supporting_feature_fields"],
+        "feature_review.supporting_feature_fields",
         deduplicate=True,
     )
     limits = _string_list(
-        review["limits_higher_level"],
-        "feature_review.limits_higher_level",
+        review["limiting_feature_fields"],
+        "feature_review.limiting_feature_fields",
         deduplicate=True,
     )
     if (
-        not supports or not limits
-        or any(item not in REVIEW_DIMENSIONS for item in (*supports, *limits))
-        or (len(supports) > 1 and "无" in supports)
-        or (len(limits) > 1 and "无" in limits)
+        any(item not in REVIEW_FEATURE_FIELDS for item in (*supports, *limits))
     ):
-        raise ChemistrySchemaError("feature_review证据维度非法")
+        raise ChemistrySchemaError("feature_review引用了非法特征字段")
     if review["resolution"] not in REVIEW_RESOLUTIONS:
         raise ChemistrySchemaError("feature_review.resolution非法")
     lower_level, higher_level = review["adjacent_pair"].split("/")
     expected_level = (
-        higher_level if review["resolution"] == "升至较高档" else lower_level
+        higher_level if review["resolution"] == "选择较高档" else lower_level
     )
     if value["difficulty_level"] != expected_level:
         raise ChemistrySchemaError(
@@ -934,8 +932,8 @@ def validate_rating_contract(value: Any) -> dict[str, Any]:
         raise ChemistrySchemaError("feature_review.review_basis不得为空")
     normalized_review = {
         "adjacent_pair": review["adjacent_pair"],
-        "supports_higher_level": supports,
-        "limits_higher_level": limits,
+        "supporting_feature_fields": supports,
+        "limiting_feature_fields": limits,
         "resolution": review["resolution"],
         "review_basis": review_basis,
     }

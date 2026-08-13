@@ -14,10 +14,10 @@ def rating(level="基础题", topic_ids=None):
     index = schema.LEVEL_INDEX[level]
     if index == 0:
         lower, higher = schema.LEVELS[0], schema.LEVELS[1]
-        resolution = "维持较低档"
+        resolution = "选择较低档"
     else:
         lower, higher = schema.LEVELS[index - 1], schema.LEVELS[index]
-        resolution = "升至较高档"
+        resolution = "选择较高档"
     return {
         "features": {
             "knowledge": {"topic_ids": topic_ids or ["U02_T03"]},
@@ -41,8 +41,8 @@ def rating(level="基础题", topic_ids=None):
         },
         "feature_review": {
             "adjacent_pair": f"{lower}/{higher}",
-            "supports_higher_level": ["知识覆盖"],
-            "limits_higher_level": ["实质步骤"],
+            "supporting_feature_fields": ["knowledge"],
+            "limiting_feature_fields": ["step_count"],
             "resolution": resolution,
             "review_basis": "综合相邻档位特征后确定。",
         },
@@ -139,18 +139,34 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
 
     def test_feature_review_resolution_must_match_final_level(self):
         value = rating("中等题")
-        value["feature_review"]["resolution"] = "维持较低档"
+        value["feature_review"]["resolution"] = "选择较低档"
         with self.assertRaisesRegex(
             schema.ChemistrySchemaError,
             "feature_review.resolution与difficulty_level不一致",
         ):
             schema.validate_rating_contract(value)
 
-    def test_feature_review_rejects_none_mixed_with_real_evidence(self):
+    def test_feature_review_rejects_non_schema_dimension(self):
         value = rating("中等题")
-        value["feature_review"]["supports_higher_level"] = ["无", "实验任务"]
-        with self.assertRaisesRegex(schema.ChemistrySchemaError, "证据维度非法"):
+        value["feature_review"]["supporting_feature_fields"] = ["实验任务"]
+        with self.assertRaisesRegex(schema.ChemistrySchemaError, "非法特征字段"):
             schema.validate_rating_contract(value)
+
+    def test_feature_review_allows_empty_evidence_side(self):
+        value = rating("送分题")
+        value["feature_review"]["supporting_feature_fields"] = []
+        validated = schema.validate_rating_contract(value)
+        self.assertEqual(validated["feature_review"]["supporting_feature_fields"], [])
+
+    def test_feature_review_uses_exact_feature_field_names(self):
+        review_schema = schema.rating_json_schema()["properties"]["feature_review"]["properties"]
+        expected = ["knowledge", *schema.FEATURE_OPTIONS, "curriculum_scope"]
+        self.assertEqual(
+            review_schema["supporting_feature_fields"]["items"]["enum"], expected
+        )
+        self.assertEqual(
+            review_schema["limiting_feature_fields"]["items"]["enum"], expected
+        )
 
     def test_legacy_calculation_fields_merge_without_retry(self):
         value = rating()
