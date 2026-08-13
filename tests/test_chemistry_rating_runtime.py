@@ -456,6 +456,29 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             end = starts[index + 1][1] if index + 1 < len(starts) else len(boundary)
             self.assertGreaterEqual(boundary[start:end].count("【Case "), minimum_boundary_cases[name])
 
+    def test_giveaway_basic_boundary_does_not_inflate_ordinary_options(self):
+        prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
+        required_clauses = (
+            "错误选项不构成易混点",
+            "不能把选择动作单独计为一步",
+            "task_structure`仍选`单一任务",
+            "difficulty_obstacle`仍可选`无明显障碍",
+            "普通概念选项不等于决定答案的易混概念",
+            "四个选项使用同一条规则，不拆成多个独立任务",
+        )
+        for clause in required_clauses:
+            self.assertIn(clause, prompt)
+
+        giveaway = prompt[prompt.index("### 难度1"):prompt.index("### 难度2")]
+        for case_name in (
+            "Case 7：教材事实直接选择",
+            "Case 8：同一透明规则比较数值",
+            "Case 9：生活标签中的元素名称",
+            "Case 10：同一化合价规则筛选多个选项",
+            "Case 11：常见操作目的直接辨认",
+        ):
+            self.assertIn(case_name, giveaway)
+
     def test_runtime_has_no_source_label_or_retry_logic(self):
         runtime = (ROOT / "src" / "chemistry_difficulty_rating_with_cache.py").read_text(encoding="utf-8")
         source = runtime + (ROOT / "src" / "junior_chemistry_schema.py").read_text(encoding="utf-8")
