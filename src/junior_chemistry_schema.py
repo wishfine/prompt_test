@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v21"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v22"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -17,181 +17,92 @@ LEVELS = ("送分题", "基础题", "中等题", "拔高题", "压轴题")
 SCOPES = ("within_junior", "out_of_scope")
 LEVEL_INDEX = {level: index for index, level in enumerate(LEVELS)}
 
-# 30 个细粒度核心特征均为单选枚举。顺序同时用于 Prompt 文档测试和 JSON Schema。
-# 具体知识点另由受控 topic_id 列表表达，避免把知识内容压成抽象标签。
+# knowledge.topic_ids 是第 1 个核心特征；以下 18 个字段均为单选枚举。
+# 共 19 个显式核心特征，不再用隐藏派生字段重复表达同一证据。
 FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
-    "task_count": ("1项", "2-3项", "4项及以上"),
-    "knowledge_distribution": (
-        "单一知识点", "同知识点重复判断", "同单元不同知识点",
-        "跨单元不同知识点", "多单元综合",
-    ),
+    "knowledge_coverage": ("单一知识点", "同单元多知识点", "跨两个单元", "多单元综合"),
     "chemical_object_distribution": (
         "无明确化学对象", "单一化学对象", "同类多个化学对象",
         "不同类多个化学对象", "多类化学对象综合",
     ),
-    "step_count": (
-        "0步（直接识记）", "1步", "2-3步", "4-5步", "6步及以上",
+    "task_structure": (
+        "单一任务", "2-3项独立任务", "4项及以上独立任务",
+        "多项任务共享同一模型", "前后依赖任务", "多条任务链汇合",
     ),
-    "task_relation": ("单项任务", "多项独立", "前后依赖", "多条任务链汇合"),
+    "step_count": ("0步（直接识记）", "1步", "2-3步", "4-5步", "6步及以上"),
     "solution_method": (
         "直接识记或辨认", "一条规则直接应用", "多条规则分别判断",
-        "连续推导", "定性与定量联合", "实验探究或方案评价",
-        "其他明确解题方法",
+        "连续推导", "根据结果反推物质或组成", "定性与定量联合",
+        "分类讨论", "实验探究或方案评价",
     ),
-    "classification_discussion": ("无", "单一情况讨论", "多情况分类讨论"),
-    "reverse_tracing": ("无", "有"),
-    "visual_content": (
-        "无图片信息", "生活标识图", "仪器图", "基础装置图", "微观示意图",
-        "元素周期表或标签图", "数据表格",
-        "反应流程图", "工业流程图", "曲线图", "多组对比实验表格",
-        "多装置组合实验图", "多种图像综合", "其他有效图像信息",
-    ),
-    "visual_item_count": ("无图片", "1幅", "2幅", "3幅", "4幅及以上"),
-    "visual_complexity": (
-        "无图片信息", "单一同类型图像", "多个同类型图像",
-        "多个不同类型图像", "复杂高难图像",
+    "information_carrier": (
+        "无额外信息", "普通文字材料", "古文或文言材料", "跨学科材料",
+        "生活标识图", "仪器或基础装置图", "微观示意图", "数据表格",
+        "曲线图", "反应流程图", "工业流程图", "多装置组合图",
+        "多种信息载体联合",
     ),
     "information_operation": (
         "无需额外提取", "直接读取一个信息", "比较或整理多条信息",
         "由图表变化推断", "图像拐点或分段分析", "多来源信息筛选联合",
-        "文字材料提取", "其他信息处理",
+        "提取题给新规则并应用",
     ),
-    "reaction_count": ("0个", "1个", "2-3个", "4个及以上"),
-    "reaction_relation": (
-        "无反应关系", "单一反应", "多个反应并列", "多个反应连续",
-        "反应先后或过量不足", "分情况或竞争反应", "其他明确反应关系",
+    "reaction_structure": (
+        "无反应", "单一反应", "2-3个并列反应", "2-3个连续反应",
+        "4个以上反应网络", "反应先后或过量不足", "分情况或竞争反应",
     ),
     "experiment_operation": (
         "无", "仪器识别或名称", "基本操作或读数判断", "装置选择或连接",
         "气体检验或验满", "试剂选择或物质检验", "多项实验操作联合",
-        "其他实验操作任务",
     ),
     "experiment_analysis": (
         "无", "实验现象判断", "装置作用或实验目的", "实验原因解释",
         "控制变量", "根据现象或数据得出结论", "多个实验分析任务联合",
-        "其他实验分析任务",
     ),
     "experiment_design": (
         "无", "补充实验步骤或操作", "根据结论设计操作", "实验方案设计",
-        "实验方案评价", "实验改进", "多阶段探究设计",
-        "多类实验设计任务联合", "其他实验设计任务",
+        "实验方案评价", "实验改进", "多阶段探究设计", "多类实验设计任务联合",
     ),
     "error_analysis": (
         "无", "量筒读数误差", "天平称量误差", "实验操作导致误差",
         "装置或方案导致误差", "定量实验误差分析", "多种误差联合分析",
-        "其他明确误差分析",
     ),
     "calculation_type": (
         "无", "化合价或化学式计算", "相对分子质量或元素质量计算",
         "化学方程式计算", "溶质质量分数或稀释计算", "溶解度计算",
         "反应后气体沉淀固体质量", "反应后溶液或溶质质量",
         "含杂质计算", "图像分段计算", "实验误差定量计算", "多类计算综合",
-        "其他明确计算",
     ),
-    "calculation_steps": ("无", "1步", "2-3步", "4步及以上"),
     "calculation_structure": (
-        "无任何计算", "一步或口算", "多步常规计算", "单个化学方程式计算",
-        "多个化学反应计算", "含杂质多步质量分数",
-        "实验误差定量计算", "多模型综合计算", "其他明确计算结构",
+        "无计算", "一步或口算", "2-3步常规计算", "4步及以上常规计算",
+        "单个化学方程式完整计算", "多个反应连续计算",
+        "含杂质或反应后体系计算", "图像分段计算",
+        "实验误差定量计算", "多模型综合计算",
     ),
     "special_method": (
         "无", "质量守恒", "元素守恒", "差量法", "极值法",
         "分情况计算", "多方程式联立", "循环反应计算", "多种特殊方法联合",
-        "其他明确计算方法",
     ),
-    "hidden_condition_count": ("0个", "1个", "2个", "3个及以上"),
-    "hidden_condition_type": (
-        "无", "前后对象要求", "反应条件", "过量或不足", "反应先后",
-        "物质或溶液状态", "纯净干燥或杂质", "气体水分或质量损失",
-        "图像拐点或分段", "剩余物或变质程度", "组成或转化关系",
-        "装置或操作前提", "守恒或质量关系", "溶解或饱和状态",
-        "粒子或电荷关系", "多类条件联合", "其他隐藏条件",
-    ),
-    "condition_relation": (
-        "无条件限制", "单一条件", "多个独立条件",
+    "condition_structure": (
+        "无隐藏条件", "一个隐藏条件", "多个独立条件",
         "多个关联条件", "多层嵌套条件",
     ),
     "interference_type": (
         "无", "易混概念", "多个选项规则切换", "规范表述易错",
         "干扰数据", "特例或边界", "体系质量关系易错",
-        "多种剩余情况或竞争解释", "多类干扰联合", "其他决定性干扰",
+        "多种剩余情况或竞争解释", "多类干扰联合",
     ),
     "expression_type": (
         "无", "元素离子符号或化学式书写", "仪器操作或试剂名称书写",
         "化学方程式书写", "实验现象或操作规范描述",
         "原因或结论规范表达", "计算过程书写", "数值或简短答案填写",
-        "物质名称性质或用途填写", "多类规范表达联合", "其他明确表达任务",
-    ),
-    "subjective_response": ("无", "有"),
-    "given_information": (
-        "题干未提供新增规则", "题干给出一条新事实或规则",
-        "题干给出多条新事实或规则", "题干给出陌生物质或反应资料",
-        "题干给出陌生装置流程或材料资料", "题干给出其他新增信息",
-    ),
-    "cross_subject": (
-        "无", "古文或文言理解", "物理知识参与", "生物知识参与",
-        "生产流程或工程信息参与", "多学科信息参与", "其他学科知识参与",
+        "物质名称性质或用途填写", "多类规范表达联合",
     ),
 }
 
-# 模型侧保持rerun9的精简选择空间，只补入“多步常规计算”这一处已验证缺口。
-# 扩展枚举仍由本地规范化使用，避免把大量兜底项展示给模型造成判档漂移。
-MODEL_ENUM_EXCLUSIONS: dict[str, frozenset[str]] = {
-    "solution_method": frozenset({"实验探究或方案评价", "其他明确解题方法"}),
-    "visual_content": frozenset({"元素周期表或标签图", "其他有效图像信息"}),
-    "information_operation": frozenset({"文字材料提取", "其他信息处理"}),
-    "reaction_relation": frozenset({"其他明确反应关系"}),
-    "experiment_operation": frozenset({"其他实验操作任务"}),
-    "experiment_analysis": frozenset({"其他实验分析任务"}),
-    "experiment_design": frozenset({"多类实验设计任务联合", "其他实验设计任务"}),
-    "error_analysis": frozenset({"其他明确误差分析"}),
-    "calculation_type": frozenset({"其他明确计算"}),
-    "calculation_structure": frozenset({"其他明确计算结构"}),
-    "special_method": frozenset({"其他明确计算方法"}),
-    "hidden_condition_type": frozenset({
-        "组成或转化关系", "装置或操作前提", "守恒或质量关系",
-        "溶解或饱和状态", "粒子或电荷关系", "其他隐藏条件",
-    }),
-    "interference_type": frozenset({"多类干扰联合", "其他决定性干扰"}),
-    "expression_type": frozenset({
-        "数值或简短答案填写", "物质名称性质或用途填写", "其他明确表达任务",
-    }),
-    "given_information": frozenset({"题干给出其他新增信息"}),
-    "cross_subject": frozenset({"其他学科知识参与"}),
-}
-MODEL_FEATURE_OPTIONS: dict[str, tuple[str, ...]] = {
-    field: tuple(
-        option for option in options
-        if option not in MODEL_ENUM_EXCLUSIONS.get(field, frozenset())
-    )
-    for field, options in FEATURE_OPTIONS.items()
-}
-
-# 开放语义字段必须具有合法兜底项。它只在所有具体枚举均不适用时使用，
-# 目的是保留“确有该类任务”的证据，禁止规范化时静默回落为“无”。
-FEATURE_RESIDUAL_OPTIONS: dict[str, str] = {
-    "solution_method": "其他明确解题方法",
-    "visual_content": "其他有效图像信息",
-    "information_operation": "其他信息处理",
-    "reaction_relation": "其他明确反应关系",
-    "experiment_operation": "其他实验操作任务",
-    "experiment_analysis": "其他实验分析任务",
-    "experiment_design": "其他实验设计任务",
-    "error_analysis": "其他明确误差分析",
-    "calculation_type": "其他明确计算",
-    "calculation_structure": "其他明确计算结构",
-    "special_method": "其他明确计算方法",
-    "hidden_condition_type": "其他隐藏条件",
-    "interference_type": "其他决定性干扰",
-    "expression_type": "其他明确表达任务",
-    "given_information": "题干给出其他新增信息",
-    "cross_subject": "其他学科知识参与",
-}
-
-# 模型把多个合法值拼在一个字段时，优先收敛到该字段的联合枚举，
-# 而不是清空为“无”或任意保留其中一项。
+MODEL_FEATURE_OPTIONS = FEATURE_OPTIONS
+FEATURE_RESIDUAL_OPTIONS: dict[str, str] = {}
 FEATURE_MULTI_OPTIONS: dict[str, str] = {
-    "visual_content": "多种图像综合",
+    "information_carrier": "多种信息载体联合",
     "experiment_operation": "多项实验操作联合",
     "experiment_analysis": "多个实验分析任务联合",
     "experiment_design": "多类实验设计任务联合",
@@ -199,21 +110,10 @@ FEATURE_MULTI_OPTIONS: dict[str, str] = {
     "calculation_type": "多类计算综合",
     "calculation_structure": "多模型综合计算",
     "special_method": "多种特殊方法联合",
-    "hidden_condition_type": "多类条件联合",
     "interference_type": "多类干扰联合",
     "expression_type": "多类规范表达联合",
-    "cross_subject": "多学科信息参与",
 }
-
-# 这些字段的取值天然是计数区间、布尔值或互斥关系，现有枚举已经穷尽，
-# 不应增加“其他”逃逸项。每个核心字段必须且只能属于穷尽型或开放型之一。
-EXHAUSTIVE_FEATURE_FIELDS = frozenset({
-    "task_count", "knowledge_distribution", "chemical_object_distribution",
-    "step_count", "task_relation", "classification_discussion", "reverse_tracing",
-    "visual_item_count", "visual_complexity", "reaction_count",
-    "calculation_steps", "hidden_condition_count", "condition_relation",
-    "subjective_response",
-})
+EXHAUSTIVE_FEATURE_FIELDS = frozenset(FEATURE_OPTIONS)
 
 
 def validate_feature_registry() -> None:
@@ -241,7 +141,7 @@ def validate_feature_registry() -> None:
 
 
 def validate_prompt_feature_catalog(prompt: str) -> None:
-    """启动前验证Prompt的30项枚举与运行时Schema完全同源。"""
+    """启动前验证Prompt的18项枚举与运行时Schema完全同源。"""
     documented = {
         field: tuple(re.findall(r"`([^`]+)`", values))
         for field, values in re.findall(
@@ -267,10 +167,11 @@ FEATURE_DEFAULTS: dict[str, str] = {
     field: options[0] for field, options in FEATURE_OPTIONS.items()
 }
 FEATURE_ALIASES: dict[str, dict[str, str]] = {
-    "visual_content": {
-        "元素周期表单元格图": "元素周期表或标签图",
-        "元素周期表信息图": "元素周期表或标签图",
-        "药品标签图": "元素周期表或标签图",
+    "information_carrier": {
+        "无图片信息": "无额外信息",
+        "仪器图": "仪器或基础装置图",
+        "基础装置图": "仪器或基础装置图",
+        "多种图像综合": "多种信息载体联合",
     },
     "experiment_operation": {
         "仪器识别": "仪器识别或名称",
@@ -299,15 +200,20 @@ FEATURE_ALIASES: dict[str, dict[str, str]] = {
         "溶质质量分数稀释计算": "溶质质量分数或稀释计算",
     },
     "calculation_structure": {
-        "无": "无任何计算",
+        "无": "无计算",
+        "无任何计算": "无计算",
         "口算": "一步或口算",
-        "多个化学式计算": "多步常规计算",
-        "多步化学式计算": "多步常规计算",
-        "多项常规计算": "多步常规计算",
-        "一个化学方程式计算": "单个化学方程式计算",
-        "多反应计算": "多个化学反应计算",
-        "多个反应计算": "多个化学反应计算",
-        "含杂质计算": "含杂质多步质量分数",
+        "多步常规计算": "2-3步常规计算",
+        "多个化学式计算": "2-3步常规计算",
+        "多步化学式计算": "2-3步常规计算",
+        "多项常规计算": "2-3步常规计算",
+        "一个化学方程式计算": "单个化学方程式完整计算",
+        "单个化学方程式计算": "单个化学方程式完整计算",
+        "多反应计算": "多个反应连续计算",
+        "多个反应计算": "多个反应连续计算",
+        "多个化学反应计算": "多个反应连续计算",
+        "含杂质计算": "含杂质或反应后体系计算",
+        "含杂质多步质量分数": "含杂质或反应后体系计算",
         "多模型计算": "多模型综合计算",
     },
     "special_method": {
@@ -315,31 +221,6 @@ FEATURE_ALIASES: dict[str, dict[str, str]] = {
         "极值": "极值法",
         "元素质量守恒": "元素守恒",
         "总质量守恒": "质量守恒",
-    },
-    "hidden_condition_type": {
-        "杂质": "纯净干燥或杂质",
-        "物质状态": "物质或溶液状态",
-        "反应物过量或不足": "过量或不足",
-        "物质过量判断": "过量或不足",
-        "剩余物": "剩余物或变质程度",
-        "变质程度": "剩余物或变质程度",
-        "物质组成": "组成或转化关系",
-        "混合物组分范围": "组成或转化关系",
-        "物质转化要求": "组成或转化关系",
-        "物质转化关系": "组成或转化关系",
-        "产物要求": "组成或转化关系",
-        "装置气密性要求": "装置或操作前提",
-        "装置选择条件": "装置或操作前提",
-        "实验操作要求": "装置或操作前提",
-        "反应前后质量不变": "守恒或质量关系",
-        "反应前后总质量不变": "守恒或质量关系",
-        "质量变化关系": "守恒或质量关系",
-        "质量差推断组成": "守恒或质量关系",
-        "饱和溶液状态": "溶解或饱和状态",
-        "饱和不饱和状态": "溶解或饱和状态",
-        "溶解度差异": "溶解或饱和状态",
-        "粒子带电状态": "粒子或电荷关系",
-        "电荷与质子数关系": "粒子或电荷关系",
     },
     "expression_type": {
         "计算结果填写": "数值或简短答案填写",
@@ -349,17 +230,6 @@ FEATURE_ALIASES: dict[str, dict[str, str]] = {
         "物质名称书写": "物质名称性质或用途填写",
         "物质性质填写": "物质名称性质或用途填写",
         "物质用途填写": "物质名称性质或用途填写",
-    },
-    "given_information": {
-        "题干给出两条新事实或规则": "题干给出多条新事实或规则",
-        "题干仅给出常规数据": "题干未提供新增规则",
-        "题干给出实验数据和图像": "题干未提供新增规则",
-        "题干给出反应化学方程式未提供新增规则": "题干未提供新增规则",
-        "题干给出陌生物质化学式": "题干给出陌生物质或反应资料",
-    },
-    "subjective_response": {
-        "是": "有",
-        "否": "无",
     },
 }
 
@@ -520,10 +390,14 @@ def rating_json_schema() -> dict[str, Any]:
             feature_properties,
             ("knowledge", *FEATURE_OPTIONS.keys(), "curriculum_scope"),
         ),
-        "reasoning": _object_schema(
-            {field: {"type": "string"} for field in reasoning_fields},
-            reasoning_fields,
-        ),
+        "reasoning": _object_schema({
+            "knowledge_points": {"type": "string"},
+            "solution_process": {
+                "type": "array", "items": {"type": "string"}, "minItems": 1,
+            },
+            "main_difficulty_factors": {"type": "string"},
+            "level_basis": {"type": "string"},
+        }, reasoning_fields),
         "difficulty_level": {"type": "string", "enum": list(LEVELS)},
     }, ("features", "reasoning", "difficulty_level"))
 
@@ -567,89 +441,6 @@ def _clean_enum_text(value: Any) -> str:
     return re.sub(r"[\s`'\"，,。；;：:]", "", str(value or ""))
 
 
-def _numeric_count(value: Any) -> int | None:
-    """读取明确数量；不把“多个”等模糊量词猜成精确数量。"""
-    text = str(value or "")
-    numbers = [int(number) for number in re.findall(r"\d+", text)]
-    if numbers:
-        return max(numbers)
-    chinese_numbers = {
-        "零": 0, "一": 1, "二": 2, "两": 2, "三": 3,
-        "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
-    }
-    matched = [number for token, number in chinese_numbers.items() if token in text]
-    return max(matched) if matched else None
-
-
-def _count_band(field: str, count: int) -> str:
-    if field == "reaction_count":
-        if count <= 0:
-            return "0个"
-        if count == 1:
-            return "1个"
-        if count <= 3:
-            return "2-3个"
-        return "4个及以上"
-    if field == "hidden_condition_count":
-        if count <= 0:
-            return "0个"
-        if count == 1:
-            return "1个"
-        if count == 2:
-            return "2个"
-        return "3个及以上"
-    if field == "visual_item_count":
-        if count <= 0:
-            return "无图片"
-        if count <= 3:
-            return f"{count}幅"
-        return "4幅及以上"
-    raise KeyError(field)
-
-
-def _infer_reaction_count(source: dict[str, Any]) -> str | None:
-    relation = str(source.get("reaction_relation", "") or "")
-    if relation == "无反应关系":
-        return "0个"
-    if relation == "单一反应":
-        return "1个"
-    if relation in FEATURE_OPTIONS["reaction_relation"]:
-        return "2-3个"
-    return None
-
-
-def _infer_hidden_condition_count(source: dict[str, Any]) -> str | None:
-    relation = str(source.get("condition_relation", "") or "")
-    relation_counts = {
-        "无条件限制": "0个",
-        "单一条件": "1个",
-        "多个独立条件": "2个",
-        "多个关联条件": "2个",
-        "多层嵌套条件": "3个及以上",
-    }
-    if relation in relation_counts:
-        return relation_counts[relation]
-    condition_type = str(source.get("hidden_condition_type", "") or "")
-    if condition_type in FEATURE_OPTIONS["hidden_condition_type"]:
-        return "0个" if condition_type == "无" else "1个"
-    return None
-
-
-def _infer_visual_complexity(source: dict[str, Any]) -> str | None:
-    operation = str(source.get("information_operation", "") or "")
-    if operation == "图像拐点或分段分析":
-        return "复杂高难图像"
-    if operation == "多来源信息筛选联合":
-        return "多个不同类型图像"
-    item_count = str(source.get("visual_item_count", "") or "")
-    if item_count in {"2幅", "3幅", "4幅及以上"}:
-        return "多个同类型图像"
-    content = str(source.get("visual_content", "") or "")
-    if content in FEATURE_OPTIONS["visual_content"] and content != "无图片信息":
-        return "单一同类型图像"
-    return None
-
-
 def canonicalize_feature_value(
     field: str,
     value: Any,
@@ -658,18 +449,6 @@ def canonicalize_feature_value(
     """把单个模型特征确定性收敛到该字段的受控枚举。"""
     options = FEATURE_OPTIONS[field]
     if isinstance(value, str) and value in options:
-        if field == "reaction_count":
-            inferred = _infer_reaction_count(source)
-            if value in {"0个", "1个"} and inferred in {"2-3个", "4个及以上"}:
-                return inferred, "反应关系明确为多个反应，禁止把反应数量清零或压成1个"
-        if field == "hidden_condition_count":
-            inferred = _infer_hidden_condition_count(source)
-            if value in {"0个", "1个"} and inferred in {"2个", "3个及以上"}:
-                return inferred, "条件关系明确为多个条件，禁止把条件数量清零或压成1个"
-        if field == "visual_complexity":
-            inferred = _infer_visual_complexity(source)
-            if inferred == "复杂高难图像" and value != inferred:
-                return inferred, "已明确要求图像分段分析，禁止降低为普通图像"
         return value, "原值已是合法枚举"
 
     cleaned = _clean_enum_text(value)
@@ -685,26 +464,6 @@ def canonicalize_feature_value(
     }
     if cleaned in aliases:
         return aliases[cleaned], "按该字段的受控同义词映射"
-
-    if field in {"reaction_count", "hidden_condition_count", "visual_item_count"}:
-        count = _numeric_count(value)
-        if count is not None:
-            return _count_band(field, count), "按明确数字或数量词映射到计数区间"
-
-    if field == "reaction_count":
-        inferred = _infer_reaction_count(source)
-        if inferred is not None:
-            return inferred, "由反应关系保留已明确存在的反应数量证据"
-
-    if field == "hidden_condition_count":
-        inferred = _infer_hidden_condition_count(source)
-        if inferred is not None:
-            return inferred, "由条件关系保留已明确存在的条件数量证据"
-
-    if field == "visual_complexity":
-        inferred = _infer_visual_complexity(source)
-        if inferred is not None:
-            return inferred, "由图像任务保留已明确存在的图像复杂度证据"
 
     excluded = {
         FEATURE_DEFAULTS[field],
@@ -732,25 +491,25 @@ def canonicalize_feature_value(
 
     if field == "calculation_structure":
         calculation_type = str(source.get("calculation_type", "") or "")
-        calculation_steps = str(source.get("calculation_steps", "") or "")
         structure_by_type = {
-            "化学方程式计算": "单个化学方程式计算",
-            "含杂质计算": "含杂质多步质量分数",
+            "化学方程式计算": "单个化学方程式完整计算",
+            "含杂质计算": "含杂质或反应后体系计算",
+            "反应后气体沉淀固体质量": "含杂质或反应后体系计算",
+            "反应后溶液或溶质质量": "含杂质或反应后体系计算",
+            "图像分段计算": "图像分段计算",
             "实验误差定量计算": "实验误差定量计算",
             "多类计算综合": "多模型综合计算",
         }
         if calculation_type in structure_by_type:
             return structure_by_type[calculation_type], "依据计算类型确定计算结构"
         if calculation_type not in {"", "无"}:
-            return (
-                "一步或口算" if calculation_steps == "1步" else "多步常规计算"
-            ), "依据计算类型与步骤确定常规计算结构"
+            return "2-3步常规计算", "计算类型明确但结构串值，保留为常规计算"
 
     # 计算类型发生字段串值时，不能回落为“无”并清空其他计算证据。
     if field == "calculation_type":
-        calculation_steps = str(source.get("calculation_steps", "") or "")
         special_method = str(source.get("special_method", "") or "")
-        if calculation_steps not in {"", "无"} or special_method not in {"", "无"}:
+        calculation_structure = str(source.get("calculation_structure", "") or "")
+        if calculation_structure not in {"", "无计算"} or special_method not in {"", "无"}:
             return "多类计算综合", "计算证据明确存在但计算对象无法唯一确定"
 
     residual = FEATURE_RESIDUAL_OPTIONS.get(field)
@@ -928,8 +687,21 @@ def validate_rating_contract(value: Any) -> dict[str, Any]:
         "knowledge_points", "solution_process", "main_difficulty_factors", "level_basis",
     }
     reasoning = _exact_dict(value["reasoning"], reasoning_fields, "reasoning")
-    normalized_reasoning = {field: str(reasoning[field]).strip() for field in reasoning_fields}
-    if any(not text for text in normalized_reasoning.values()):
+    solution_process = _string_list(
+        reasoning["solution_process"], "reasoning.solution_process", deduplicate=True,
+    )
+    normalized_reasoning = {
+        "knowledge_points": str(reasoning["knowledge_points"]).strip(),
+        "solution_process": solution_process,
+        "main_difficulty_factors": str(reasoning["main_difficulty_factors"]).strip(),
+        "level_basis": str(reasoning["level_basis"]).strip(),
+    }
+    if (
+        not normalized_reasoning["knowledge_points"]
+        or not solution_process
+        or not normalized_reasoning["main_difficulty_factors"]
+        or not normalized_reasoning["level_basis"]
+    ):
         raise ChemistrySchemaError("reasoning字段不得为空")
 
     return {
@@ -950,7 +722,7 @@ def _candidate(rule: str, level: str, reason: str, evidence: dict[str, Any]) -> 
 
 
 def _normalize_feature_consistency(result: dict[str, Any]) -> list[dict[str, Any]]:
-    """只修复能由其他受控字段或topic_id唯一确定的枚举组合。"""
+    """只修复无歧义矛盾；不从一个特征推导另一项难度证据。"""
     features = result["features"]
     actions: list[dict[str, Any]] = []
 
@@ -966,106 +738,11 @@ def _normalize_feature_consistency(result: dict[str, Any]) -> list[dict[str, Any
             "reason": reason,
         })
 
-    knowledge = features["knowledge"]
-    if knowledge["knowledge_point_count"] <= 1:
-        if features["knowledge_distribution"] not in {
-            "单一知识点", "同知识点重复判断",
-        }:
-            replace("knowledge_distribution", "单一知识点", "按去重topic_id数量校正")
-    elif knowledge["unit_count"] == 1:
-        replace("knowledge_distribution", "同单元不同知识点", "按topic_id所属单元校正")
-    elif knowledge["unit_count"] == 2:
-        replace("knowledge_distribution", "跨单元不同知识点", "按topic_id所属单元校正")
-    else:
-        replace("knowledge_distribution", "多单元综合", "按topic_id所属单元校正")
-
-    if features["task_count"] == "1项":
-        replace("task_relation", "单项任务", "单项任务的关系唯一确定")
-    elif features["task_relation"] == "单项任务":
-        replace("task_relation", "多项独立", "多项任务不能标为单项任务")
-
-    if features["reaction_count"] == "0个":
-        replace("reaction_relation", "无反应关系", "零个反应时关系唯一确定")
-    elif features["reaction_relation"] == "无反应关系":
-        fallback = "单一反应" if features["reaction_count"] == "1个" else "多个反应并列"
-        replace("reaction_relation", fallback, "存在反应时不能标为无反应关系")
-
-    if features["visual_content"] == "无图片信息":
-        replace("visual_item_count", "无图片", "无图片信息时数量唯一确定")
-        replace("visual_complexity", "无图片信息", "无图片信息时复杂度唯一确定")
-    else:
-        if features["visual_item_count"] == "无图片":
-            replace("visual_item_count", "1幅", "存在图片内容时至少有1幅")
-        if features["visual_complexity"] == "无图片信息":
-            replace("visual_complexity", "单一同类型图像", "存在图片内容时不能标为无图片信息")
-        if (
-            features["visual_item_count"] in {"2幅", "3幅", "4幅及以上"}
-            and features["visual_complexity"] == "单一同类型图像"
-        ):
-            replace("visual_complexity", "多个同类型图像", "多幅图片时不能标为单一图像")
-
     if features["calculation_type"] == "无":
-        replace("calculation_steps", "无", "无计算时步骤唯一确定")
-        replace("calculation_structure", "无任何计算", "无计算时结构唯一确定")
+        replace("calculation_structure", "无计算", "无计算时结构唯一确定")
         replace("special_method", "无", "无计算时特殊方法唯一确定")
-    else:
-        if features["calculation_steps"] == "无":
-            replace("calculation_steps", "1步", "存在计算时至少有1步")
-        if features["calculation_structure"] == "无任何计算":
-            structure_by_type = {
-                "化学方程式计算": "单个化学方程式计算",
-                "含杂质计算": "含杂质多步质量分数",
-                "实验误差定量计算": "实验误差定量计算",
-                "多类计算综合": "多模型综合计算",
-            }
-            fallback = structure_by_type.get(features["calculation_type"])
-            if fallback is None:
-                fallback = (
-                    "一步或口算"
-                    if features["calculation_steps"] == "1步"
-                    else "多步常规计算"
-                )
-            replace(
-                "calculation_structure",
-                fallback,
-                "存在计算时不能标为无任何计算",
-            )
-        ordinary_nonreaction_types = {
-            "化合价或化学式计算",
-            "相对分子质量或元素质量计算",
-            "溶质质量分数或稀释计算",
-            "溶解度计算",
-        }
-        if (
-            features["calculation_type"] in ordinary_nonreaction_types
-            and features["calculation_structure"] not in {
-                "一步或口算", "多步常规计算",
-            }
-        ):
-            replace(
-                "calculation_structure",
-                (
-                    "一步或口算"
-                    if features["calculation_steps"] == "1步"
-                    else "多步常规计算"
-                ),
-                "非反应类常规计算不得误用反应、含杂质或多模型结构",
-            )
-
-    if features["hidden_condition_count"] == "0个":
-        replace("hidden_condition_type", "无", "零个隐藏条件时类型唯一确定")
-        replace("condition_relation", "无条件限制", "零个隐藏条件时关系唯一确定")
-    elif features["condition_relation"] == "无条件限制":
-        fallback = (
-            "单一条件" if features["hidden_condition_count"] == "1个" else "多个独立条件"
-        )
-        replace("condition_relation", fallback, "存在隐藏条件时不能标为无条件限制")
-
-    replace(
-        "subjective_response",
-        "无" if features["expression_type"] == "无" else "有",
-        "是否主观作答由具体表达要求唯一确定",
-    )
+    elif features["calculation_structure"] == "无计算":
+        replace("calculation_structure", "2-3步常规计算", "存在计算时不能标为无计算")
     return actions
 
 
@@ -1082,14 +759,14 @@ def _apply_question_evidence_corrections(
     )
     if not (
         has_image
-        and features["visual_content"] == "无图片信息"
+        and features["information_carrier"] == "无额外信息"
         and any(keyword in text for keyword in ("标识", "标志", "图标"))
     ):
         return []
-    original = features["visual_content"]
-    features["visual_content"] = "生活标识图"
+    original = features["information_carrier"]
+    features["information_carrier"] = "生活标识图"
     return [{
-        "field": "visual_content",
+        "field": "information_carrier",
         "original_value": original,
         "final_value": "生活标识图",
         "reason": "题面明确包含需要辨认的生活标识图，禁止把实际图片清成无图片信息",
@@ -1097,683 +774,145 @@ def _apply_question_evidence_corrections(
 
 
 def _build_audit_candidates(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """生成可解释的相邻档复核项；单一信号不直接改档。"""
     features = result["features"]
-    knowledge = features["knowledge"]
     level = result["difficulty_level"]
     candidates: list[dict[str, Any]] = []
-
-    nontrivial = {
-        "experiment": features["experiment_analysis"] not in {"无", "实验现象判断"}
-        or features["experiment_design"] != "无",
-        "hidden_condition": features["hidden_condition_count"] != "0个",
-        "interference": features["interference_type"] in {
-            "规范表述易错", "干扰数据", "特例或边界",
-            "体系质量关系易错", "多种剩余情况或竞争解释",
-        },
-        "expression": features["expression_type"] != "无",
-    }
-    if level == "送分题" and any(nontrivial.values()):
-        candidates.append(_candidate(
-            "B1_easy_with_nontrivial_factor", "基础题",
-            "送分题包含隐藏条件、干扰、规范表达或非基础实验任务。",
-            {key: value for key, value in nontrivial.items() if value},
-        ))
-    hard_experiment = (
-        features["experiment_design"] in {
-            "实验方案评价", "实验改进", "多阶段探究设计",
+    if level == "送分题":
+        nontrivial = {
+            "实验分析": features["experiment_analysis"] not in {"无", "实验现象判断"},
+            "实验设计": features["experiment_design"] != "无",
+            "隐藏条件": features["condition_structure"] != "无隐藏条件",
+            "决定性干扰": features["interference_type"] not in {"无", "易混概念"},
+            "规范表达": features["expression_type"] != "无",
         }
-        or features["error_analysis"] != "无"
-    )
-    decisive_special_method = features["special_method"] in {
-        "差量法", "极值法", "分情况计算", "多方程式联立",
-        "循环反应计算", "多种特殊方法联合",
-    }
-    hard_calculation = decisive_special_method or (
-        features["calculation_steps"] == "4步及以上"
-        and features["special_method"] != "无"
-    )
-    if level == "中等题" and (hard_experiment or hard_calculation):
-        candidates.append(_candidate(
-            "H1_medium_decisive_task", "拔高题",
-            "存在高阶实验或决定建模的特殊计算方法，需复核局部高难下限；不得仅因不足4步否决拔高。",
-            {
-                "experiment_design": features["experiment_design"],
-                "calculation_type": features["calculation_type"],
-                "special_method": features["special_method"],
+        if any(nontrivial.values()):
+            candidates.append(_candidate(
+                "B1_easy_with_nontrivial_factor", "基础题",
+                "送分题包含实际参与作答的实验、条件、干扰或规范表达，需复核1/2档边界。",
+                {name: active for name, active in nontrivial.items() if active},
+            ))
+    if level == "中等题":
+        hard_signals = {
+            "高阶实验": features["experiment_design"] in {
+                "实验方案评价", "实验改进", "多阶段探究设计", "多类实验设计任务联合",
+            } or features["error_analysis"] in {"定量实验误差分析", "多种误差联合分析"},
+            "特殊方法": features["special_method"] in {
+                "差量法", "极值法", "分情况计算", "多方程式联立",
+                "循环反应计算", "多种特殊方法联合",
             },
-        ))
-    if level == "压轴题" and features["task_relation"] not in {
-        "前后依赖", "多条任务链汇合",
-    }:
-        candidates.append(_candidate(
-            "F1_final_without_dependency", "拔高题",
-            "压轴题未呈现阶段间前后依赖，需复核是否仅为高难特征堆叠；一条高度依赖的主链也可形成压轴结构。",
-            {
-                "task_relation": features["task_relation"],
-                "step_count": features["step_count"],
+            "复杂计算": features["calculation_structure"] in {
+                "4步及以上常规计算", "多个反应连续计算",
+                "含杂质或反应后体系计算", "图像分段计算",
+                "实验误差定量计算", "多模型综合计算",
             },
-        ))
+            "复杂反应": features["reaction_structure"] in {
+                "4个以上反应网络", "反应先后或过量不足", "分情况或竞争反应",
+            },
+            "关联条件": features["condition_structure"] in {"多个关联条件", "多层嵌套条件"},
+            "复杂信息": features["information_operation"] in {
+                "图像拐点或分段分析", "多来源信息筛选联合",
+            },
+        }
+        matched = [name for name, active in hard_signals.items() if active]
+        if matched:
+            candidate = _candidate(
+                "H2_medium_teacher_hard_signal_review", "拔高题",
+                "命中教师关注的高难信号，进入3/4档复核；只有至少两类独立信号共同成立才允许升档。",
+                {"matched_signals": matched, "required_signal_count": 2},
+            )
+            candidate["writeback_allowed"] = len(matched) >= 2
+            candidates.append(candidate)
     return candidates
 
 
 def _build_upper_level_review_candidate(
-    result: dict[str, Any],
-    data: dict[str, Any] | None = None,
+    result: dict[str, Any], data: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """按教师锚点复核相邻边界，并要求topic、任务与题面证据共同支持。"""
+    """用19个显式特征复核相邻边界，不再读取旧的重复字段。"""
     features = result["features"]
     data = data or {}
-    question_text = "\n".join(
-        str(data.get(field, "") or "") for field in ("stem", "options")
-    )
+    text = "\n".join(str(data.get(field, "") or "") for field in ("stem", "options"))
     level = result["difficulty_level"]
-    decisive_special_method = features["special_method"] in {
-        "差量法", "极值法", "分情况计算", "多方程式联立",
-        "循环反应计算", "多种特殊方法联合",
-    }
-    complex_information = features["information_operation"] in {
-        "图像拐点或分段分析", "多来源信息筛选联合",
-    }
-    difficult_reaction = features["reaction_relation"] in {
-        "反应先后或过量不足", "分情况或竞争反应",
-    }
-    complex_calculation = features["calculation_structure"] in {
-        "多个化学反应计算", "含杂质多步质量分数",
-        "实验误差定量计算", "多模型综合计算",
-    }
-    dependent_tasks = features["task_relation"] in {
-        "前后依赖", "多条任务链汇合",
-    }
-    complex_condition = features["condition_relation"] in {
-        "多个关联条件", "多层嵌套条件",
-    }
-    high_experiment_design = features["experiment_design"] in {
-        "根据结论设计操作", "实验方案设计", "实验方案评价",
-        "实验改进", "多阶段探究设计",
-    }
-    high_error_analysis = features["error_analysis"] in {
-        "定量实验误差分析", "多种误差联合分析",
-    }
 
     if level == "送分题":
         topic_ids = set(features["knowledge"]["topic_ids"])
-        one_step_teacher_floor_calculation = (
-            features["calculation_steps"] == "1步"
-            and (
-                features["calculation_type"] == "化合价或化学式计算"
-                or (
-                    "U05_T01" in topic_ids
-                    and features["calculation_type"] != "无"
-                )
-            )
-        )
-        equation_meaning_with_confusion = (
-            "U05_T02" in topic_ids
-            and features["interference_type"] == "易混概念"
-            and "意义" in question_text
-        )
-        solubility_factor_distinction = (
-            "U09_T03" in topic_ids
-            and "溶解度" in question_text
-            and any(term in question_text for term in ("因素", "有关", "无关"))
-        )
-        molecular_state_detail = (
-            "U03_T01" in topic_ids
-            and "三态" in question_text
-            and "分子" in question_text
-        )
-        filtration_process_recall = (
-            "U01_T04" in topic_ids
-            and "过滤" in question_text
-            and features["visual_item_count"] != "无图片"
-        )
-        extinguishing_principle_matching = (
-            "U07_T01" in topic_ids
-            and features["chemical_object_distribution"]
-            in {"不同类多个化学对象", "多类化学对象综合"}
-            and "原理" in question_text
-        )
-        health_scenarios_with_rule_switching = (
-            "U11_T01" in topic_ids
-            and features["chemical_object_distribution"]
-            in {"不同类多个化学对象", "多类化学对象综合"}
-            and features["solution_method"] == "多条规则分别判断"
-        )
-        common_name_confusion = (
-            "U10_T05" in topic_ids
-            and features["interference_type"] == "易混概念"
-            and any(term in question_text for term in ("俗名", "名称", "同一物质"))
-        )
-        uncommon_formula_detail_comparison = (
-            {"U04_T04", "U04_T05"}.issubset(topic_ids)
-            and features["interference_type"] == "易混概念"
-            and sum(
-                term in question_text
-                for term in ("氧化铁", "甲烷", "氯化铵", "硝酸")
-            ) >= 3
-        )
-        multiple_element_deficiency_comparison = (
-            "U11_T01" in topic_ids
-            and "缺乏" in question_text
-            and sum(
-                term in question_text
-                for term in ("铁", "锌", "钙", "氟", "碘", "硒")
-            ) >= 3
-        )
-        choose_then_supply_chemical_change = (
-            "U01_T01" in topic_ids
-            and "化学变化" in question_text
-            and bool(re.search(r"D\s*[\.．、:：)]?\s*_{2,}", question_text))
-        )
-        teacher_sensitive_interference = (
-            features["interference_type"] in {"特例或边界", "多个选项规则切换"}
-            and features["solution_method"] == "多条规则分别判断"
-        )
-        multiple_combustion_facts = (
-            features["experiment_analysis"] == "实验现象判断"
-            and features["chemical_object_distribution"]
-            in {"同类多个化学对象", "不同类多个化学对象", "多类化学对象综合"}
-            and features["solution_method"] == "多条规则分别判断"
-        )
-        foundation_paths = {
-            "一步化合价或质量守恒计算具有教师确认的知识门槛": (
-                one_step_teacher_floor_calculation
-            ),
-            "化学方程式意义需要辨析符号读法、条件和质量含义": (
-                equation_meaning_with_confusion
-            ),
-            "固体溶解度影响因素需要区分内因、外因和物质量": (
-                solubility_factor_distinction
-            ),
-            "三态变化需要辨析分子大小、本身、间隔和运动状态": (
-                molecular_state_detail
-            ),
-            "过滤操作需要从多幅仪器图还原整套所需仪器": (
-                filtration_process_recall
-            ),
-            "多个灭火场景需要逐项理解并匹配灭火原理": (
-                extinguishing_principle_matching
-            ),
-            "健康生活选项分别调用营养元素、腌制和霉变食品知识": (
-                health_scenarios_with_rule_switching
-            ),
-            "盐和碱的名称、俗名及类别统称存在易混细节": (
-                common_name_confusion
-            ),
-            "不常见化学式需要辨析变价元素、原子团和酸的组成": (
-                uncommon_formula_detail_comparison
-            ),
-            "多个微量元素需要分别匹配对应缺乏症": (
-                multiple_element_deficiency_comparison
-            ),
-            "完成选择后还需自主补写另一个化学变化实例": (
-                choose_then_supply_chemical_change
-            ),
-            "不同类化学对象间存在教师明确关注的易混概念或规则切换": (
-                teacher_sensitive_interference
-            ),
-            "需要分别调用多个物质的燃烧现象事实": multiple_combustion_facts,
+        anchors = {
+            "一步化合价或化学式计算": features["calculation_type"] == "化合价或化学式计算",
+            "质量守恒后再计算": "U05_T01" in topic_ids and features["calculation_type"] != "无",
+            "方程式意义易混": "U05_T02" in topic_ids and features["interference_type"] == "易混概念",
+            "跨文字语境后判断": features["information_carrier"] in {"古文或文言材料", "跨学科材料"},
+            "多条规则分别判断": features["solution_method"] == "多条规则分别判断",
+            "需要规范书写或表达": features["expression_type"] != "无",
+            "存在隐藏条件": features["condition_structure"] != "无隐藏条件",
         }
-        matched_paths = [
-            name for name, active in foundation_paths.items() if active
-        ]
-        if matched_paths:
+        matched = [name for name, active in anchors.items() if active]
+        if matched:
             return _candidate(
-                "S1_giveaway_to_foundation_teacher_anchor", "基础题",
-                "命中教师明确使用的1/2档边界；难度来自具体知识门槛、真实转换、易混细节或逐项原理分析，不由选项数量机械升档。",
-                {
-                    "matched_paths": matched_paths,
-                    "matched_path_count": len(matched_paths),
-                },
+                "M1_giveaway_to_foundation_teacher_anchor", "基础题",
+                "命中教师已确认的1/2档锚点；一步不等于送分，仍需看知识规则、语境、条件和表达。",
+                {"matched_anchors": matched},
             )
 
     if level == "基础题":
-        topic_ids = set(features["knowledge"]["topic_ids"])
-        knowledge_point_count = features["knowledge"]["knowledge_point_count"]
-        unit_count = features["knowledge"]["unit_count"]
-        has_visual_analysis = features["visual_complexity"] != "无图片信息"
-        has_information_processing = (
-            features["information_operation"] != "无需额外提取"
-        )
-        has_expression = features["expression_type"] != "无"
-        has_experiment_analysis = features["experiment_analysis"] != "无"
-        heterogeneous_rules = features["solution_method"] == "多条规则分别判断"
-        multiple_chemical_objects = features["chemical_object_distribution"] in {
-            "不同类多个化学对象", "多类化学对象综合",
+        medium_signals = {
+            "知识覆盖": features["knowledge_coverage"] in {"跨两个单元", "多单元综合"},
+            "多项任务": features["task_structure"] in {
+                "4项及以上独立任务", "多项任务共享同一模型",
+                "前后依赖任务", "多条任务链汇合",
+            },
+            "多步过程": features["step_count"] in {"4-5步", "6步及以上"},
+            "信息处理": features["information_operation"] in {
+                "比较或整理多条信息", "由图表变化推断",
+                "图像拐点或分段分析", "多来源信息筛选联合",
+            },
+            "实验分析设计": features["experiment_analysis"] not in {"无", "实验现象判断"}
+            or features["experiment_design"] != "无",
+            "计算结构": features["calculation_structure"] not in {"无计算", "一步或口算"},
+            "条件干扰": features["condition_structure"] in {"多个关联条件", "多层嵌套条件"}
+            or features["interference_type"] in {
+                "干扰数据", "体系质量关系易错", "多种剩余情况或竞争解释", "多类干扰联合",
+            },
         }
-        option_rule_switching = features["interference_type"] in {
-            "多个选项规则切换", "易混概念", "特例或边界",
-        }
-        substantive_support = (
-            heterogeneous_rules or has_expression or has_experiment_analysis
-        )
-        medium_paths = {
-            "四项以上实质任务、图像分析与异质任务负担联合": (
-                features["task_count"] == "4项及以上"
-                and has_visual_analysis
-                and substantive_support
-            ),
-            "多项独立任务、信息处理与异质任务负担联合": (
-                features["task_relation"] == "多项独立"
-                and has_information_processing
-                and substantive_support
-            ),
-            "图像分析、规范表达与另一项实质负担联合": (
-                has_visual_analysis
-                and has_expression
-                and (
-                    heterogeneous_rules
-                    or has_information_processing
-                    or has_experiment_analysis
-                )
-            ),
-            "二至三步图表或实验推断形成连续实质链": (
-                features["step_count"] == "2-3步"
-                and features["information_operation"] in {
-                    "由图表变化推断", "比较或整理多条信息",
-                    "多来源信息筛选联合",
-                }
-                and (
-                    heterogeneous_rules
-                    or features["solution_method"] == "连续推导"
-                    or has_experiment_analysis
-                )
-            ),
-            "六个以上知识点与不同对象规则切换共同构成综合负担": (
-                knowledge_point_count >= 6
-                and heterogeneous_rules
-                and multiple_chemical_objects
-            ),
-            "碳及其两种氧化物需要分别调用三组性质知识": (
-                {"U06_T01", "U06_T02", "U06_T03"}.issubset(topic_ids)
-                and knowledge_point_count == 3
-                and unit_count == 1
-                and heterogeneous_rules
-                and multiple_chemical_objects
-                and option_rule_switching
-            ),
-            "化学符号不同位置数字含义存在多类易混规则": (
-                "U04_T07" in topic_ids
-                and heterogeneous_rules
-                and features["interference_type"] == "易混概念"
-                and features["chemical_object_distribution"]
-                != "单一化学对象"
-            ),
-            "跨单元微观图需要由图中变化分别调用不同规则": (
-                knowledge_point_count >= 3
-                and unit_count >= 2
-                and features["visual_content"] == "微观示意图"
-                and features["information_operation"] == "由图表变化推断"
-                and heterogeneous_rules
-            ),
-            "多类图像与实验操作检验规则共同参与判断": (
-                knowledge_point_count >= 2
-                and features["visual_content"] == "多种图像综合"
-                and heterogeneous_rules
-                and (
-                    features["experiment_operation"] != "无"
-                    or has_experiment_analysis
-                )
-            ),
-            "多知识点表格整理与多个实验分析任务联合": (
-                knowledge_point_count >= 4
-                and features["information_operation"] == "比较或整理多条信息"
-                and features["experiment_analysis"] == "多个实验分析任务联合"
-            ),
-            "常规化合价与过氧化物特殊价态共同辨析": (
-                "U04_T05" in topic_ids
-                and features["calculation_type"] == "化合价或化学式计算"
-                and features["interference_type"] in {"易混概念", "特例或边界"}
-                and "过氧" in question_text
-            ),
-        }
-        matched_paths = [
-            name for name, active in medium_paths.items() if active
-        ]
-        if matched_paths:
+        matched = [name for name, active in medium_signals.items() if active]
+        if len(matched) >= 2:
             return _candidate(
-                "M1_basic_to_medium_teacher_factor_review", "中等题",
-                "命中教师确认的2/3档组合路径：知识覆盖必须与规则切换、图表推断、实验分析、易混特例或规范表达等实质负担共同成立；不以知识点数、图片数或跨单元单独升档。",
-                {
-                    "matched_paths": matched_paths,
-                    "matched_path_count": len(matched_paths),
-                },
+                "M2_foundation_to_medium_multi_factor_review", "中等题",
+                "至少两类独立的知识、任务、信息、实验、计算或条件证据共同成立。",
+                {"matched_signals": matched, "required_signal_count": 2},
             )
 
     if level == "中等题":
-        knowledge_point_count = features["knowledge"]["knowledge_point_count"]
-        unit_count = features["knowledge"]["unit_count"]
-        multiple_chemical_objects = features["chemical_object_distribution"] in {
-            "不同类多个化学对象", "多类化学对象综合",
-        }
-        substantive_dependency = features["task_relation"] in {
-            "前后依赖", "多条任务链汇合",
-        } or features["solution_method"] in {
-            "连续推导", "定性与定量联合",
-        }
-        high_information_carrier = features["visual_content"] in {
-            "工业流程图", "多组对比实验表格", "多装置组合实验图",
-        }
-        substantive_information_processing = features["information_operation"] in {
-            "由图表变化推断", "图像拐点或分段分析",
-            "多来源信息筛选联合",
-        }
-        hard_calculation_structure = features["calculation_structure"] in {
-            "多个化学反应计算", "含杂质多步质量分数",
-            "实验误差定量计算", "多模型综合计算",
-        }
-        unfamiliar_given_material = features["given_information"] in {
-            "题干给出陌生物质或反应资料",
-            "题干给出陌生装置流程或材料资料",
-        }
-        hard_experiment_task = (
-            features["experiment_design"] in {
-                "实验方案评价", "实验改进", "多阶段探究设计",
-            }
-            or features["error_analysis"] in {
-                "定量实验误差分析", "多种误差联合分析",
-            }
-        )
-        teacher_hard_floor_paths = {
-            "最长实质任务链达到四步及以上": (
-                features["step_count"] in {"4-5步", "6步及以上"}
-            ),
-            "三个以上跨单元知识点在同一流程或推导中融合": (
-                knowledge_point_count >= 3
-                and unit_count >= 3
-                and multiple_chemical_objects
-                and (
-                    substantive_dependency
-                    or high_information_carrier
-                    or features["reaction_count"] == "4个及以上"
-                )
-            ),
-            "工业流程或多组实验图表承担实质推断任务": (
-                high_information_carrier
-                and (
-                    substantive_information_processing
-                    or substantive_dependency
-                    or features["experiment_analysis"]
-                    == "多个实验分析任务联合"
-                    or features["experiment_design"] != "无"
-                )
-            ),
-            "题干给出陌生物质或流程且必须迁移所给信息": (
-                unfamiliar_given_material
-                and substantive_information_processing
-                and (
-                    features["step_count"] != "1步"
-                    or features["reaction_count"] in {"2-3个", "4个及以上"}
-                    or features["experiment_analysis"] != "无"
-                )
-            ),
-            "多反应、含杂质或实验误差形成高难计算结构": (
-                hard_calculation_structure
-            ),
-            "三个以上隐藏条件共同约束答案": (
-                features["hidden_condition_count"] == "3个及以上"
-            ),
-            "高阶实验评价、改进、探究或定量误差分析": (
-                hard_experiment_task
-            ),
-            "四个以上反应关系需要逐项联合验证": (
-                features["reaction_count"] == "4个及以上"
-                and features["solution_method"] == "多条规则分别判断"
-                and knowledge_point_count >= 3
-                and multiple_chemical_objects
-            ),
-        }
-        teacher_hard_floor_matches = [
-            name for name, active in teacher_hard_floor_paths.items() if active
-        ]
-        if len(teacher_hard_floor_matches) >= 2:
-            return _candidate(
-                "R1_medium_to_hard_teacher_multi_factor_review", "拔高题",
-                "至少两类相互独立的教师高难信号共同成立，3/4档复核通过。单条信号只触发复核，不直接升档；跨单元仅在知识实际参与同一流程、推导或反应网络时生效。",
-                {
-                    "matched_paths": teacher_hard_floor_matches,
-                    "matched_path_count": len(teacher_hard_floor_matches),
-                    "required_independent_path_count": 2,
-                },
-            )
-        teacher_signal_review_candidate = None
-        if teacher_hard_floor_matches:
-            teacher_signal_review_candidate = _candidate(
-                "H2_medium_teacher_hard_signal_review", "拔高题",
-                "命中一类教师高难信号，仅触发3/4档复核；缺少另一类独立高难证据，不直接修改难度等级。",
-                {
-                    "matched_paths": teacher_hard_floor_matches,
-                    "matched_path_count": len(teacher_hard_floor_matches),
-                    "required_independent_path_count": 2,
-                },
-            )
-            teacher_signal_review_candidate["writeback_allowed"] = False
-
-        calibrated_local_difficulty_paths = {
-            "逆向溯源与隐藏条件共同决定反应模型": (
-                features["reverse_tracing"] == "有"
-                and features["hidden_condition_count"] != "0个"
-            ),
-            "信息整理、特殊方法与高风险干扰共同参与定量建模": (
-                features["information_operation"] in {
-                    "比较或整理多条信息", "由图表变化推断",
-                    "图像拐点或分段分析", "多来源信息筛选联合",
-                }
-                and features["special_method"] != "无"
-                and features["interference_type"] in {
-                    "干扰数据", "特例或边界", "体系质量关系易错",
-                    "多种剩余情况或竞争解释",
-                }
-            ),
-            "反应先后或竞争模型与隐藏条件共同决定结论": (
-                features["reaction_relation"] in {
-                    "反应先后或过量不足", "分情况或竞争反应",
-                }
-                and features["hidden_condition_count"] != "0个"
-            ),
-        }
-        calibrated_matches = [
-            name
-            for name, active in calibrated_local_difficulty_paths.items()
-            if active
-        ]
-        if calibrated_matches:
-            return _candidate(
-                "R1_medium_to_hard_calibrated_local_difficulty", "拔高题",
-                "命中教师样本校准的局部高难组合；2—3步不是否决拔高的门槛。",
-                {
-                    "matched_paths": calibrated_matches,
-                    "matched_path_count": len(calibrated_matches),
-                },
-            )
-
-        weighted_anchors = {
-            "决定建模的特殊方法": decisive_special_method,
-            "图像分段或多来源信息联合": complex_information,
-            "反应先后、过量不足或竞争反应": difficult_reaction,
-            "四步及以上计算": features["calculation_steps"] == "4步及以上",
-        }
-        review_triggers = {
-            **weighted_anchors,
-            "高阶实验设计": high_experiment_design,
-            "定量或多种误差分析": high_error_analysis,
-        }
-        supporting_evidence = {
-            "四步及以上解题过程": features["step_count"] in {"4-5步", "6步及以上"},
-            "高阶实验设计": high_experiment_design,
-            "定量或多种误差分析": high_error_analysis,
-            "复杂计算结构": complex_calculation,
-            "多个关联或嵌套条件": complex_condition,
-            "任务前后依赖": dependent_tasks,
-            "多类型或高难图像": features["visual_complexity"] in {
-                "多个不同类型图像", "复杂高难图像",
-            },
-            "多个实验分析任务": features["experiment_analysis"] == "多个实验分析任务联合",
-            "定性与定量联合": features["solution_method"] == "定性与定量联合",
-            "使用特殊计算方法": features["special_method"] != "无",
-        }
-        score = 2 * sum(weighted_anchors.values()) + sum(supporting_evidence.values())
-        if any(review_triggers.values()) and score >= 5:
-            return _candidate(
-                "R1_medium_to_hard_multi_feature_review", "拔高题",
-                "高难锚点触发复核，且其他独立特征共同达到拔高支持阈值；不是由单一特征机械升档。",
-                {
-                    "review_score": score,
-                    "required_score": 5,
-                    "trigger_evidence": [
-                        name for name, active in review_triggers.items() if active
-                    ],
-                    "supporting_evidence": [
-                        name for name, active in supporting_evidence.items() if active
-                    ],
-                },
-            )
-        if teacher_signal_review_candidate is not None:
-            return teacher_signal_review_candidate
+        candidates = _build_audit_candidates(result)
+        return candidates[-1] if candidates else None
 
     if level == "拔高题":
-        multi_reaction_calculation = features["calculation_structure"] in {
-            "多个化学反应计算", "多模型综合计算",
-        }
-        multiple_hidden_conditions = features["hidden_condition_count"] in {
-            "2个", "3个及以上",
-        }
-        multiple_reactions = features["reaction_count"] == "4个及以上"
-        continuous_reactions = features["reaction_relation"] == "多个反应连续"
-        classification_required = features["classification_discussion"] != "无"
-        four_or_more_steps = features["step_count"] in {"4-5步", "6步及以上"}
-        two_or_three_reactions = features["reaction_count"] == "2-3个"
-        staged_or_multi_source_information = features["information_operation"] in {
-            "图像拐点或分段分析", "多来源信息筛选联合",
-        }
-        sequential_or_competing_reactions = features["reaction_relation"] in {
-            "多个反应连续", "反应先后或过量不足", "分情况或竞争反应",
-        }
-        different_chemical_objects = features["chemical_object_distribution"] in {
-            "不同类多个化学对象", "多类化学对象综合",
-        }
-        system_or_remainder_risk = features["interference_type"] in {
-            "体系质量关系易错", "多种剩余情况或竞争解释",
-        }
-        composition_calculation = features["calculation_type"] in {
-            "含杂质计算", "多类计算综合",
-        }
-        decisive_coupling_evidence = (
-            features["given_information"] == "题干给出多条新事实或规则"
-            or features["interference_type"] == "多种剩余情况或竞争解释"
-            or features["error_analysis"] in {
-                "装置或方案导致误差", "定量实验误差分析", "多种误差联合分析",
-            }
-        )
-        staged_experiment_validation = (
-            features["experiment_analysis"] == "多个实验分析任务联合"
-            and features["error_analysis"] in {
-                "装置或方案导致误差", "定量实验误差分析", "多种误差联合分析",
-            }
-        )
-        shared_composition_evidence = (
-            (
-                continuous_reactions
-                and features["calculation_structure"] == "多个化学反应计算"
-            )
-            or (
+        pressure_groups = {
+            "复杂任务结构": features["task_structure"] in {"前后依赖任务", "多条任务链汇合"}
+            and features["step_count"] in {"4-5步", "6步及以上"},
+            "复杂反应体系": features["reaction_structure"] in {
+                "4个以上反应网络", "反应先后或过量不足", "分情况或竞争反应",
+            },
+            "复杂定量模型": features["calculation_structure"] in {
+                "多个反应连续计算", "含杂质或反应后体系计算",
+                "图像分段计算", "实验误差定量计算", "多模型综合计算",
+            } and features["special_method"] != "无",
+            "关联条件与排除": features["condition_structure"] in {"多个关联条件", "多层嵌套条件"}
+            and features["interference_type"] in {
+                "体系质量关系易错", "多种剩余情况或竞争解释", "多类干扰联合",
+            },
+            "多来源实验信息": features["information_operation"] == "多来源信息筛选联合"
+            and (
                 features["experiment_analysis"] == "多个实验分析任务联合"
-                and features["error_analysis"] in {
-                    "装置或方案导致误差", "多种误差联合分析",
-                }
-                and features["calculation_structure"] in {
-                    "含杂质多步质量分数", "多模型综合计算",
-                }
-            )
-        )
-        pressure_paths = {
-            "多来源信息、四个以上反应与关联条件形成整题综合压力": (
-                features["information_operation"] == "多来源信息筛选联合"
-                and multiple_reactions
-                and complex_condition
-                and features["step_count"] in {"4-5步", "6步及以上"}
-                and decisive_coupling_evidence
-            ),
-            "四个以上反应与真实误差分析共同构成实验定量综合": (
-                multiple_reactions
-                and features["error_analysis"] != "无"
-            ),
-            "多来源信息、多反应计算与至少两个隐藏条件联合": (
-                features["information_operation"] == "多来源信息筛选联合"
-                and multi_reaction_calculation
-                and multiple_hidden_conditions
-                and dependent_tasks
-                and decisive_coupling_evidence
-            ),
-            "单项任务内分类讨论、复杂计算与关联条件联合": (
-                features["task_relation"] == "单项任务"
-                and classification_required
-                and complex_calculation
-                and complex_condition
-                and features["reverse_tracing"] == "有"
-            ),
-            "四个以上连续反应与决定建模的特殊方法联合": (
-                multiple_reactions
-                and continuous_reactions
-                and decisive_special_method
-            ),
-            "分阶段图像或多来源数据中判断2-3个连续反应并完成关联计算": (
-                four_or_more_steps
-                and staged_or_multi_source_information
-                and two_or_three_reactions
-                and sequential_or_competing_reactions
-                and complex_calculation
-                and complex_condition
-                and features["task_relation"] != "多项独立"
-                and staged_experiment_validation
-            ),
-            "同一复杂体系中用2-3个反应和守恒反推组成或纯度": (
-                four_or_more_steps
-                and two_or_three_reactions
-                and complex_calculation
-                and features["special_method"] != "无"
-                and features["solution_method"] == "定性与定量联合"
-                and different_chemical_objects
-                and system_or_remainder_risk
-                and complex_condition
-                and composition_calculation
-                and features["task_relation"] != "多项独立"
-                and shared_composition_evidence
-            ),
-            "单一反应存在两种过量结果并分别反推原混合物组成": (
-                four_or_more_steps
-                and features["task_count"] == "2-3项"
-                and features["task_relation"] == "前后依赖"
-                and features["reaction_count"] == "1个"
-                and classification_required
-                and features["calculation_structure"] == "含杂质多步质量分数"
-                and features["special_method"] != "无"
-                and complex_condition
-                and system_or_remainder_risk
-            ),
-            "由最终现象和质量关系共同判断反应先后及剩余物": (
-                four_or_more_steps
-                and features["task_count"] == "1项"
-                and two_or_three_reactions
-                and features["reaction_relation"] == "反应先后或过量不足"
-                and classification_required
-                and features["hidden_condition_count"] in {"2个", "3个及以上"}
-                and complex_condition
-                and features["interference_type"] == "体系质量关系易错"
-                and features["special_method"] != "无"
+                or features["experiment_design"] in {"多阶段探究设计", "多类实验设计任务联合"}
             ),
         }
-        matched_paths = [
-            name for name, active in pressure_paths.items() if active
-        ]
-        if matched_paths:
+        matched = [name for name, active in pressure_groups.items() if active]
+        if len(matched) >= 3:
             return _candidate(
                 "R2_hard_to_final_multi_feature_review", "压轴题",
-                "高难特征触发4/5档复核后，多个具体任务证据共同支持压轴；4-5步、2-3个反应、单项任务或较少隐藏条件均未被当作单项否决条件。",
-                {
-                    "matched_paths": matched_paths,
-                    "matched_path_count": len(matched_paths),
-                },
+                "至少三类独立高难环节在同一解题结构中共同成立，4/5档复核通过。",
+                {"matched_signals": matched, "required_signal_count": 3},
             )
     return None
 

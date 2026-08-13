@@ -185,7 +185,7 @@ def build_run_config(
         "num": num,
         "feature_schema_version": junior_schema.FEATURE_SCHEMA_VERSION,
         "structured_output_mode": "prompt_json_local_strict_schema",
-        "postprocess_mode": "teacher_factor_boundary_review_writeback_v3",
+        "postprocess_mode": "teacher_factor_boundary_review_writeback_v4",
     }
 
 
