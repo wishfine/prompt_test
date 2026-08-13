@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v29"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v30"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -407,10 +407,6 @@ def rating_json_schema() -> dict[str, Any]:
         "resolution", "review_basis",
     )
     return _object_schema({
-        "features": _object_schema(
-            feature_properties,
-            ("knowledge", *FEATURE_OPTIONS.keys(), "curriculum_scope"),
-        ),
         "reasoning": _object_schema({
             "longest_substantive_chain": {
                 "type": "array",
@@ -424,6 +420,10 @@ def rating_json_schema() -> dict[str, Any]:
             },
             "level_basis": {"type": "string"},
         }, reasoning_fields),
+        "features": _object_schema(
+            feature_properties,
+            ("knowledge", *FEATURE_OPTIONS.keys(), "curriculum_scope"),
+        ),
         "feature_review": _object_schema({
             "adjacent_pair": {"type": "string", "enum": list(ADJACENT_LEVEL_PAIRS)},
             "supporting_feature_fields": {
@@ -438,7 +438,7 @@ def rating_json_schema() -> dict[str, Any]:
             "review_basis": {"type": "string"},
         }, feature_review_fields),
         "difficulty_level": {"type": "string", "enum": list(LEVELS)},
-    }, ("features", "reasoning", "feature_review", "difficulty_level"))
+    }, ("reasoning", "features", "feature_review", "difficulty_level"))
 
 
 def rating_tool_definition() -> dict[str, Any]:
@@ -895,6 +895,20 @@ def validate_rating_contract(value: Any) -> dict[str, Any]:
         or not normalized_reasoning["level_basis"]
     ):
         raise ChemistrySchemaError("reasoning字段不得为空")
+    chain_length = len(substantive_chain)
+    expected_step_count = (
+        "6步及以上" if chain_length >= 6
+        else "4-5步" if chain_length >= 4
+        else "2-3步" if chain_length >= 2
+        else None
+    )
+    if (
+        expected_step_count is not None
+        and validated_features["step_count"] != expected_step_count
+    ):
+        raise ChemistrySchemaError(
+            "features.step_count与reasoning.longest_substantive_chain数量不一致"
+        )
 
     review_fields = {
         "adjacent_pair", "supporting_feature_fields", "limiting_feature_fields",
@@ -976,26 +990,6 @@ def _normalize_feature_consistency(result: dict[str, Any]) -> list[dict[str, Any
     if features["calculation_structure"] == "无计算":
         replace("special_method", "无", "无计算时特殊方法唯一确定")
 
-    # longest_substantive_chain只列最长实质链，一项对应一个会改变后续解法的
-    # 学生化学决策。因此数组长度是step_count的确定性下限；不从题目关键词
-    # 猜测未列出的步骤，也不把机械书写或算术拆分成步骤，更不直接修改难度。
-    process_length = len(result["reasoning"]["longest_substantive_chain"])
-    if process_length >= 6:
-        process_floor = "6步及以上"
-    elif process_length >= 4:
-        process_floor = "4-5步"
-    elif process_length >= 2:
-        process_floor = "2-3步"
-    else:
-        process_floor = None
-    if process_floor is not None:
-        step_options = list(FEATURE_OPTIONS["step_count"])
-        if step_options.index(features["step_count"]) < step_options.index(process_floor):
-            replace(
-                "step_count",
-                process_floor,
-                "longest_substantive_chain列出的实质决策已超过模型选择的步骤档位",
-            )
     return actions
 
 
