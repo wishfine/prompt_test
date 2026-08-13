@@ -64,12 +64,12 @@ LEVEL_NAMES = {
 FULL_FEATURE_FIELDS: Tuple[Tuple[str, str], ...] = (
     ("longest_solution_chain", "最长解题链"),
     ("task_groups", "任务组"),
-    ("rule_families", "作答规则"),
+    ("rule_families", "解题方法"),
     ("curriculum_topics", "课程课题"),
     ("parallel_task_relation", "并列任务关系"),
-    ("solution_topology", "任务结构"),
+    ("solution_topology", "解题任务结构"),
     ("reaction_structure", "反应结构"),
-    ("condition_operations", "条件操作"),
+    ("condition_operations", "关键条件处理"),
     ("representation_operations", "表征转换"),
     ("evidence_operations", "证据操作"),
     ("experiment_operation", "实验操作"),
@@ -186,7 +186,6 @@ def build_priority_feature_items(
     """按教师评级口径的优先级组装首屏证据。"""
     features = rating.get("features") or {}
     metrics = rating.get("observable_metrics") or {}
-    stem_image_count = len(split_image_urls(item.get("stem_pic_url")))
     text_fields: List[Tuple[str, str]] = [
         (
             "最长解题链",
@@ -199,22 +198,19 @@ def build_priority_feature_items(
             "任务组",
             _display_value(features.get("task_groups"), field="task_groups"),
         ),
-        ("任务结构", _display_value(features.get("solution_topology"))),
-        ("误差分析", _display_value(features.get("error_analysis_operation"))),
+        ("解题方法", _display_value(features.get("rule_families"))),
         ("计算操作", _display_value(features.get("calculation_operations"))),
-        ("条件操作", _display_value(features.get("condition_operations"))),
-        ("图像任务结构", _display_value(features.get("visual_task_structure"))),
+        ("误差分析", _display_value(features.get("error_analysis_operation"))),
+        ("知识点跨度", _display_curriculum_span(metrics.get("curriculum_span_summary"))),
+        ("关键条件处理", _display_value(features.get("condition_operations"))),
         ("并列/关联任务", _display_value(features.get("parallel_task_relation"))),
-        ("课程跨度", _display_curriculum_span(metrics.get("curriculum_span_summary"))),
-        ("作答规则", _display_value(features.get("rule_families"))),
-        ("实验任务结构", _display_value(features.get("experiment_task_structure"))),
         ("图表操作", _display_value(features.get("graph_table_operation"))),
+        ("解题任务结构", _display_value(features.get("solution_topology"))),
+        ("实验任务结构", _display_value(features.get("experiment_task_structure"))),
+        ("图像任务结构", _display_value(features.get("visual_task_structure"))),
     ]
     numeric_fields: List[Tuple[str, str]] = [
-        ("小问数", str(item.get("explicit_subquestion_count", metrics.get("explicit_subquestion_count", "无")))),
-        ("知识课题数", str(metrics.get("curriculum_topic_count", len(features.get("curriculum_topics", []))))),
         ("题干字数", str(item.get("question_text_char_count", metrics.get("question_text_char_count", "无")))),
-        ("题干图片资源数", str(stem_image_count)),
     ]
     return text_fields + numeric_fields
 
@@ -230,23 +226,22 @@ def build_full_feature_items(
 
 
 EXTRA_CSS = """
-        .freeze-ribbon {
-            display: inline-flex; align-items: center; gap: 8px;
-            margin-top: 7px; padding: 4px 11px; border-radius: 999px;
-            background: rgba(255,255,255,.15); font-size: 12px;
-            letter-spacing: .4px;
-        }
         .feature-block-title {
             margin: 16px 0 9px; color: #0b6e69; font-size: 15px;
             font-weight: 800; letter-spacing: .3px;
         }
-        .priority-details { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+        .priority-details { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .priority-details .rating-detail-item {
             border-color: #b9e6df; background: linear-gradient(180deg,#fff,#f4fffc);
             min-height: 72px;
         }
         .priority-details .feature-wide {
             grid-column: 1 / -1; min-height: 0;
+        }
+        .priority-details .task-structure-start { grid-column: 1; }
+        @media (max-width: 760px) {
+            .priority-details { grid-template-columns: 1fr; }
+            .priority-details .task-structure-start { grid-column: auto; }
         }
         .priority-details .label { color: #0b766e; font-weight: 700; }
         .all-feature-details {
@@ -271,13 +266,14 @@ HTML_TEMPLATE = (
     .replace("#2a5298", "#0f9d87")
     .replace("rgba(42,82,152", "rgba(15,157,135")
     .replace("</style>", EXTRA_CSS + "\n    </style>")
-    .replace(
-        "</h1>",
-        "</h1><div class=\"freeze-ribbon\">"
-        "冻结评级版本 __RELEASE_LABEL__ · 可视化不改档</div>",
-        1,
-    )
 )
+
+
+TASK_STRUCTURE_LABELS = {
+    "解题任务结构",
+    "实验任务结构",
+    "图像任务结构",
+}
 
 
 def _render_feature_grid(
@@ -290,6 +286,10 @@ def _render_feature_grid(
         item_class = "rating-detail-item"
         if css_class == "priority-details" and label in {"最长解题链", "任务组"}:
             item_class += " feature-wide"
+        if css_class == "priority-details" and label in TASK_STRUCTURE_LABELS:
+            item_class += " task-structure-card"
+            if label == "解题任务结构":
+                item_class += " task-structure-start"
         blocks.append(
             f'<div class="{item_class}">'
             f'<div class="label">{escape(label)}</div>'

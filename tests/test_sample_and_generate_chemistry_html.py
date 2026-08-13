@@ -180,41 +180,42 @@ class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
         labels = [field[0] for field in fields]
 
         self.assertEqual(
-            labels[:12],
+            labels,
             [
                 "最长解题链",
                 "任务组",
-                "任务结构",
-                "误差分析",
+                "解题方法",
                 "计算操作",
-                "条件操作",
-                "图像任务结构",
+                "误差分析",
+                "知识点跨度",
+                "关键条件处理",
                 "并列/关联任务",
-                "课程跨度",
-                "作答规则",
-                "实验任务结构",
                 "图表操作",
-            ],
-        )
-        self.assertEqual(
-            labels[12:],
-            [
-                "小问数",
-                "知识课题数",
+                "解题任务结构",
+                "实验任务结构",
+                "图像任务结构",
                 "题干字数",
-                "题干图片资源数",
             ],
         )
         self.assertNotIn("规则族数", labels)
+        self.assertNotIn("小问数", labels)
+        self.assertNotIn("知识课题数", labels)
+        self.assertNotIn("题干图片资源数", labels)
         values = dict(fields)
         self.assertEqual(values["最长解题链"], "1.a → 2.b → 3.c")
         self.assertEqual(values["任务组"], "实验操作与探究×4")
         self.assertEqual(
-            values["课程跨度"],
+            values["知识点跨度"],
             "跨单元并列（U1-2 化学实验与科学探究、U9-3 溶质的质量分数）",
         )
         self.assertEqual(values["题干字数"], "128")
-        self.assertEqual(values["题干图片资源数"], "4")
+
+        rendered_grid = MODULE._render_feature_grid(
+            fields,
+            css_class="priority-details",
+        )
+        self.assertIn("task-structure-start", rendered_grid)
+        self.assertEqual(rendered_grid.count("task-structure-card"), 3)
 
     def test_generated_page_matches_physics_review_workflow(self) -> None:
         samples = {
@@ -273,15 +274,22 @@ class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
         self.assertNotIn('src="first.png"', rendered)
         self.assertIn("关键可观测证据", rendered)
         self.assertIn("全部17项特征", rendered)
-        self.assertIn("小问数", rendered)
+        self.assertNotIn("小问数", rendered)
         self.assertNotIn("明示小问数", rendered)
         self.assertNotIn("有效任务数", rendered)
+        self.assertNotIn("知识课题数", rendered)
+        self.assertNotIn("题干图片资源数", rendered)
         self.assertIn("任务组", rendered)
-        self.assertIn("作答规则", rendered)
-        self.assertIn("任务结构", rendered)
+        self.assertIn("解题方法", rendered)
+        self.assertIn("关键条件处理", rendered)
+        self.assertIn("解题任务结构", rendered)
         self.assertNotIn("作答规则族", rendered)
+        self.assertNotIn(">作答规则<", rendered)
+        self.assertNotIn(">条件操作<", rendered)
         self.assertNotIn("规则族数", rendered)
         self.assertNotIn("解题拓扑", rendered)
+        self.assertNotIn("冻结评级版本", rendered)
+        self.assertNotIn("可视化不改档", rendered)
         self.assertIn("1.读取数据", rendered)
         self.assertIn("U9-3 溶质的质量分数", rendered)
 
