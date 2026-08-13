@@ -116,7 +116,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             else:
                 self.assertIn(value, options)
 
-    def test_substantive_chain_and_step_count_must_match_before_postprocess(self):
+    def test_substantive_chain_wording_does_not_rewrite_step_count(self):
         value = rating("中等题")
         value["features"]["step_count"] = "2-3步"
         value["reasoning"]["longest_substantive_chain"] = [
@@ -126,11 +126,12 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             "换算硫酸质量",
             "计算溶质质量分数",
         ]
-        with self.assertRaisesRegex(
-            schema.ChemistrySchemaError,
-            "step_count与reasoning.longest_substantive_chain数量不一致",
-        ):
-            schema.postprocess_chemistry_difficulty(value, {})
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["features"]["step_count"], "2-3步")
+        self.assertFalse(any(
+            item["field"] == "step_count"
+            for item in result["postprocess"]["feature_normalization_actions"]
+        ))
 
     def test_substantive_chain_and_step_count_matching_value_is_preserved(self):
         value = rating("中等题")
@@ -420,7 +421,7 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
         ordered_markers = (
             "**识别具体任务类型。**",
-            "**先展开最长实质链，再填写步骤枚举。**",
+            "**先还原最长连续路径，再填写步骤枚举。**",
             "**确认其余抽象特征。**",
             "**用档内真实例题校准并确定暂定档位。**",
             "**根据实际证据完成相邻档位复核。**",

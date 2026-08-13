@@ -895,21 +895,6 @@ def validate_rating_contract(value: Any) -> dict[str, Any]:
         or not normalized_reasoning["level_basis"]
     ):
         raise ChemistrySchemaError("reasoning字段不得为空")
-    chain_length = len(substantive_chain)
-    expected_step_count = (
-        "6步及以上" if chain_length >= 6
-        else "4-5步" if chain_length >= 4
-        else "2-3步" if chain_length >= 2
-        else None
-    )
-    if (
-        expected_step_count is not None
-        and validated_features["step_count"] != expected_step_count
-    ):
-        raise ChemistrySchemaError(
-            "features.step_count与reasoning.longest_substantive_chain数量不一致"
-        )
-
     review_fields = {
         "adjacent_pair", "supporting_feature_fields", "limiting_feature_fields",
         "resolution", "review_basis",
