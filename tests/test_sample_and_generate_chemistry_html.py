@@ -189,7 +189,7 @@ class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
                 "误差分析",
                 "知识点跨度",
                 "审题条件与陷阱",
-                "并列/关联任务",
+                "选项/小问关联方式",
                 "图表操作",
                 "解题任务结构",
                 "实验任务结构",
@@ -283,6 +283,9 @@ class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
         self.assertIn("解题方法", rendered)
         self.assertIn("审题条件与陷阱", rendered)
         self.assertNotIn("关键条件处理", rendered)
+        self.assertIn("选项/小问关联方式", rendered)
+        self.assertNotIn("并列/关联任务", rendered)
+        self.assertNotIn("并列任务关系", rendered)
         self.assertIn("解题任务结构", rendered)
         self.assertNotIn("作答规则族", rendered)
         self.assertNotIn(">作答规则<", rendered)
