@@ -61,6 +61,59 @@ class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
                 seed=1,
             )
 
+    def test_select_rows_by_level_plan_fills_shortage_from_adjacent_level(
+        self,
+    ) -> None:
+        grouped = {level: [] for level in MODULE.LEVEL_MAP}
+        grouped["送分题"] = [{"question_id": "easy-1"}]
+        grouped["基础题"] = [
+            {"question_id": f"basic-{index}"}
+            for index in range(6)
+        ]
+        plan = {
+            "送分题": 3,
+            "基础题": 2,
+            "中等题": 0,
+            "拔高题": 0,
+            "压轴题": 0,
+        }
+
+        first = MODULE.select_rows_by_level_plan(
+            grouped,
+            plan,
+            seed=7,
+            allow_cross_level_fill=True,
+        )
+        second = MODULE.select_rows_by_level_plan(
+            grouped,
+            plan,
+            seed=7,
+            allow_cross_level_fill=True,
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(first["送分题"]), 1)
+        self.assertEqual(len(first["基础题"]), 4)
+        selected_ids = [
+            row["question_id"]
+            for rows in first.values()
+            for row in rows
+        ]
+        self.assertEqual(len(selected_ids), 5)
+        self.assertEqual(len(set(selected_ids)), 5)
+
+    def test_cross_level_fill_rejects_insufficient_total_pool(self) -> None:
+        grouped = {level: [] for level in MODULE.LEVEL_MAP}
+        grouped["送分题"] = [{"question_id": "easy-1"}]
+
+        with self.assertRaisesRegex(ValueError, "全部档位合计仅1题"):
+            MODULE.select_rows_by_level_plan(
+                grouped,
+                {"送分题": 2},
+                seed=1,
+                allow_cross_level_fill=True,
+            )
+
     def test_stem_visualization_uses_only_last_image(self) -> None:
         section = MODULE.render_chemistry_image_section(
             "https://img.example/first.png,"

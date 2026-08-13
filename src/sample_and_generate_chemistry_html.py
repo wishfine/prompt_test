@@ -498,9 +498,67 @@ def select_rows_by_level_plan(
     plan: Dict[str, int],
     *,
     seed: int,
+    allow_cross_level_fill: bool = False,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """按最终模型档位精确抽样；不足时禁止跨档补数。"""
+    """按最终模型档位抽样，可选从相邻档位补齐总数。
+
+    跨档补数时，补入题仍归入其真实模型档位，不伪造原计划
+    档位。例如送分题不足时优先多抽基础题。
+    """
     rng = random.Random(seed)
+    if allow_cross_level_fill:
+        target_total = sum(plan.values())
+        available_total = sum(
+            len(grouped_by_name.get(level_name, []))
+            for level_name in LEVEL_MAP
+        )
+        if available_total < target_total:
+            raise ValueError(
+                f"全部档位合计仅{available_total}题，"
+                f"无法补齐计划总数{target_total}题"
+            )
+
+        selected = {level_name: [] for level_name in LEVEL_MAP}
+        remaining: Dict[str, List[Dict[str, Any]]] = {}
+        deficits: Dict[str, int] = {}
+        for level_name in LEVEL_MAP:
+            pool = list(grouped_by_name.get(level_name, []))
+            rng.shuffle(pool)
+            target_count = plan.get(level_name, 0)
+            take_count = min(len(pool), target_count)
+            selected[level_name] = pool[:take_count]
+            remaining[level_name] = pool[take_count:]
+            deficits[level_name] = target_count - take_count
+
+        level_order = list(LEVEL_MAP)
+        for shortage_level in level_order:
+            shortage = deficits[shortage_level]
+            if shortage <= 0:
+                continue
+            shortage_index = level_order.index(shortage_level)
+            donor_levels = sorted(
+                level_order,
+                key=lambda name: (
+                    abs(level_order.index(name) - shortage_index),
+                    level_order.index(name),
+                ),
+            )
+            for donor_level in donor_levels:
+                if shortage <= 0:
+                    break
+                donor_pool = remaining[donor_level]
+                take_count = min(shortage, len(donor_pool))
+                if take_count <= 0:
+                    continue
+                selected[donor_level].extend(donor_pool[:take_count])
+                remaining[donor_level] = donor_pool[take_count:]
+                shortage -= take_count
+            if shortage:
+                raise ValueError(
+                    f"{shortage_level}缺口仍有{shortage}题无法补齐"
+                )
+        return selected
+
     selected: Dict[str, List[Dict[str, Any]]] = {}
     for level_name, target_count in plan.items():
         pool = list(grouped_by_name.get(level_name, []))
@@ -566,6 +624,14 @@ def main() -> None:
             "例如 120,120,120,90,50"
         ),
     )
+    parser.add_argument(
+        "--allow-cross-level-fill",
+        action="store_true",
+        help=(
+            "level-plan某档不足时，按相邻档位优先补齐总数；"
+            "补入题仍按真实模型档位展示"
+        ),
+    )
     parser.add_argument("--release-label", default=CHEMISTRY_FROZEN_RELEASE)
     args = parser.parse_args()
 
@@ -583,6 +649,8 @@ def main() -> None:
     selected: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
     if args.all_results and args.level_plan:
         parser.error("--all-results 与 --level-plan 不能同时使用")
+    if args.allow_cross_level_fill and not args.level_plan:
+        parser.error("--allow-cross-level-fill 必须与 --level-plan 同时使用")
     if args.all_results:
         selected.update({level: list(grouped[level]) for level in range(1, 6)})
     elif args.level_plan:
@@ -594,6 +662,7 @@ def main() -> None:
             grouped_by_name,
             args.level_plan,
             seed=args.seed,
+            allow_cross_level_fill=args.allow_cross_level_fill,
         )
         selected.update(
             {
