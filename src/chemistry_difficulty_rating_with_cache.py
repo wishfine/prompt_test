@@ -156,8 +156,8 @@ CHEMISTRY_ENABLE_TEACHER_DISTRIBUTION_GUARDS_WRITEBACK = os.getenv(
 # 已知低稳定性规则仅保留候选审计；即使教师分布校准总写回开关开启，
 # 也不得自动改档。实验基础操作规则在V5-500中净收益为0；四项事实
 # 下限已实测误伤同一规则选择题；横向广度新规则尚未经过独立回放，
-# 均不能直接写回。深定量压轴链已在五个500题版本上回放均为
-# 净正，不再属于审计专用规则。
+# 均不能直接写回。深定量压轴链在早期版本中曾为净正，但最新三次
+# case-ablation独立运行合计改对8题、改错9题，当前先降为候选审计。
 TEACHER_GUARD_AUDIT_ONLY_RULES = frozenset(
     {
         "teacher_medium_to_hard_shared_new_information",
@@ -166,6 +166,7 @@ TEACHER_GUARD_AUDIT_ONLY_RULES = frozenset(
         "teacher_basic_to_medium_multi_rule_breadth_candidate",
         "teacher_basic_to_medium_parallel_reaction_multitopic_candidate",
         "teacher_hard_to_final_qualitative_evidence_network_candidate",
+        "teacher_hard_to_final_deep_quantitative_chain",
         "teacher_medium_to_hard_explicit_difference_method",
     }
 )

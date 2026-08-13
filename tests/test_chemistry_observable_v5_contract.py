@@ -1750,14 +1750,15 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
             {"stem": "未知比例的混合氧化物经酸溶和还原后求剩余质量。"},
         )
 
-        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertEqual(result["difficulty_level"], "拔高题")
         self.assertEqual(
             result["teacher_distribution_guard_candidate_action"]["rule"],
             "teacher_hard_to_final_deep_quantitative_chain",
         )
-        self.assertTrue(
+        self.assertFalse(
             result["teacher_distribution_guard_writeback_applied"]
         )
+        self.assertEqual(result["postprocess_actions"], [])
 
 
 if __name__ == "__main__":

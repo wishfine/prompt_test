@@ -299,12 +299,15 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         ]
 
         self.assertEqual(prompt.count("## 三、教师相邻边界例题"), 1)
-        self.assertEqual(level_cases.count("【Case "), 28)
+        self.assertEqual(level_cases.count("【Case "), 31)
         self.assertEqual(boundary_cases.count("【Case "), 27)
         for retained in (
             "【Case 2：量筒直接读数】",
             "【Case 9：四种物质的燃烧现象】",
             "【Case 8：读取指示剂表格后判断溶液】",
+            "【Case 4：多处规范实验表达】",
+            "【Case 5：异质实验规则切换】",
+            "【Case 11：元素周期表、粒子结构与化学用语联合】",
             "【Case 9：反应关系网络逐项验证】",
             "【Case 5：酸碱盐混合后的废液判断】",
         ):
@@ -321,6 +324,24 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         ):
             with self.subTest(removed=removed):
                 self.assertNotIn(removed, prompt)
+
+    def test_prompt_keeps_transparent_rule_separate_from_object_facts(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "所有候选答案都可由同一个显性判据直接推出",
+            prompt,
+        )
+        self.assertIn(
+            "逐项查看多个候选，也仍是同一透明规则的机械筛选",
+            prompt,
+        )
+        self.assertIn(
+            "共同判据不足以推出答案、必须分别回忆对象特有事实",
+            prompt,
+        )
 
     def test_prompt_resolves_remaining_adjacent_case_conflicts(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
@@ -653,11 +674,11 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         self.assertIn("两个必要判断与顺序约束共同决定答案", prompt)
         self.assertIn("多图独立不同规则判断", prompt)
         self.assertIn(
-            "对象不同但仍可由同一透明分类规则机械处理时可保持送分",
+            "所有候选答案都可由同一个显性判据直接推出",
             prompt,
         )
         self.assertIn(
-            "多个对象分别需要核验不同教材事实",
+            "必须分别回忆对象特有事实",
             prompt,
         )
 
@@ -775,7 +796,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         levels = [
             ("### 难度1——送分题", "### 难度2——基础题", "送分题", 6),
             ("### 难度2——基础题", "### 难度3——中等题", "基础题", 9),
-            ("### 难度3——中等题", "### 难度4——拔高题", "中等题", 5),
+            ("### 难度3——中等题", "### 难度4——拔高题", "中等题", 8),
             ("### 难度4——拔高题", "### 难度5——压轴题", "拔高题", 3),
             ("### 难度5——压轴题", "## 三、教师相邻边界例题", "压轴题", 5),
         ]
@@ -1048,7 +1069,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "拔高题")
         self.assertEqual(result["postprocess_actions"], [])
 
-    def test_v5_deep_quantitative_chain_writes_back_to_final(self) -> None:
+    def test_v5_deep_quantitative_chain_is_audit_only(self) -> None:
         result = self.runtime.postprocess_chemistry_difficulty(
             hard_rating(),
             {
@@ -1061,10 +1082,24 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["postprocess_actions"], [])
         self.assertEqual(
-            result["postprocess_actions"][0]["rule"],
+            result["teacher_distribution_guard_candidate_level"],
+            "压轴题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
             "teacher_hard_to_final_deep_quantitative_chain",
+        )
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+        self.assertIn(
+            "仅保留候选审计",
+            result[
+                "teacher_distribution_guard_writeback_blocked_reason"
+            ],
         )
 
     def test_qualitative_evidence_network_is_audit_only_final_candidate(
