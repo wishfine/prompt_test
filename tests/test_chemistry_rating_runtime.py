@@ -1997,9 +1997,9 @@ class ChemistryRuntimeTests(unittest.TestCase):
             "只有回答规则本身发生切换时，才增加rule_families",
             prefix,
         )
-        self.assertIn("量筒或天平误差因果链", prefix)
+        self.assertIn("偏差→实际量→最终结果", prefix)
         self.assertIn("部分变质中的守恒与差量", prefix)
-        self.assertIn("不要求虚构6步以上", prefix)
+        self.assertIn("不把固定步数作为模型定档门槛", prefix)
 
 
 if __name__ == "__main__":

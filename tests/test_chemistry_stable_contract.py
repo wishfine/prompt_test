@@ -48,8 +48,8 @@ class ChemistryStableContractTests(unittest.TestCase):
         self.assertIn('"solution_topology"', prompt)
         self.assertNotIn('"direct_retrieval_task_count"', prompt)
         self.assertNotIn('"rule_application_task_count"', prompt)
-        self.assertIn("量筒俯仰视误差链", prompt)
-        self.assertIn("关键是三个前后依赖判断", prompt)
+        self.assertIn("偏差→实际量→最终结果", prompt)
+        self.assertIn("关键是因果链终点，不是量筒或天平关键词", prompt)
         self.assertNotIn('"boundary_features"', prompt)
         self.assertNotIn("Boundary-8 固定字段", prompt)
 

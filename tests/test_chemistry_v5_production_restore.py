@@ -121,9 +121,9 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         for anchor in (
-            "【Case 13：同一低难规则筛选四项】",
-            "【Case 17：灭火场景与原理匹配】",
-            "【Case 13：两个跨单元原因的规范表达】",
+            "【Case 4：纯净物/混合物直接分类】",
+            "【Case 9：四种物质的燃烧现象】",
+            "【Case 8：读取指示剂表格后判断溶液】",
             "【Case 9：反应关系网络逐项验证】",
             "【Case 7：锌与两种盐溶液反应后的滤液滤渣】",
         ):
@@ -147,7 +147,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "先检查压轴两条路径并复核4/5边界",
+            "若候选等级为拔高题或压轴题，优先核验4/5边界",
             prompt,
         )
         self.assertIn(
@@ -158,6 +158,204 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             "反应、实验、图表、计算、证据或条件中至少三类共同参与",
             prompt,
         )
+
+    def test_prompt_handles_endpoint_reasoning_without_inventing_difficulty(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'difficulty_level="送分题"时，why_not_lower固定写“已是最低档，无更低档可比较”',
+            prompt,
+        )
+        self.assertIn(
+            'difficulty_level="压轴题"时，why_not_higher固定写“已是最高档，无更高档可比较”',
+            prompt,
+        )
+        self.assertIn(
+            "无额外难点，主要要求为",
+            prompt,
+        )
+        self.assertIn(
+            "不得为了填满字段虚构难点",
+            prompt,
+        )
+
+    def test_prompt_uses_adjacent_boundary_review_without_global_final_priming(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        validation = prompt[
+            prompt.index("## 五、定档前校验") :
+            prompt.index("## 六、输出要求")
+        ]
+
+        self.assertIn("初定等级后只核验其相邻边界", validation)
+        self.assertIn(
+            "若候选等级为拔高题或压轴题，优先核验4/5边界",
+            validation,
+        )
+        self.assertNotIn("先检查压轴两条路径并复核4/5边界", validation)
+
+    def test_prompt_does_not_use_chain_counts_as_level_definitions(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        level_section = prompt[
+            prompt.index("## 二、教师五档难度") :
+            prompt.index("## 三、教师相邻边界例题")
+        ]
+        boundary_section = prompt[
+            prompt.index("## 三、教师相邻边界例题") :
+            prompt.index("## 四、17项可观测特征协议")
+        ]
+
+        self.assertNotIn("2至4个必要化学决策", level_section)
+        self.assertNotIn("5个以上必要化学决策", level_section)
+        self.assertNotIn("约5至6个以上必要决策", boundary_section)
+        self.assertIn("较深的连续必要链", level_section)
+
+    def test_prompt_calibrates_common_and_deep_chain_splitting(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        section = prompt[
+            prompt.index("### 1. longest_solution_chain") :
+            prompt.index("### 2. task_groups")
+        ]
+
+        for anchor in (
+            "直接识记或透明分类：1步",
+            "题给关系→应用该关系：2步",
+            "标准方程式计算：确定反应关系→建立计量关系→求目标量",
+            "误差分析：偏差→实际量→最终结果",
+            "不得合并成笼统的“分析并计算”",
+            "阶段判断、中间量或剩余量确定、后一反应关系",
+        ):
+            with self.subTest(anchor=anchor):
+                self.assertIn(anchor, section)
+
+    def test_prompt_preserves_sequential_and_quantitative_coupling(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "前一阶段的产物、中间量或剩余量决定后一反应时，不得填写“多个并列反应”",
+            prompt,
+        )
+        self.assertIn(
+            "多个方程式共享未知量、中间量或总量关系时，还应记录“多反应定量关系”",
+            prompt,
+        )
+        self.assertIn(
+            "借助守恒或前后阶段不变量消去未知组分时，应记录“组分消元或组成不变量”",
+            prompt,
+        )
+
+    def test_prompt_adds_single_value_tie_breaks_and_evidence_entry(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        for anchor in (
+            "多阶段定量探究 > 方案评价或补充实验 > 方案设计 > 数据归纳 > 现象解释 > 变量控制 > 基础操作或读数 > 无",
+            "方案设计或评价 > 操作偏差因果链 > 控制变量或数据归纳 > 多仪器或多条件比较 > 名称或单点规范匹配 > 无实验判断",
+            "共享装置流程或图表模型 > 多图独立不同规则判断 > 多图独立同规则识别 > 单图直接识别 > 无必要视觉信息",
+            "要求根据现象、实验结果、数据或事实去证明、排除、鉴别或确定某个化学结论或候选解释",
+            "普通题干已知条件用于常规计算或直接应用，不因此记录evidence_operations",
+        ):
+            with self.subTest(anchor=anchor):
+                self.assertIn(anchor, prompt)
+
+    def test_prompt_resolves_symbol_and_carbon_case_boundaries(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "自主解释一个化学符号中指定位置数字的含义，或根据规则写出一个规范化学符号",
+            prompt,
+        )
+        self.assertIn(
+            "从选项中直接辨认一个熟悉位置的数字含义仍可为送分题",
+            prompt,
+        )
+        self.assertIn(
+            "性质判断、反应关系、检验方法和转化关系之间切换",
+            prompt,
+        )
+
+    def test_prompt_names_feature_container_shapes_explicitly(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "`longest_solution_chain`按自由文本数组输出，`task_groups`按规定对象结构输出",
+            prompt,
+        )
+        self.assertNotIn("自由文本链和任务对象按", prompt)
+
+    def test_prompt_case_ablation_keeps_only_unique_representatives(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        level_cases = prompt[
+            prompt.index("## 二、教师五档难度") :
+            prompt.index("## 三、教师相邻边界例题")
+        ]
+        boundary_cases = prompt[
+            prompt.index("## 三、教师相邻边界例题") :
+            prompt.index("## 四、17项可观测特征协议")
+        ]
+
+        self.assertEqual(prompt.count("## 三、教师相邻边界例题"), 1)
+        self.assertEqual(level_cases.count("【Case "), 28)
+        self.assertEqual(boundary_cases.count("【Case "), 27)
+        for retained in (
+            "【Case 2：量筒直接读数】",
+            "【Case 9：四种物质的燃烧现象】",
+            "【Case 8：读取指示剂表格后判断溶液】",
+            "【Case 9：反应关系网络逐项验证】",
+            "【Case 5：酸碱盐混合后的废液判断】",
+        ):
+            with self.subTest(retained=retained):
+                self.assertIn(retained, level_cases)
+        for removed in (
+            "【Case 3：空气组成直接识记】",
+            "【Case 6：多种物质性质用途】",
+            "【Case 1：量筒或天平误差因果链】",
+            "【Case 1：差量法决定分解比例】",
+            "【Case 1：循环工业流程与定量误差】",
+            "【Case 39：同一命题 vs 跨章节辨认】",
+            "【Case 59：高难常规计算 vs 复杂分段反应网络】",
+        ):
+            with self.subTest(removed=removed):
+                self.assertNotIn(removed, prompt)
+
+    def test_prompt_resolves_remaining_adjacent_case_conflicts(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        for anchor in (
+            "升档来自两个必要判断与顺序约束共同决定答案，不来自题面出现“前者/后者”字样",
+            "难度来自非重复反应事实或回答规则的异质性，不来自选项数量",
+            "已明确给出仰视或俯视，只判断读数相对实际量的偏大或偏小，不继续推导实验结果",
+            "直接读取一个正确刻度仍为送分题",
+            "一次范围或边界计算即可确定结果，后续计算常规",
+        ):
+            with self.subTest(anchor=anchor):
+                self.assertIn(anchor, prompt)
+        self.assertNotIn("四项以上非重复反应事实", prompt)
+        self.assertNotIn("直接应用一次极值法", prompt)
+
+    def test_prompt_moves_non_generalizable_cases_to_special_policy(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        boundary_cases = prompt[
+            prompt.index("## 三、教师相邻边界例题") :
+            prompt.index("## 四、17项可观测特征协议")
+        ]
+        special = boundary_cases[
+            boundary_cases.index("### 特殊教师口径") :
+        ]
+
+        for special_case in (
+            "【Case 41：文字转译实际成为必要步骤】",
+            "【Case 56：其他学科模型进入关键化学推导】",
+            "【Case 62：题干未提供的课程越界知识】",
+            "【Case 64：固定基团转换关系】",
+        ):
+            with self.subTest(special_case=special_case):
+                self.assertIn(special_case, special)
+        self.assertIn("不能作为普通相邻边界外推", special)
 
     def test_prompt_final_definition_keeps_deep_linear_path(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
@@ -334,7 +532,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "差量法是决定性方法，不能因反应熟悉降为中等",
+            "由反应前后质量差反求反应量",
             prompt,
         )
         self.assertIn(
@@ -358,7 +556,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             prompt,
         )
         self.assertIn(
-            "四种物质分别依赖不同的性质—用途事实",
+            "需要分别回忆四种物质的燃烧现象，不能压成同一结论重复核验",
             prompt,
         )
         self.assertIn(
@@ -388,7 +586,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "四项以上非重复反应事实",
+            "难度来自非重复反应事实或回答规则的异质性，不来自选项数量",
             prompt,
         )
         self.assertIn(
@@ -414,14 +612,16 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             prompt,
         )
 
-    def test_prompt_example_10_contains_five_real_decisions(self) -> None:
+    def test_prompt_case_58_uses_independent_relations_not_step_inflation(
+        self,
+    ) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "由盐酸用量建立总碱量关系→由固体增重确定吸收CO₂量→"
-            "将CO₂量换算为已变质NaOH量→由总量扣出未变质NaOH量→求质量比",
+            "总碱量关系与固体增重差量分别约束不同未知量",
             prompt,
         )
+        self.assertNotIn("由盐酸用量建立总碱量关系→", prompt)
 
     def test_prompt_example_12_separates_three_symbolic_response_levels(
         self,
@@ -445,17 +645,15 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             prompt,
         )
 
-    def test_prompt_example_23_separates_proposition_object_order_and_images(
+    def test_prompt_boundaries_separate_objects_order_and_images(
         self,
     ) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("同一命题的不同措辞", prompt)
-        self.assertIn("同一固定规则判断多个对象", prompt)
-        self.assertIn("前者/后者或先后顺序条件", prompt)
+        self.assertIn("两个必要判断与顺序约束共同决定答案", prompt)
         self.assertIn("多图独立不同规则判断", prompt)
         self.assertIn(
-            "同一透明分类规则判断多个对象时仍可为送分题",
+            "对象不同但仍可由同一透明分类规则机械处理时可保持送分",
             prompt,
         )
         self.assertIn(
@@ -539,7 +737,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "特殊课程越界复核，不是第三条普遍压轴路径",
+            "这不是第三条普遍压轴路径",
             prompt,
         )
         self.assertIn(
@@ -575,11 +773,11 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
     ) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
         levels = [
-            ("### 难度1——送分题", "### 难度2——基础题", "送分题", 13),
-            ("### 难度2——基础题", "### 难度3——中等题", "基础题", 17),
-            ("### 难度3——中等题", "### 难度4——拔高题", "中等题", 13),
-            ("### 难度4——拔高题", "### 难度5——压轴题", "拔高题", 10),
-            ("### 难度5——压轴题", "## 三、教师相邻边界例题", "压轴题", 7),
+            ("### 难度1——送分题", "### 难度2——基础题", "送分题", 6),
+            ("### 难度2——基础题", "### 难度3——中等题", "基础题", 9),
+            ("### 难度3——中等题", "### 难度4——拔高题", "中等题", 5),
+            ("### 难度4——拔高题", "### 难度5——压轴题", "拔高题", 3),
+            ("### 难度5——压轴题", "## 三、教师相邻边界例题", "压轴题", 5),
         ]
 
         self.assertNotIn("#### 来自教师复核分支的真实锚点", prompt)
@@ -640,7 +838,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             prompt,
         )
         self.assertIn(
-            "不能仅因链长达到5步或反应数量较多判为压轴题",
+            "不能仅因链较长或反应数量较多判为压轴题",
             prompt,
         )
 
