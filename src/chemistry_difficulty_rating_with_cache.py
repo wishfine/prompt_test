@@ -1441,6 +1441,56 @@ def observable_deep_quantitative_final_signal(
     )
 
 
+def observable_strict_deep_quantitative_final_signal(
+    features: Dict[str, Any],
+    data: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """识别可安全写回的深定量压轴严格子集。
+
+    广义深定量信号跨运行波动较大，继续只用于审计。本函数只保留
+    历史回放中高精度的两类交叉证据：真实分类讨论与范围计算共同
+    出现；或多反应结构中的组成不变量同时由联立，或由差量与多反应
+    定量关系共同约束。单个拓扑、单个方法名或链长均不能触发。
+    """
+    feature_keys = (
+        frozenset(features)
+        if isinstance(features, dict)
+        else frozenset()
+    )
+    if feature_keys not in {
+        frozenset(OBSERVABLE_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V4_FEATURE_FIELDS),
+    }:
+        return False
+    if not observable_deep_quantitative_final_signal(features, data):
+        return False
+    validated = validate_observable_features(features)
+    calculation_operations = set(
+        validated["calculation_operations"]
+    )
+    branch_range_signal = bool(
+        validated["solution_topology"] == "条件分支或范围筛选"
+        and "分类讨论" in validated["condition_operations"]
+        and "范围或分类计算" in calculation_operations
+    )
+    strong_invariant_signal = bool(
+        validated["solution_topology"]
+        == "未知组分消元或组成不变量"
+        and validated["reaction_structure"]
+        not in {"无反应任务", "单一反应"}
+        and (
+            "联立" in calculation_operations
+            or {
+                "差量",
+                "多反应定量关系",
+            }.issubset(calculation_operations)
+        )
+    )
+    return branch_range_signal or strong_invariant_signal
+
+
 def observable_dense_multiquestion_final_signal(
     features: Dict[str, Any],
     data: Dict[str, Any],
@@ -4425,6 +4475,37 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         model_features["longest_solution_chain"]
                     ),
                     "高级计算="
+                    + "、".join(
+                        model_features["calculation_operations"]
+                    ),
+                ],
+            )
+        elif (
+            raw_level == "拔高题"
+            and observable_contract
+            and observable_strict_deep_quantitative_final_signal(
+                model_features,
+                data,
+            )
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "压轴题",
+                "结构边界严格校准：分支范围或组成不变量与高级定量操作形成交叉约束",
+                rule=(
+                    "teacher_hard_to_final_"
+                    "strict_deep_quantitative_chain"
+                ),
+                evidence=[
+                    "解题拓扑="
+                    + model_features["solution_topology"],
+                    "反应结构="
+                    + model_features["reaction_structure"],
+                    "条件操作="
+                    + "、".join(
+                        model_features["condition_operations"]
+                    ),
+                    "计算操作="
                     + "、".join(
                         model_features["calculation_operations"]
                     ),

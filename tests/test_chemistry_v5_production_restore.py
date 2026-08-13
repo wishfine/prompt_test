@@ -122,9 +122,17 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
 
         for anchor in (
             "【Case 4：纯净物/混合物直接分类】",
+            "【Case 6：氧化物、有机物或复合肥直接分类】",
+            "【Case 11：单目标多图直接识别】",
             "【Case 9：四种物质的燃烧现象】",
+            "【Case 11：选择后自主补写实例】",
+            "【Case 13：三态变化中的分子性质细节】",
+            "【Case 6：检验、分离与除杂】",
             "【Case 8：读取指示剂表格后判断溶液】",
+            "【Case 13：两个跨单元原因的规范表达】",
+            "【Case 2：反应后完整体系质量】",
             "【Case 9：反应关系网络逐项验证】",
+            "【Case 10：速率探究、反应计算与曲线绘制】",
             "【Case 7：锌与两种盐溶液反应后的滤液滤渣】",
         ):
             with self.subTest(anchor=anchor):
@@ -299,7 +307,9 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         ]
 
         self.assertEqual(prompt.count("## 三、教师相邻边界例题"), 1)
-        self.assertEqual(level_cases.count("【Case "), 31)
+        # 在31个消融后代表例题上，恢复8个经配对回放确认的绝对锚点；
+        # 仍不恢复与相邻边界重复的其余案例。
+        self.assertEqual(level_cases.count("【Case "), 39)
         self.assertEqual(boundary_cases.count("【Case "), 27)
         for retained in (
             "【Case 2：量筒直接读数】",
@@ -794,10 +804,10 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
     ) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
         levels = [
-            ("### 难度1——送分题", "### 难度2——基础题", "送分题", 6),
-            ("### 难度2——基础题", "### 难度3——中等题", "基础题", 9),
-            ("### 难度3——中等题", "### 难度4——拔高题", "中等题", 8),
-            ("### 难度4——拔高题", "### 难度5——压轴题", "拔高题", 3),
+            ("### 难度1——送分题", "### 难度2——基础题", "送分题", 8),
+            ("### 难度2——基础题", "### 难度3——中等题", "基础题", 11),
+            ("### 难度3——中等题", "### 难度4——拔高题", "中等题", 10),
+            ("### 难度4——拔高题", "### 难度5——压轴题", "拔高题", 5),
             ("### 难度5——压轴题", "## 三、教师相邻边界例题", "压轴题", 5),
         ]
 
@@ -1101,6 +1111,77 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
                 "teacher_distribution_guard_writeback_blocked_reason"
             ],
         )
+
+    def test_strict_branch_range_deep_chain_promotes_to_final(self) -> None:
+        item = hard_rating()
+        item["features"].update(
+            {
+                "solution_topology": "条件分支或范围筛选",
+                "reaction_structure": "分情况反应模型",
+                "condition_operations": ["分类讨论"],
+                "calculation_operations": [
+                    "多反应定量关系",
+                    "范围或分类计算",
+                ],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "分情况确定范围后完成多反应定量计算。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "teacher_hard_to_final_strict_deep_quantitative_chain",
+        )
+
+    def test_strict_invariant_elimination_deep_chain_promotes_to_final(
+        self,
+    ) -> None:
+        item = hard_rating()
+        item["features"].update(
+            {
+                "solution_topology": "未知组分消元或组成不变量",
+                "reaction_structure": "多个并列反应",
+                "calculation_operations": [
+                    "单一守恒",
+                    "联立",
+                ],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "利用组成不变量和联立关系消去未知组分。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "teacher_hard_to_final_strict_deep_quantitative_chain",
+        )
+
+    def test_strict_deep_chain_rejects_single_reaction_invariant_claim(
+        self,
+    ) -> None:
+        item = hard_rating()
+        item["features"].update(
+            {
+                "solution_topology": "未知组分消元或组成不变量",
+                "reaction_structure": "单一反应",
+                "calculation_operations": ["联立"],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "单一反应中的常规联立计算。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["postprocess_actions"], [])
 
     def test_qualitative_evidence_network_is_audit_only_final_candidate(
         self,
