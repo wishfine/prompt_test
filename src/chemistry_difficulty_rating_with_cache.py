@@ -1448,9 +1448,10 @@ def observable_strict_deep_quantitative_final_signal(
     """识别可安全写回的深定量压轴严格子集。
 
     广义深定量信号跨运行波动较大，继续只用于审计。本函数只保留
-    历史回放中高精度的两类交叉证据：真实分类讨论与范围计算共同
-    出现；或多反应结构中的组成不变量同时由联立，或由差量与多反应
-    定量关系共同约束。单个拓扑、单个方法名或链长均不能触发。
+    历史回放中高精度的交叉证据：真实分类讨论与范围计算共同出现；
+    或范围边界继续约束多反应定量链；或多反应结构中的组成不变量同时
+    由联立，或由差量与多反应定量关系共同约束；或六步以上两组反应数据
+    连续反推未知组成。各路径都同时要求结构、操作与链深，单个方法名不能触发。
     """
     feature_keys = (
         frozenset(features)
@@ -1470,10 +1471,20 @@ def observable_strict_deep_quantitative_final_signal(
     calculation_operations = set(
         validated["calculation_operations"]
     )
+    chain_steps = len(validated["longest_solution_chain"])
     branch_range_signal = bool(
         validated["solution_topology"] == "条件分支或范围筛选"
-        and "分类讨论" in validated["condition_operations"]
         and "范围或分类计算" in calculation_operations
+        and (
+            "分类讨论" in validated["condition_operations"]
+            or (
+                chain_steps >= 5
+                and "范围或边界"
+                in validated["condition_operations"]
+                and validated["reaction_structure"]
+                not in {"无反应任务", "单一反应"}
+            )
+        )
     )
     strong_invariant_signal = bool(
         validated["solution_topology"]
@@ -1488,7 +1499,17 @@ def observable_strict_deep_quantitative_final_signal(
             }.issubset(calculation_operations)
         )
     )
-    return branch_range_signal or strong_invariant_signal
+    deep_unknown_amount_signal = bool(
+        chain_steps >= 6
+        and validated["solution_topology"] == "未知组成或量反推"
+        and validated["reaction_structure"] == "产物进入后一反应"
+        and "多反应定量关系" in calculation_operations
+    )
+    return bool(
+        branch_range_signal
+        or strong_invariant_signal
+        or deep_unknown_amount_signal
+    )
 
 
 def observable_dense_multiquestion_final_signal(
@@ -2179,8 +2200,9 @@ def observable_high_density_evidence_hard_signal(
 ) -> Optional[str]:
     """V5下窄化的“中等→拔高”高密度证据信号。
 
-    六类以上具体回答规则只有在多证据必须共同成立时才形成
-    拔高下限；任一条件缺失都不写回。
+    六类以上具体回答规则只有在多证据必须共同成立，且实验中存在
+    方案设计、方案评价或多阶段定量探究这类决定性操作时，才形成拔高下限。
+    多个独立的常规数据归纳、现象解释或规则切换不写回。
     """
     if frozenset(model_features) != frozenset(
         OBSERVABLE_V5_FEATURE_FIELDS
@@ -2191,11 +2213,14 @@ def observable_high_density_evidence_hard_signal(
         metrics["rule_family_count"] >= 6
         and "多证据共同成立"
         in model_features.get("evidence_operations", [])
+        and model_features.get("experiment_operation")
+        in {"方案设计", "方案评价或补充实验", "多阶段定量探究"}
     ):
         return None
     return (
         "至少六类具体回答规则共同参与，"
-        "且多条证据需联合才能成立"
+        "多条证据需联合成立，且存在决定性实验设计、"
+        "评价或多阶段定量探究"
     )
 
 

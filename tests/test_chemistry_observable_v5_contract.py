@@ -981,6 +981,8 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
                 ],
                 "evidence_operations": ["多证据共同成立"],
                 "calculation_operations": ["单一方程式"],
+                "experiment_operation": "方案评价或补充实验",
+                "experiment_task_structure": "方案设计或评价",
             }
         )
 
@@ -993,6 +995,34 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
         )
         self.assertTrue(
             result["teacher_distribution_guard_writeback_applied"]
+        )
+
+    def test_v5_high_density_evidence_rejects_parallel_routine_tasks(
+        self,
+    ) -> None:
+        features = stable_v5_features()
+        features.update(
+            {
+                "rule_families": [
+                    "反应关系或条件判断",
+                    "实验操作规范",
+                    "作用目的或原因解释",
+                    "图表读取或数据归纳",
+                    "证据推断或鉴别除杂",
+                    "定量关系与计算",
+                ],
+                "evidence_operations": ["多证据共同成立"],
+                "experiment_operation": "数据归纳",
+                "experiment_task_structure": "控制变量或数据归纳",
+                "parallel_task_relation": "不同规则的独立任务",
+                "solution_topology": "单线性常规链",
+            }
+        )
+
+        self.assertIsNone(
+            self.runtime.observable_high_density_evidence_hard_signal(
+                features
+            )
         )
 
     def test_v5_high_density_evidence_requires_six_rules_and_joint_evidence(

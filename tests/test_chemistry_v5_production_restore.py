@@ -117,6 +117,35 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         self.assertNotIn("### 4. response_operations", prompt)
         self.assertNotIn("### 6. cross_subject_operations", prompt)
 
+    def test_prompt_separates_retrieval_from_multi_rule_medium_cases(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "仅当整题只追问一个显性现象目标",
+            prompt,
+        )
+        self.assertIn(
+            "完整的“对象—条件—现象或结论”命题",
+            prompt,
+        )
+        self.assertIn(
+            "元素周期表、粒子结构与多位置化学用语",
+            prompt,
+        )
+        self.assertIn(
+            "多个原因、作用或失败诊断的规范表达",
+            prompt,
+        )
+
+    def test_prompt_adds_missing_strict_final_anchors(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("极值边界继续约束多反应", prompt)
+        self.assertIn("两组装置质量差反推未知组成", prompt)
+        self.assertIn("高密度流程与末端组成测定", prompt)
+
     def test_prompt_absorbs_reviewed_branch_case_anchors(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
@@ -1136,6 +1165,87 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             result["postprocess_actions"][0]["rule"],
             "teacher_hard_to_final_strict_deep_quantitative_chain",
         )
+
+    def test_strict_range_chain_without_redundant_classification_promotes(
+        self,
+    ) -> None:
+        item = hard_rating()
+        item["features"].update(
+            {
+                "solution_topology": "条件分支或范围筛选",
+                "reaction_structure": "多个并列反应",
+                "condition_operations": ["范围或边界"],
+                "calculation_operations": [
+                    "多反应定量关系",
+                    "范围或分类计算",
+                ],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "先求出极值边界，再用该边界约束多反应定量计算。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "teacher_hard_to_final_strict_deep_quantitative_chain",
+        )
+
+    def test_six_step_unknown_amount_reaction_chain_promotes_to_final(
+        self,
+    ) -> None:
+        item = hard_rating()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "读取第一组装置质量差",
+                    "建立第一个反应计量关系",
+                    "求出第一种未知组分",
+                    "读取第二组装置质量差",
+                    "建立第二个反应计量关系",
+                    "扣除两种杂质求目标组分",
+                ],
+                "solution_topology": "未知组成或量反推",
+                "reaction_structure": "产物进入后一反应",
+                "calculation_operations": [
+                    "单一方程式",
+                    "多反应定量关系",
+                ],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "两组装置数据分别确定两种杂质，最后反推目标组分。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "teacher_hard_to_final_strict_deep_quantitative_chain",
+        )
+
+    def test_five_step_unknown_amount_reaction_chain_stays_audit_only(
+        self,
+    ) -> None:
+        item = hard_rating()
+        item["features"].update(
+            {
+                "solution_topology": "未知组成或量反推",
+                "reaction_structure": "产物进入后一反应",
+                "calculation_operations": ["多反应定量关系"],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {"stem": "五步常规未知量反推。"},
+        )
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["postprocess_actions"], [])
 
     def test_strict_invariant_elimination_deep_chain_promotes_to_final(
         self,
