@@ -310,6 +310,35 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "拔高题")
         self.assertFalse(result["postprocess"]["candidates"][-1]["writeback_allowed"])
 
+    def test_six_step_continuous_reaction_calculation_promotes_hard_to_final(self):
+        value = rating("拔高题", ["U05_T01", "U05_T03", "U08_T03"])
+        value["features"].update({
+            "task_structure": "前后依赖任务",
+            "step_count": "6步及以上",
+            "reaction_structure": "2-3个连续反应",
+            "calculation_structure": "多个反应连续计算",
+            "difficulty_obstacle": "多个关联条件",
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertIn(
+            "6步以上且多个连续反应形成连续定量主链",
+            result["postprocess"]["candidates"][-1]["evidence"]["matched_review_paths"],
+        )
+
+    def test_single_final_signal_still_does_not_promote_hard(self):
+        value = rating("拔高题")
+        value["features"]["step_count"] = "6步及以上"
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertFalse(result["postprocess"]["candidates"][-1]["writeback_allowed"])
+
+    def test_prompt_requires_actual_hard_final_boundary_review(self):
+        prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
+        self.assertIn("必须复核`拔高题/压轴题`", prompt)
+        self.assertIn("不得再次复核`中等题/拔高题`", prompt)
+        self.assertIn("单一主线不构成降档理由", prompt)
+
     def test_same_calculation_dimension_counts_only_once(self):
         value = rating("中等题")
         value["features"]["calculation_structure"] = "含杂质或反应后体系计算"

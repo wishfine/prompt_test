@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v30"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v31"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -1098,8 +1098,25 @@ def _build_boundary_review_candidate(result: dict[str, Any]) -> dict[str, Any] |
         ):
             matched_paths.append("同时完成试剂选择和实验原因解释")
     elif target == "压轴题":
-        # 暂无经教师样本验证的4→5窄路径；保留候选证据供复核，不自动写回。
-        pass
+        if (
+            features["step_count"] == "6步及以上"
+            and features["reaction_structure"] == "2-3个连续反应"
+            and features["calculation_structure"] == "多个反应连续计算"
+        ):
+            matched_paths.append("6步以上且多个连续反应形成连续定量主链")
+        if (
+            features["calculation_structure"] == "多个反应连续计算"
+            and features["special_method"] == "分情况计算"
+            and features["difficulty_obstacle"] == "多个关联条件"
+        ):
+            matched_paths.append("多反应连续计算中需要分情况处理关联条件")
+        if (
+            features["information_complexity"] == "题给新规则迁移应用"
+            and features["reaction_structure"] == "4个以上反应网络"
+            and features["calculation_structure"] == "多个反应连续计算"
+            and features["difficulty_obstacle"] == "多个关联条件"
+        ):
+            matched_paths.append("题给新规则迁移到四个以上反应网络并完成连续计算")
 
     allowed = bool(matched_paths)
     candidate = _candidate(
