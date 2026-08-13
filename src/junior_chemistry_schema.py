@@ -977,7 +977,7 @@ def _active_evidence_groups(result: dict[str, Any], target_level: str) -> dict[s
 
 
 def _build_boundary_review_candidate(result: dict[str, Any]) -> dict[str, Any] | None:
-    """仅在相邻档位间用多类独立证据复核；单一信号不写回。"""
+    """具体特征组合可写回；普通证据组只生成相邻档位复核候选。"""
     current = result["difficulty_level"]
     if current == "压轴题":
         return None
@@ -985,22 +985,45 @@ def _build_boundary_review_candidate(result: dict[str, Any]) -> dict[str, Any] |
     groups = _active_evidence_groups(result, target)
     if not groups:
         return None
-    structural = set(groups) & {"任务过程", "信息", "反应", "实验", "计算", "反应与计算"}
-    required = 2 if target in {"基础题", "中等题", "拔高题"} else 3
-    allowed = len(groups) >= required and bool(structural)
-    if target == "压轴题":
-        allowed = allowed and (
-            result["features"]["task_structure"] == "多条任务链汇合"
-            or (
-                result["features"]["task_structure"] == "前后依赖任务"
-                and result["features"]["step_count"] == "6步及以上"
-            )
-        )
+    features = result["features"]
+    knowledge_count = features["knowledge"]["knowledge_point_count"]
+    expressions = set(features["expression_requirement"])
+    experiment_operation = set(features["experiment_operation"])
+    experiment_analysis = set(features["experiment_analysis"])
+    matched_paths: list[str] = []
+
+    if target == "中等题":
+        if knowledge_count >= 4 and "化学方程式书写" in expressions:
+            matched_paths.append("至少4个知识点且要求书写化学方程式")
+        if knowledge_count >= 3 and "实验现象或操作规范描述" in expressions:
+            matched_paths.append("至少3个知识点且要求规范描述实验现象或操作")
+    elif target == "拔高题":
+        if features["reaction_structure"] == "反应先后或过量不足":
+            matched_paths.append("需要处理反应先后或过量不足")
+        if (
+            features["calculation_structure"] == "多个反应连续计算"
+            and features["step_count"] == "2-3步"
+            and features["special_method"] == "质量守恒"
+        ):
+            matched_paths.append("多个反应连续计算并使用质量守恒")
+        if (
+            "试剂选择" in experiment_operation
+            and "实验原因解释" in experiment_analysis
+        ):
+            matched_paths.append("同时完成试剂选择和实验原因解释")
+    elif target == "压轴题":
+        # 暂无经教师样本验证的4→5窄路径；保留候选证据供复核，不自动写回。
+        pass
+
+    allowed = bool(matched_paths)
     candidate = _candidate(
         f"R_{LEVEL_INDEX[current] + 1}_{LEVEL_INDEX[target] + 1}_adjacent_review",
         target,
-        f"命中{len(groups)}类与Prompt一致的独立证据；需{required}类并包含结构性证据才允许相邻升档。",
-        {"evidence_groups": groups, "required_group_count": required},
+        "普通证据只触发复核；只有命中具体、可解释的共同特征路径才允许相邻升档。",
+        {
+            "evidence_groups": groups,
+            "matched_review_paths": matched_paths,
+        },
     )
     candidate["writeback_allowed"] = allowed
     return candidate
@@ -1087,7 +1110,7 @@ def _writeback_floor(
 def postprocess_chemistry_difficulty(
     value: dict[str, Any], data: dict[str, Any], *, allow_legacy_fields: bool = True,
 ) -> dict[str, Any]:
-    """按Prompt证据分组复核相邻边界，并执行明确的误差分析下限。"""
+    """按Prompt证据生成复核候选，仅对验证过的窄路径写回等级。"""
     result, model_normalization_actions = normalize_rating_contract(
         copy.deepcopy(value), allow_legacy_fields=allow_legacy_fields,
     )
@@ -1134,10 +1157,13 @@ def postprocess_chemistry_difficulty(
         candidates.append(review_candidate)
     result["postprocess_actions"] = []
 
-    if result["features"]["error_analysis"] != "无":
+    if result["features"]["error_analysis"] in {
+        "量筒读数误差", "天平称量误差", "装置或方案导致误差",
+        "定量实验误差分析", "多种误差联合分析",
+    }:
         _writeback_floor(
             result, "中等题", "T1_error_analysis_floor",
-            "教师规则：涉及实验误差分析时最低为中等题。",
+            "教师规则：需要判断测量偏差、装置偏差或误差传递时最低为中等题。",
             {"error_analysis": result["features"]["error_analysis"]},
         )
     if review_candidate is not None and review_candidate["writeback_allowed"]:

@@ -121,6 +121,13 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertEqual(result["difficulty_level"], "中等题")
         self.assertEqual(result["postprocess_actions"][0]["rule"], "T1_error_analysis_floor")
 
+    def test_generic_operation_consequence_does_not_force_medium(self):
+        value = rating("基础题")
+        value["features"]["error_analysis"] = "实验操作导致误差"
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertFalse(result["postprocess"]["writeback_applied"])
+
     def test_cross_unit_alone_does_not_promote_foundation(self):
         value = rating("基础题", ["U02_T03", "U10_T01"])
         result = schema.postprocess_chemistry_difficulty(value, {})
@@ -142,15 +149,36 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
         self.assertFalse(result["postprocess"]["writeback_applied"])
         self.assertFalse(result["postprocess"]["candidates"][-1]["writeback_allowed"])
 
-    def test_two_independent_hard_signal_groups_promote_medium(self):
+    def test_two_generic_hard_signal_groups_only_trigger_review(self):
         value = rating("中等题")
         value["features"]["special_method"] = "极值法"
         value["features"]["calculation_structure"] = "含杂质或反应后体系计算"
         value["features"]["information_complexity"] = "图表装置或流程推断"
         result = schema.postprocess_chemistry_difficulty(value, {})
-        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertFalse(result["postprocess"]["candidates"][-1]["writeback_allowed"])
 
-    def test_final_review_requires_coupled_task_structure(self):
+    def test_medium_review_requires_verified_expression_knowledge_path(self):
+        value = rating("基础题", ["U02_T03", "U05_T02", "U06_T03", "U10_T01"])
+        value["features"]["expression_requirement"] = ["化学方程式书写"]
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertIn(
+            "至少4个知识点且要求书写化学方程式",
+            result["postprocess"]["candidates"][-1]["evidence"]["matched_review_paths"],
+        )
+
+    def test_reaction_order_path_promotes_medium_to_hard(self):
+        value = rating("中等题", ["U08_T02", "U11_T04"])
+        value["features"]["reaction_structure"] = "反应先后或过量不足"
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertIn(
+            "需要处理反应先后或过量不足",
+            result["postprocess"]["candidates"][-1]["evidence"]["matched_review_paths"],
+        )
+
+    def test_generic_final_evidence_only_triggers_review(self):
         value = rating("拔高题")
         value["features"].update({
             "task_structure": "前后依赖任务",
@@ -162,7 +190,8 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             "difficulty_obstacle": "多层嵌套条件或竞争解释",
         })
         result = schema.postprocess_chemistry_difficulty(value, {})
-        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertFalse(result["postprocess"]["candidates"][-1]["writeback_allowed"])
 
     def test_same_calculation_dimension_counts_only_once(self):
         value = rating("中等题")
