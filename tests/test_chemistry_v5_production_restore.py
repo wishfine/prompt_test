@@ -146,6 +146,28 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         self.assertIn("两组装置质量差反推未知组成", prompt)
         self.assertIn("高密度流程与末端组成测定", prompt)
 
+    def test_prompt_does_not_turn_other_final_paths_into_requirements(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "不得再以“缺少双来源、分类讨论或两类高阶结构耦合”否决",
+            prompt,
+        )
+        self.assertIn(
+            "同一套装置中的两个独立测量结果也可以构成双来源",
+            prompt,
+        )
+        self.assertIn(
+            "两个吸收装置分别测得水和二氧化碳",
+            prompt,
+        )
+        self.assertIn(
+            "过氧化钠、钠与氧气的条件反应、电子转移和物质的量",
+            prompt,
+        )
+
     def test_prompt_absorbs_reviewed_branch_case_anchors(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
@@ -460,9 +482,10 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         ]
 
         self.assertEqual(prompt.count("## 三、教师相邻边界例题"), 1)
-        # 在31个消融后代表例题上，恢复8个经配对回放确认的绝对锚点；
+        # 在31个消融后代表例题上，恢复8个经配对回放确认的绝对锚点，
+        # 并补入1个双来源组成测定压轴锚点；
         # 仍不恢复与相邻边界重复的其余案例。
-        self.assertEqual(level_cases.count("【Case "), 39)
+        self.assertEqual(level_cases.count("【Case "), 40)
         self.assertEqual(boundary_cases.count("【Case "), 27)
         for retained in (
             "【Case 2：量筒直接读数】",
@@ -961,7 +984,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             ("### 难度2——基础题", "### 难度3——中等题", "基础题", 11),
             ("### 难度3——中等题", "### 难度4——拔高题", "中等题", 10),
             ("### 难度4——拔高题", "### 难度5——压轴题", "拔高题", 5),
-            ("### 难度5——压轴题", "## 三、教师相邻边界例题", "压轴题", 5),
+            ("### 难度5——压轴题", "## 三、教师相邻边界例题", "压轴题", 6),
         ]
 
         self.assertNotIn("#### 来自教师复核分支的真实锚点", prompt)
@@ -1138,6 +1161,76 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             result["postprocess_actions"][0]["rule"],
             "teacher_hard_to_final_dense_multiquestion_quantitative_chain",
         )
+
+    def test_multistage_multiquestion_multireaction_promotes_without_dense_counts(
+        self,
+    ) -> None:
+        item = hard_rating()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "确定第一阶段反应",
+                    "由阶段产物建立后一反应关系",
+                    "联合多反应关系确定组成",
+                ],
+                "task_groups": [
+                    {"task_type": "实验操作与探究", "count": 2},
+                    {"task_type": "定量计算", "count": 3},
+                ],
+                "solution_topology": "多阶段反应网络",
+                "reaction_structure": "产物进入后一反应",
+                "calculation_operations": ["多反应定量关系"],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {
+                "stem": "四个小问共享多阶段反应网络和未知组成。",
+                "sub_questions": [
+                    {"stem": f"任务{i}"}
+                    for i in range(1, 5)
+                ],
+            },
+        )
+
+        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "teacher_hard_to_final_multistage_multiquestion_multireaction",
+        )
+
+    def test_multistage_multiquestion_rule_rejects_linear_chain(self) -> None:
+        item = hard_rating()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "读取数据",
+                    "建立比例",
+                    "计算目标量",
+                ],
+                "task_groups": [
+                    {"task_type": "定量计算", "count": 5},
+                ],
+                "solution_topology": "单线性常规链",
+                "reaction_structure": "多个并列反应",
+                "calculation_operations": ["多反应定量关系"],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {
+                "stem": "四个小问分别完成常规计算。",
+                "sub_questions": [
+                    {"stem": f"任务{i}"}
+                    for i in range(1, 5)
+                ],
+            },
+        )
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["postprocess_actions"], [])
 
     def test_dense_guard_blocks_short_single_reaction_breadth(self) -> None:
         item = hard_rating()

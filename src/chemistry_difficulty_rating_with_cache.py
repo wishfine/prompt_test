@@ -1558,6 +1558,39 @@ def observable_dense_multiquestion_final_signal(
     )
 
 
+def observable_multistage_multiquestion_multireaction_final_signal(
+    features: Dict[str, Any],
+    data: Dict[str, Any],
+) -> bool:
+    """识别多阶段/双来源的多问多反应压轴窄通道。
+
+    该信号不依赖模型对任务数和链长的精确分拆：程序确定
+    存在至少四个显式小问，模型同时识别出多阶段反应网络或
+    双来源交叉验证，以及多反应定量关系。跨历史运行回放时，
+    这一结构可以稳定补充 dense 规则因任务数或链长少拆而
+    遗漏的压轴题。
+    """
+    if not isinstance(features, dict):
+        return False
+    feature_keys = frozenset(features)
+    if feature_keys not in {
+        frozenset(OBSERVABLE_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
+    }:
+        return False
+    validated = validate_observable_features(features)
+    question_metrics = derive_question_structure_metrics(data)
+    return bool(
+        question_metrics["explicit_subquestion_count"] >= 4
+        and validated["solution_topology"]
+        in {"多阶段反应网络", "双来源交叉验证"}
+        and validated["reaction_structure"] != "无反应任务"
+        and "多反应定量关系"
+        in validated["calculation_operations"]
+    )
+
+
 def observable_qualitative_evidence_final_signal(
     features: Dict[str, Any],
 ) -> bool:
@@ -4574,6 +4607,39 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         model_features["longest_solution_chain"]
                     ),
                     "高级计算="
+                    + "、".join(
+                        model_features["calculation_operations"]
+                    ),
+                ],
+            )
+        elif (
+            raw_level == "拔高题"
+            and observable_contract
+            and observable_multistage_multiquestion_multireaction_final_signal(
+                model_features,
+                data,
+            )
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "压轴题",
+                "结构边界窄校准：多阶段或双来源结构与多反应定量关系共同贯穿多问",
+                rule=(
+                    "teacher_hard_to_final_"
+                    "multistage_multiquestion_multireaction"
+                ),
+                evidence=[
+                    "显式小问数="
+                    + str(
+                        observable_metrics[
+                            "explicit_subquestion_count"
+                        ]
+                    ),
+                    "解题拓扑="
+                    + model_features["solution_topology"],
+                    "反应结构="
+                    + model_features["reaction_structure"],
+                    "计算操作="
                     + "、".join(
                         model_features["calculation_operations"]
                     ),
