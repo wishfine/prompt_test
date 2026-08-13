@@ -239,10 +239,10 @@ class ChemistryObservableFeatureTests(unittest.TestCase):
         for expected in (
             "longest_solution_chain",
             "task_groups",
-            "curriculum_units",
+            "curriculum_topics",
             "纯算术",
-            "独立选项",
-            "不得直接根据预想难度填写",
+            "浏览独立选项",
+            "不得先猜难度再反向填写特征",
         ):
             self.assertIn(expected, text)
 

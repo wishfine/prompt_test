@@ -147,7 +147,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "先检查压轴两条路径",
+            "先检查压轴两条路径并复核4/5边界",
             prompt,
         )
         self.assertIn(
@@ -224,7 +224,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             output_section,
         )
         self.assertIn(
-            "存在多个任务时说明任务广度",
+            "存在多个任务、规则切换或前后依赖时",
             output_section,
         )
         self.assertIn(
@@ -232,11 +232,97 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             output_section,
         )
 
+    def test_prompt_front_loads_only_the_execution_order(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        opening = prompt[
+            prompt.index("## 一、") : prompt.index("## 二、")
+        ]
+        feature_section = prompt[
+            prompt.index("## 四、17项可观测特征协议") :
+            prompt.index("## 五、定档前校验")
+        ]
+
+        self.assertIn("## 一、判定顺序：先记录事实，再判等级", opening)
+        self.assertIn("最终作答目标、有效任务和回答规则", opening)
+        self.assertIn("17项特征填写完成后即冻结", opening)
+        self.assertNotIn("以下操作可以成为最长连续解题链中的一步", opening)
+        self.assertNotIn("### 分析优先级", opening)
+        self.assertNotIn("程序只使用稳定区间和客观统计", opening)
+        self.assertIn("阅读题干、观察图片", feature_section)
+        self.assertNotIn("§", prompt)
+
+    def test_prompt_feature_protocol_records_facts_not_difficulty_rules(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        error_section = prompt[
+            prompt.index("### 15. error_analysis_operation") :
+            prompt.index("### 16. calculation_operations")
+        ]
+        curriculum_section = prompt[
+            prompt.index("### 4. curriculum_topics") :
+            prompt.index("### 5. parallel_task_relation")
+        ]
+        experiment_structure_section = prompt[
+            prompt.index("### 12. experiment_task_structure") :
+            prompt.index("### 13. visual_task_structure")
+        ]
+
+        self.assertNotIn("基础题", error_section)
+        self.assertNotIn("中等题", error_section)
+        self.assertNotIn("更高档", error_section)
+        self.assertNotIn("历史V2", curriculum_section)
+        self.assertNotIn("不能只因都属于实验题就压成", experiment_structure_section)
+        self.assertIn("普通错误选项不属于“干扰条件排除”", prompt)
+
+    def test_prompt_parallel_relation_uses_task_based_decision_order(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        section = prompt[
+            prompt.index("### 5. parallel_task_relation") :
+            prompt.index("### 6. solution_topology")
+        ]
+
+        self.assertIn("前一任务得到的中间结论、参数、物质状态或数据", section)
+        self.assertIn("合并重复任务后是否只剩一个有效任务", section)
+        self.assertIn("使用同一`rule_family`", section)
+
+    def test_prompt_output_example_keeps_chain_inside_one_task(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        output_section = prompt[prompt.index("## 六、输出要求") :]
+
+        self.assertIn(
+            '"task_groups": [\n      {"task_type": "定量计算", "count": 1}\n    ]',
+            output_section,
+        )
+        self.assertIn(
+            '"rule_families": [\n      "定量关系与计算"\n    ]',
+            output_section,
+        )
+        self.assertIn('"parallel_task_relation": "单一答题目标"', output_section)
+        self.assertNotIn('{"task_type": "性质与反应判断", "count": 1}', output_section)
+
+    def test_prompt_mechanically_maps_coarse_level_and_shortens_suffix(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "`coarse_difficulty`在`difficulty_level`确定后机械生成，不参与难度判断",
+            prompt,
+        )
+        for mapping in (
+            "送分题、基础题 → 送分/基础区间（1-2档）",
+            "中等题 → 基础/中等区间（2-3档）",
+            "拔高题 → 中等/拔高区间（3-4档）",
+            "压轴题 → 拔高/压轴区间（4-5档）",
+        ):
+            self.assertIn(mapping, prompt)
+        suffix = prompt[prompt.index("DIFFICULTY_RATING_PROMPT_SUFFIX") :]
+        self.assertIn("先填写并冻结17项features", suffix)
+        self.assertIn("最后机械生成coarse_difficulty", suffix)
+        self.assertNotIn("若附有图片", suffix)
+
     def test_prompt_does_not_double_count_a_supplied_equation(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "核验题干已给出的熟悉方程式",
+            "核验题干已给出的熟悉化学方程式",
             prompt,
         )
         self.assertIn(
@@ -292,10 +378,9 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             prompt,
         )
         self.assertIn(
-            "理解应用背景→核验方程式",
+            "不得拆成两个连续步骤",
             prompt,
         )
-        self.assertIn("若两个课题只是共同支撑这一个核验结论", prompt)
 
     def test_prompt_keeps_heterogeneous_subjective_breadth_above_basic(
         self,
@@ -388,7 +473,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             prompt,
         )
         self.assertIn(
-            "单个主观回答只改变作答形式，不自动升档",
+            "单个主观回答只改变作答形式，不自动增加实质任务",
             prompt,
         )
 
@@ -467,8 +552,8 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
     ) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("有同型Case时只用它核验新增任务", prompt)
-        self.assertIn("没有同型Case时直接按§二", prompt)
+        self.assertIn("教师Case只作为边界锚点，不是题型模板", prompt)
+        self.assertIn("存在高度同型Case时比较新增或缺少的真实任务结构", prompt)
         self.assertNotIn(
             "先从Case中选择结构最接近的一对低档侧/高档侧",
             prompt,
@@ -517,7 +602,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "反应关系→方程式计量→目标质量",
+            "确定反应→建立计量关系→求目标量",
             prompt,
         )
         self.assertIn(
@@ -611,16 +696,16 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "课程跨度与并列/耦合术语由程序派生，理由不强制自行命名",
+            "任务之间是否共享中间结论或模型由`parallel_task_relation`记录",
             prompt,
         )
-        self.assertNotIn("若任务彼此独立，必须明确写“跨单元并列”", prompt)
+        self.assertNotIn("历史V2", prompt)
 
     def test_prompt_declares_runtime_shape_limits(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "longest_solution_chain包含1至12步，每步1至80字且不得重复",
+            "包含1至12个具体必要化学决策，每步1至80字且不得重复",
             prompt,
         )
         self.assertIn(

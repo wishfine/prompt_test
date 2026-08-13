@@ -290,10 +290,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         ]
         self.assertEqual(
             images,
-            [
-                "https://example.com/1.png",
-                "https://example.com/2.png",
-            ],
+            ["https://example.com/2.png"],
         )
 
         chemistry.CHEMISTRY_IMAGE_DETAIL = "high"
@@ -305,7 +302,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         ]
         self.assertEqual(
             [item.get("detail") for item in high_detail_images],
-            ["high", "high"],
+            ["high"],
         )
 
         chemistry.CHEMISTRY_IMAGE_DETAIL = "xhigh"
@@ -317,7 +314,7 @@ class ChemistryRuntimeTests(unittest.TestCase):
         ]
         self.assertEqual(
             [item.get("detail") for item in xhigh_detail_images],
-            ["xhigh", "xhigh"],
+            ["xhigh"],
         )
 
     def test_missing_analysis_can_request_analysis_image(self) -> None:
@@ -331,6 +328,53 @@ class ChemistryRuntimeTests(unittest.TestCase):
             chemistry.select_image_fields(row)[0],
             ["analysis_pic_url"],
         )
+
+    def test_auto_and_all_send_last_stem_image_and_all_analysis_images(
+        self,
+    ) -> None:
+        row = {
+            "stem": "根据下图完成实验分析：<image>",
+            "analysis": "",
+            "stem_pic_url": [
+                "https://example.com/stem-1.png",
+                "https://example.com/stem-2.png",
+                "https://example.com/stem-last.png",
+            ],
+            "analysis_pic_url": [
+                "https://example.com/analysis-1.png",
+                "https://example.com/analysis-2.png",
+            ],
+        }
+
+        for mode in ("auto", "all"):
+            chemistry.CHEMISTRY_IMAGE_MODE = mode
+            selected, _ = chemistry.select_image_fields(row)
+            self.assertEqual(
+                selected,
+                ["stem_pic_url", "analysis_pic_url"],
+            )
+            selected_urls = [
+                url
+                for field in selected
+                for url in chemistry.select_input_image_urls(row, field)
+            ]
+            self.assertEqual(
+                selected_urls,
+                [
+                    "https://example.com/stem-last.png",
+                    "https://example.com/analysis-1.png",
+                    "https://example.com/analysis-2.png",
+                ],
+            )
+            content = chemistry.build_user_content(row, selected)
+            self.assertEqual(
+                [
+                    item["image_url"]
+                    for item in content
+                    if item.get("type") == "input_image"
+                ],
+                selected_urls,
+            )
 
     def test_adaptive_image_detail_routes_by_visual_task(self) -> None:
         chemistry.CHEMISTRY_IMAGE_MODE = "auto"
@@ -1941,10 +1985,10 @@ class ChemistryRuntimeTests(unittest.TestCase):
             self.assertIn(f'"{field}"', prefix)
         for legacy_field in chemistry.FEATURE_DEFAULTS:
             self.assertNotIn(f'"{legacy_field}"', prefix)
-        self.assertIn("严格填写17项可观测特征", suffix)
+        self.assertIn("先填写并冻结17项features", suffix)
         self.assertIn("纯算术、机械配平、重复代入", prefix)
-        self.assertIn("对彼此独立的选项逐项查看", prefix)
-        self.assertIn("程序会根据17项特征自动统计", prefix)
+        self.assertIn("浏览独立选项", prefix)
+        self.assertIn("程序会自行统计链长", prefix)
         self.assertIn(
             "即使使用同一rule_family，也应分别计入有效任务",
             prefix,

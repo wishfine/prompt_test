@@ -557,15 +557,16 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
         ):
             self.assertNotIn(obsolete_field, prompt)
 
-    def test_prompt_uses_curriculum_units_as_task_boundaries(self) -> None:
+    def test_prompt_keeps_topic_coverage_separate_from_task_coupling(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
         for anchor in (
-            "同一U前缀的多个编码是同单元跨课题",
-            "不同U前缀才是跨单元",
-            "跨单元并列不等于跨单元耦合",
-            "不设置单元难度先验",
+            "只记录实际参与生成答案的最小课题集合",
+            "`curriculum_topics`只描述知识覆盖",
+            "任务之间是否共享中间结论或模型由`parallel_task_relation`记录",
+            "不得根据课题数量或跨单元本身升降难度",
         ):
             self.assertIn(anchor, prompt)
+        self.assertNotIn("历史V2", prompt)
 
     def test_prompt_records_teacher_observables_and_topic_span(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
@@ -574,13 +575,10 @@ class ChemistryObservableRuntimeIntegrationTests(unittest.TestCase):
             '"parallel_task_relation"',
             '"visual_task_structure"',
             '"error_analysis_operation"',
-            "同单元跨课题",
-            "跨学科背景不等于跨学科推理",
-            "误差分析不能按关键词直接升档",
-            "跨单元并列",
-            "跨单元耦合",
-            "不同U前缀才是跨单元",
-            "课程跨度正式摘要由程序根据curriculum_topics",
+            "跨学科语义或模型应用",
+            "读数偏差到实际量判断",
+            "只描述知识覆盖",
+            "不得根据课题数量或跨单元本身升降难度",
         ):
             self.assertIn(anchor, prompt)
 

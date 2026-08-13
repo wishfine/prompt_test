@@ -4766,6 +4766,17 @@ def extract_image_urls(value: Any) -> List[str]:
     return urls
 
 
+def select_input_image_urls(
+    data: Dict[str, Any],
+    field: str,
+) -> List[str]:
+    """题干仅发送最后一张图，解析保留全部图片。"""
+    urls = extract_image_urls(data.get(field))
+    if field == "stem_pic_url":
+        return urls[-1:]
+    return urls
+
+
 def select_image_fields(data: Dict[str, Any]) -> Tuple[List[str], List[str]]:
     """按物理项目经验，仅在题面真实依赖视觉关系时发送图片。"""
     available = {
@@ -4780,7 +4791,7 @@ def select_image_fields(data: Dict[str, Any]) -> Tuple[List[str], List[str]]:
             else "无可用图片URL"
         ]
     if CHEMISTRY_IMAGE_MODE == "all":
-        return list(available), ["all模式：发送全部可用图片"]
+        return list(available), ["all模式：发送全部可用图片字段"]
 
     stem_text = visible_text(data, include_analysis=False)
     analysis_text = _collect_analysis_text(data)
@@ -4869,7 +4880,7 @@ def build_user_content(
     }
     seen = set()
     for field in selected:
-        urls = extract_image_urls(data.get(field))
+        urls = select_input_image_urls(data, field)
         if urls:
             content.append({"type": "input_text", "text": labels[field]})
         for url in urls:
@@ -4933,7 +4944,7 @@ async def call_model_with_cache(
     selected_urls = [
         url
         for field in selected_fields
-        for url in extract_image_urls(data.get(field))
+        for url in select_input_image_urls(data, field)
     ]
     resolved_image_detail = resolve_image_detail(data, selected_fields)
     question_structure_metrics = derive_question_structure_metrics(data)

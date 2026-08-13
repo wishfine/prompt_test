@@ -302,7 +302,7 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
         for instruction in (
             "控制变量只能填入experiment_operation",
             "排除一个候选",
-            "拐点平台或分段只能填入graph_table_operation",
+            "拐点平台或分段、流程或关系图解析只能填入`graph_table_operation`",
             "操作偏差只能填入error_analysis_operation",
             "单一比例必须写“直接比例”",
             "化学方程式不是task_type",
@@ -1675,10 +1675,10 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
         self.assertIn("17项可观测特征协议", prompt)
         self.assertNotIn('"direct_retrieval_task_count"', prompt)
         self.assertNotIn('"rule_application_task_count"', prompt)
-        self.assertIn("不同化学命题或不同作答目标", prompt)
+        self.assertIn("非重复有效化学任务", prompt)
         self.assertIn("同一规则下多个对象", prompt)
-        self.assertIn("对彼此独立的选项逐项查看", prompt)
-        self.assertIn("不得虚构成跨单元连续链", prompt)
+        self.assertIn("浏览独立选项", prompt)
+        self.assertIn("多个独立选项或小问可以增加任务量，但不能依次累计成长链", prompt)
         self.assertNotIn("response_operations", prompt)
         self.assertNotIn("cross_subject_operations", prompt)
 
@@ -1686,7 +1686,7 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "任何单一数字、题长、选项数、图数或课程跨度都不能自动升档",
+            "任何单个特征均不能单独决定等级",
             prompt,
         )
         self.assertIn("多幅候选图片不自动增加难度", prompt)
@@ -1702,7 +1702,7 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
     def test_prompt_separates_experiment_operation_and_structure(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("experiment_operation回答“实际做了什么操作”", prompt)
+        self.assertIn("实际完成的实验认知操作", prompt)
         self.assertIn("experiment_task_structure回答“任务怎样组织”", prompt)
         self.assertIn(
             'experiment_operation="基础操作或读数"',
