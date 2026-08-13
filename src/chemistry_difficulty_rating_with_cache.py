@@ -1540,24 +1540,96 @@ def observable_qualitative_evidence_final_signal(
     )
 
 
+def _repair_coarse_reasoning_spill(rating_result: Dict[str, Any]) -> bool:
+    """Repair a json_repair shape where reasoning leaked into coarse text."""
+    raw_coarse = rating_result.get("coarse_difficulty")
+    if not isinstance(raw_coarse, str) or '"reasoning"' not in raw_coarse:
+        return False
+    coarse_prefixes = {
+        "送分/基础区间（1-2档": "送分/基础区间（1-2档）",
+        "基础/中等区间（2-3档": "基础/中等区间（2-3档）",
+        "中等/拔高区间（3-4档": "中等/拔高区间（3-4档）",
+        "拔高/压轴区间（4-5档": "拔高/压轴区间（4-5档）",
+    }
+    normalized_coarse = next(
+        (
+            value
+            for prefix, value in coarse_prefixes.items()
+            if raw_coarse.strip().startswith(prefix)
+        ),
+        None,
+    )
+    core_match = re.search(
+        r'"core_basis"\s*:\s*"(?P<core>.+)$',
+        raw_coarse,
+        flags=re.DOTALL,
+    )
+    if normalized_coarse is None or core_match is None:
+        return False
+    core_basis = core_match.group("core").strip().rstrip('"},').strip()
+    if not core_basis:
+        return False
+    rating_result["coarse_difficulty"] = normalized_coarse
+    if not str(rating_result.get("core_basis", "")).strip():
+        rating_result["core_basis"] = core_basis
+    return True
+
+
 def validate_rating_contract(rating_result: Any) -> Dict[str, Any]:
     """校验固定顶层、Core-12特征、理由和相邻粗区间。"""
     if not isinstance(rating_result, dict):
         raise ChemistrySchemaError("模型输出必须是JSON对象")
+    prepared = copy.deepcopy(rating_result)
+    coarse_reasoning_spill_repaired = _repair_coarse_reasoning_spill(prepared)
+    original_reasoning = copy.deepcopy(prepared.get("reasoning"))
+    legacy_reason_fields = {
+        field: copy.deepcopy(prepared.get(field))
+        for field in (
+            "core_basis",
+            "hard_point",
+            "why_not_lower",
+            "why_not_higher",
+            "reason",
+        )
+        if field in prepared
+    }
+    normalize_reasoning_schema(prepared)
+    rating_schema_normalization_actions: List[Dict[str, Any]] = []
+    if original_reasoning != prepared.get("reasoning") or legacy_reason_fields:
+        rating_schema_normalization_actions.append(
+            {
+                "field": "reasoning",
+                "from": original_reasoning or legacy_reason_fields,
+                "to": copy.deepcopy(prepared.get("reasoning")),
+                "reason": "顶层理由字段确定性合并为reasoning",
+            }
+        )
+    if coarse_reasoning_spill_repaired:
+        rating_schema_normalization_actions.append(
+            {
+                "field": "coarse_difficulty/reasoning",
+                "from": rating_result.get("coarse_difficulty"),
+                "to": {
+                    "coarse_difficulty": prepared.get("coarse_difficulty"),
+                    "reasoning": copy.deepcopy(prepared.get("reasoning")),
+                },
+                "reason": "json_repair导致的粗区间与reasoning粘连确定性拆分",
+            }
+        )
     required = {
         "features",
         "coarse_difficulty",
         "reasoning",
         "difficulty_level",
     }
-    missing = sorted(required - set(rating_result))
+    missing = sorted(required - set(prepared))
     if missing:
         raise ChemistrySchemaError(f"顶层字段缺失: {missing}")
 
-    level = str(rating_result.get("difficulty_level", "")).strip()
+    level = str(prepared.get("difficulty_level", "")).strip()
     if level not in VALID_LEVELS:
         raise ChemistrySchemaError(f"difficulty_level非法: {level!r}")
-    coarse = str(rating_result.get("coarse_difficulty", "")).strip()
+    coarse = str(prepared.get("coarse_difficulty", "")).strip()
     valid_coarse = {
         "送分/基础区间（1-2档）",
         "基础/中等区间（2-3档）",
@@ -1577,7 +1649,7 @@ def validate_rating_contract(rating_result: Any) -> Dict[str, Any]:
             f"coarse_difficulty={coarse!r}不包含最终等级{level!r}"
         )
 
-    reasoning = rating_result.get("reasoning")
+    reasoning = prepared.get("reasoning")
     reason_fields = {
         "core_basis",
         "hard_point",
@@ -1592,7 +1664,6 @@ def validate_rating_contract(rating_result: Any) -> Dict[str, Any]:
     if any(not str(reasoning.get(field, "")).strip() for field in reason_fields):
         raise ChemistrySchemaError("reasoning四个字段均不得为空")
 
-    prepared = copy.deepcopy(rating_result)
     raw_features = prepared["features"]
     if (
         is_observable_feature_contract(raw_features)
@@ -1625,6 +1696,9 @@ def validate_rating_contract(rating_result: Any) -> Dict[str, Any]:
     prepared["feature_contract_quality_flags"] = list(
         dict.fromkeys(prepared["feature_contract_quality_flags"])
     )
+    prepared["rating_schema_normalization_actions"] = (
+        rating_schema_normalization_actions
+    )
     return prepared
 
 # -------------------------- 4. 后处理纠偏规则 --------------------------
@@ -1645,8 +1719,26 @@ def normalize_reasoning_schema(rating_result: Dict[str, Any]) -> None:
         normalized["core_basis"] = reasoning
     elif isinstance(reason, str) and reason:
         normalized["core_basis"] = reason
+    for field in (
+        "core_basis",
+        "hard_point",
+        "why_not_lower",
+        "why_not_higher",
+    ):
+        top_level_value = rating_result.get(field)
+        if not normalized[field] and isinstance(top_level_value, str):
+            normalized[field] = top_level_value
+    if not normalized["core_basis"] and normalized["hard_point"]:
+        normalized["core_basis"] = normalized["hard_point"]
     rating_result["reasoning"] = normalized
     rating_result.pop("reason", None)
+    for field in (
+        "core_basis",
+        "hard_point",
+        "why_not_lower",
+        "why_not_higher",
+    ):
+        rating_result.pop(field, None)
 
 
 def set_level_with_reason(

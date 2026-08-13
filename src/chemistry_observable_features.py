@@ -145,6 +145,7 @@ RULE_FAMILIES = {
     "定量关系与计算",
     "方案设计或评价",
     "新信息迁移",
+    "跨学科语义或模型应用",
     "其他未归类规则（仅审计）",
 }
 
@@ -301,11 +302,13 @@ GRAPH_TABLE_OPERATIONS = {
     "趋势判断",
     "拐点平台或分段",
     "多图表联合",
+    "流程或关系图解析",
     "其他未归类图表操作（仅审计）",
 }
 
 CALCULATION_OPERATIONS = {
     "直接比例",
+    "化学式组成计算",
     "单一方程式",
     "单一守恒",
     "组分消元或组成不变量",
@@ -442,6 +445,8 @@ RULE_FAMILY_ALIASES = {
     "图表读取或归纳": "图表读取或数据归纳",
     "证据推断或物质鉴别": "证据推断或鉴别除杂",
     "定量计算": "定量关系与计算",
+    "跨学科语义理解": "跨学科语义或模型应用",
+    "跨学科模型应用": "跨学科语义或模型应用",
 }
 
 # 合法操作枚举偶尔被模型写入rule_families。下列值都能同时确定
@@ -498,6 +503,9 @@ ENUM_VALUE_ALIASES = {
     },
     "evidence_operations": {
         "双来源交叉验证": "多证据共同成立",
+        "排除候选解释": "排除一个候选",
+        "排除完全变质": "排除一个候选",
+        "排除未变质": "排除一个候选",
         "排除干扰物质": "排除一个候选",
         "排除干扰候选解释": "排除多个候选解释",
         "排除三个候选": "排除多个候选解释",
@@ -515,12 +523,22 @@ ENUM_VALUE_ALIASES = {
     },
     "experiment_task_structure": {
         "数据归纳": "控制变量或数据归纳",
+        "方案评价": "方案设计或评价",
+        "方案评价或补充实验": "方案设计或评价",
+    },
+    "graph_table_operation": {
+        "流程图解析": "流程或关系图解析",
+        "关系图解析": "流程或关系图解析",
+        "装置流程解析": "流程或关系图解析",
+        "流程、装置或关系图解析": "流程或关系图解析",
     },
     "solution_topology": {
         "范围或边界筛选": "条件分支或范围筛选",
     },
     "calculation_operations": {
         "单一比例": "直接比例",
+        "式量与组成计算": "化学式组成计算",
+        "相对分子质量与组成计算": "化学式组成计算",
         "质量守恒": "单一守恒",
         "未知组分消元或组成不变量": "组分消元或组成不变量",
         "多个反应定量关系": "多反应定量关系",
@@ -661,10 +679,26 @@ def normalize_observable_features(
         if value not in values:
             values.append(value)
 
+    known_feature_fields = set().union(
+        OBSERVABLE_V2_FEATURE_FIELDS,
+        OBSERVABLE_V3_FEATURE_FIELDS,
+        OBSERVABLE_V4_FEATURE_FIELDS,
+        OBSERVABLE_V5_FEATURE_FIELDS,
+        OBSERVABLE_V6_FEATURE_FIELDS,
+    )
     for raw_key, value in features.items():
         clean_key = _clean_enum_text(raw_key)
         key = OBSERVABLE_FIELD_ALIASES.get(clean_key, clean_key)
         record("features.key", clean_key, key, "字段名别名归一")
+        if key not in known_feature_fields:
+            record(
+                "features.extra_field",
+                clean_key,
+                None,
+                "未知额外字段删除，仅审计",
+                force=True,
+            )
+            continue
         if key in normalized and clean_key != key:
             continue
         normalized[key] = copy.deepcopy(value)
@@ -717,6 +751,15 @@ def normalize_observable_features(
                     "数字字符串转整数",
                 )
                 count = converted_count
+            if isinstance(count, int) and not isinstance(count, bool) and count == 0:
+                record(
+                    "task_groups",
+                    {"task_type": old_type, "count": count},
+                    None,
+                    "零任务组删除，仅审计",
+                    force=True,
+                )
+                continue
             if (
                 new_type in positions
                 and isinstance(count, int)
@@ -820,11 +863,20 @@ def normalize_observable_features(
             calculation_values.remove(misplaced)
             if misplaced not in representation_values:
                 representation_values.append(misplaced)
+            if (
+                misplaced == "化学符号→定量关系"
+                and "化学式组成计算" not in calculation_values
+            ):
+                calculation_values.append("化学式组成计算")
             record(
                 "calculation_operations",
                 misplaced,
-                "representation_operations",
-                "表征转换值从计算字段移回表征字段",
+                (
+                    "representation_operations+化学式组成计算"
+                    if misplaced == "化学符号→定量关系"
+                    else "representation_operations"
+                ),
+                "表征转换值移回表征字段，并保留可核验的组成计算事实",
                 force=True,
             )
 
@@ -1142,20 +1194,6 @@ def normalize_observable_features(
         record(field, values, deduped, "数组去重")
         normalized[field] = deduped
 
-    graph_op = normalized.get("graph_table_operation")
-    if (
-        graph_op in GRAPH_TABLE_OPERATIONS - {"无"}
-        and normalized.get("visual_task_structure") == "无必要视觉信息"
-    ):
-        visual = OBSERVABLE_FALLBACK_LABEL_BY_FIELD["visual_task_structure"]
-        record(
-            "visual_task_structure",
-            normalized["visual_task_structure"],
-            visual,
-            "语义不唯一，降级为仅审计兜底值",
-        )
-        normalized["visual_task_structure"] = visual
-
     experiment_op = normalized.get("experiment_operation")
     experiment_structure = normalized.get("experiment_task_structure")
     has_experiment_task = any(
@@ -1296,6 +1334,15 @@ def observable_feature_quality_flags(
         for action in normalization_actions
     ):
         flags.append("ambiguous_enum_normalized_to_fallback")
+    if any(
+        action.get("reason")
+        in {
+            "未知额外字段删除，仅审计",
+            "零任务组删除，仅审计",
+        }
+        for action in normalization_actions
+    ):
+        flags.append("structural_schema_repaired")
     return list(dict.fromkeys(flags))
 
 
@@ -1555,12 +1602,6 @@ def validate_observable_features(features: Any) -> Dict[str, Any]:
     ]
     if graph_conversions and validated["graph_table_operation"] == "无":
         raise ValueError("存在图表转换时graph_table_operation不能为无")
-    if (
-        (is_v3 or is_v4 or is_v5 or is_v6)
-        and validated["graph_table_operation"] != "无"
-        and validated["visual_task_structure"] == "无必要视觉信息"
-    ):
-        raise ValueError("存在图表任务时visual_task_structure不能为无必要视觉信息")
     # 定量任务存在但计算操作缺失属于“证据不完整”，不再让模型重生成
     # 整份评级。observable_feature_quality_flags会记录该问题，并阻止依赖
     # 计算字段的自动写回。

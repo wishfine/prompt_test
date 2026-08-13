@@ -1945,7 +1945,14 @@ class ChemistryRuntimeTests(unittest.TestCase):
         self.assertIn("纯算术、机械配平、重复代入", prefix)
         self.assertIn("对彼此独立的选项逐项查看", prefix)
         self.assertIn("程序会根据17项特征自动统计", prefix)
-        self.assertIn("至少4个非重复有效任务", prefix)
+        self.assertIn(
+            "即使使用同一rule_family，也应分别计入有效任务",
+            prefix,
+        )
+        self.assertIn(
+            "只有回答规则本身发生切换时，才增加rule_families",
+            prefix,
+        )
         self.assertIn("量筒或天平误差因果链", prefix)
         self.assertIn("部分变质中的守恒与差量", prefix)
         self.assertIn("不要求虚构6步以上", prefix)

@@ -175,6 +175,63 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             prompt,
         )
 
+    def test_prompt_clean_contract_decouples_tasks_and_rules(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "即使使用同一rule_family，也应分别计入有效任务",
+            prompt,
+        )
+        self.assertIn(
+            "只有回答规则本身发生切换时，才增加rule_families",
+            prompt,
+        )
+        self.assertNotIn("#### 17项可观测特征落点", prompt)
+        self.assertIn(
+            "若不同对象必须分别检索不同的对象—结论事实",
+            prompt,
+        )
+
+    def test_prompt_clean_contract_defines_high_risk_feature_boundaries(
+        self,
+    ) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        for anchor in (
+            "普通选择题排除错误选项，也不等于“排除候选解释”",
+            "只从最终平台读取一个稳定数值属于“直接读数”",
+            "普通总质量相减或剩余量计算不算差量",
+            "一条反应关系加普通代数整理不算联立",
+            "选择对后续模型具有决定作用的最具体结构",
+            "流程或关系图解析",
+            "化学式组成计算",
+            "跨学科语义或模型应用",
+        ):
+            self.assertIn(anchor, prompt)
+
+    def test_prompt_output_example_is_a_clean_single_equation_model(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        output_section = prompt[prompt.index("## 六、输出要求") :]
+
+        self.assertIn('"evidence_operations": []', output_section)
+        self.assertIn('"graph_table_operation": "无"', output_section)
+        self.assertIn(
+            '"calculation_operations": ["单一方程式"]',
+            output_section,
+        )
+        self.assertNotIn(
+            '"evidence_operations": ["多证据共同成立"]',
+            output_section,
+        )
+        self.assertIn(
+            "存在多个任务时说明任务广度",
+            output_section,
+        )
+        self.assertIn(
+            "不得为了满足模板虚构不存在的广度、切换或依赖",
+            output_section,
+        )
+
     def test_prompt_does_not_double_count_a_supplied_equation(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
@@ -460,7 +517,7 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
         self.assertIn(
-            "任务覆盖图表读取、反应判断和定量计算",
+            "反应关系→方程式计量→目标质量",
             prompt,
         )
         self.assertIn(

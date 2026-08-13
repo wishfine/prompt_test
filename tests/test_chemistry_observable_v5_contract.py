@@ -129,6 +129,126 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
             self.features.OBSERVABLE_FEATURE_FIELDS,
         )
 
+    def test_new_observable_options_cover_repeated_real_semantics(self) -> None:
+        self.assertIn(
+            "化学式组成计算",
+            self.features.CALCULATION_OPERATIONS,
+        )
+        self.assertIn(
+            "流程或关系图解析",
+            self.features.GRAPH_TABLE_OPERATIONS,
+        )
+        self.assertIn(
+            "跨学科语义或模型应用",
+            self.features.RULE_FAMILIES,
+        )
+
+    def test_zero_count_groups_and_unknown_extra_fields_are_local_audit_repairs(
+        self,
+    ) -> None:
+        item = stable_v5_features()
+        item["task_groups"].append(
+            {"task_type": "实验操作与探究", "count": 0}
+        )
+        item["condition_conditions"] = []
+
+        normalized, actions = self.features.normalize_observable_features(item)
+        validated = self.features.validate_observable_features(normalized)
+        flags = self.features.observable_feature_quality_flags(
+            validated,
+            actions,
+        )
+
+        self.assertNotIn("condition_conditions", normalized)
+        self.assertNotIn(
+            {"task_type": "实验操作与探究", "count": 0},
+            validated["task_groups"],
+        )
+        self.assertIn("structural_schema_repaired", flags)
+
+    def test_missing_reasoning_is_rebuilt_from_existing_top_level_reasons(
+        self,
+    ) -> None:
+        item = rating("中等题")
+        item.pop("reasoning")
+        item.update(
+            {
+                "hard_point": "需要建立一个完整方程式计算模型。",
+                "why_not_lower": "不是一次透明匹配。",
+                "why_not_higher": "没有多反应或分类模型。",
+            }
+        )
+
+        validated = self.runtime.validate_rating_contract(item)
+
+        self.assertEqual(
+            validated["reasoning"]["core_basis"],
+            "需要建立一个完整方程式计算模型。",
+        )
+        self.assertNotIn("hard_point", validated)
+        self.assertTrue(validated["rating_schema_normalization_actions"])
+
+    def test_malformed_coarse_reasoning_spill_is_repaired_locally(self) -> None:
+        item = rating("中等题")
+        item.pop("reasoning")
+        item["coarse_difficulty"] = (
+            '基础/中等区间（2-3档  "reasoning": {\n'
+            '  "core_basis": "建立方程式计量关系并计算目标质量。'
+        )
+        item.update(
+            {
+                "hard_point": "建立方程式计量关系。",
+                "why_not_lower": "不是一步直接比例。",
+                "why_not_higher": "没有高级定量结构。",
+            }
+        )
+
+        validated = self.runtime.validate_rating_contract(item)
+
+        self.assertEqual(
+            validated["coarse_difficulty"],
+            "基础/中等区间（2-3档）",
+        )
+        self.assertEqual(
+            validated["reasoning"]["core_basis"],
+            "建立方程式计量关系并计算目标质量。",
+        )
+        self.assertTrue(validated["rating_schema_normalization_actions"])
+
+    def test_text_table_operation_does_not_require_an_image_structure(self) -> None:
+        item = stable_v5_features()
+        item["representation_operations"] = ["图表数据→化学关系"]
+        item["graph_table_operation"] = "多组比较"
+        item["visual_task_structure"] = "无必要视觉信息"
+
+        normalized, _ = self.features.normalize_observable_features(item)
+        validated = self.features.validate_observable_features(normalized)
+
+        self.assertEqual(validated["graph_table_operation"], "多组比较")
+        self.assertEqual(
+            validated["visual_task_structure"],
+            "无必要视觉信息",
+        )
+
+    def test_formula_composition_misplaced_in_calculation_keeps_both_facts(
+        self,
+    ) -> None:
+        item = stable_v5_features()
+        item["representation_operations"] = []
+        item["calculation_operations"] = ["化学符号→定量关系"]
+
+        normalized, _ = self.features.normalize_observable_features(item)
+        validated = self.features.validate_observable_features(normalized)
+
+        self.assertEqual(
+            validated["representation_operations"],
+            ["化学符号→定量关系"],
+        )
+        self.assertEqual(
+            validated["calculation_operations"],
+            ["化学式组成计算"],
+        )
+
     def test_rule_families_are_concrete_answer_operations(self) -> None:
         self.assertEqual(
             self.features.RULE_FAMILIES
@@ -148,6 +268,7 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
                 "定量关系与计算",
                 "方案设计或评价",
                 "新信息迁移",
+                "跨学科语义或模型应用",
             },
         )
 
@@ -1039,7 +1160,10 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
             validated["representation_operations"],
             ["化学方程式→定量关系", "化学符号→定量关系"],
         )
-        self.assertEqual(validated["calculation_operations"], ["单一守恒"])
+        self.assertEqual(
+            validated["calculation_operations"],
+            ["单一守恒", "化学式组成计算"],
+        )
         self.assertTrue(
             any(
                 action.get("field") == "calculation_operations"
@@ -1203,11 +1327,11 @@ class ChemistryObservableV5ContractTests(unittest.TestCase):
         )
         self.assertEqual(
             validated["visual_task_structure"],
-            "其他未归类视觉结构（仅审计）",
+            "无必要视觉信息",
         )
         self.assertNotEqual(validated["graph_table_operation"], "直接读数")
         self.assertIn("fallback_enum:graph_table_operation", flags)
-        self.assertIn("fallback_enum:visual_task_structure", flags)
+        self.assertNotIn("fallback_enum:visual_task_structure", flags)
 
     def test_semantic_feature_repair_blocks_writeback(self) -> None:
         item = rating("拔高题")
