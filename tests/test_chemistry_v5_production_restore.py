@@ -313,6 +313,130 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             prompt,
         )
 
+    def test_prompt_calibrates_persistent_medium_boundary_cases(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        for anchor in (
+            "一个周期表单元格或一幅粒子图不自动降为基础题",
+            "H2O与H2O2性质差异",
+            "铁锈质量增加的两个质量来源",
+            "碳、CO与CO2的对象特有事实",
+            "常见价态、单质零价与过氧化物例外",
+            "酸反应证据与置换或氧化证据共同确定三种金属活动性顺序",
+        ):
+            with self.subTest(anchor=anchor):
+                self.assertIn(anchor, prompt)
+
+    def test_prompt_protects_routine_medium_from_hard_inflation(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        for anchor in (
+            "熟悉物质的确定性转化网络",
+            "单一方程式、一次守恒或总质量扣除一种逸出物",
+            "多个独立模块仅共享题目背景",
+            "前一任务的中间结果被后一任务复用",
+        ):
+            with self.subTest(anchor=anchor):
+                self.assertIn(anchor, prompt)
+
+    def test_metal_activity_dual_evidence_signal_requires_two_evidence_types(
+        self,
+    ) -> None:
+        positive = {
+            "stem": (
+                "有X、Y、Z三种金属。X能与稀盐酸反应产生气泡，Y不能；"
+                "Z能从Y的盐溶液中置换出Y。判断三种金属的活动性顺序。"
+            )
+        }
+        acid_only = {
+            "stem": (
+                "有X、Y、Z三种金属，分别加入稀盐酸，比较是否产生气泡，"
+                "判断三种金属的活动性顺序。"
+            )
+        }
+
+        self.assertIsNotNone(
+            self.runtime.metal_activity_dual_evidence_medium_candidate_signal(
+                positive
+            )
+        )
+        self.assertIsNone(
+            self.runtime.metal_activity_dual_evidence_medium_candidate_signal(
+                acid_only
+            )
+        )
+
+    def test_metal_activity_dual_evidence_accepts_oxygen_as_second_evidence(
+        self,
+    ) -> None:
+        data = {
+            "stem": (
+                "甲、乙、丙三种金属中，甲能与稀硫酸反应而乙不能，"
+                "丙在氧气中能剧烈燃烧。比较三种金属的活动性强弱。"
+            )
+        }
+
+        self.assertIsNotNone(
+            self.runtime.metal_activity_dual_evidence_medium_candidate_signal(
+                data
+            )
+        )
+
+    def test_metal_activity_dual_evidence_candidate_never_writes_back(
+        self,
+    ) -> None:
+        item = hard_rating()
+        item["difficulty_level"] = "基础题"
+        item["coarse_difficulty"] = "送分/基础区间（1-2档）"
+        item["features"].update(
+            {
+                "longest_solution_chain": ["联合两类证据比较金属活动性"],
+                "task_groups": [
+                    {"task_type": "性质与反应判断", "count": 1}
+                ],
+                "rule_families": ["反应关系或条件判断"],
+                "curriculum_topics": ["U8-2"],
+                "parallel_task_relation": "单一答题目标",
+                "solution_topology": "双来源交叉验证",
+                "reaction_structure": "多个并列反应",
+                "condition_operations": [],
+                "representation_operations": [],
+                "evidence_operations": ["多证据共同成立"],
+                "experiment_operation": "无",
+                "experiment_task_structure": "无实验判断",
+                "visual_task_structure": "无必要视觉信息",
+                "graph_table_operation": "无",
+                "error_analysis_operation": "无误差分析",
+                "calculation_operations": [],
+                "new_information_operation": "无新信息",
+            }
+        )
+        data = {
+            "stem": (
+                "有X、Y、Z三种金属。X能与稀盐酸反应产生气泡，Y不能；"
+                "Z能从Y的盐溶液中置换出Y。判断三种金属的活动性顺序。"
+            )
+        }
+
+        result = self.runtime.postprocess_chemistry_difficulty(item, data)
+
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_level"],
+            "中等题",
+        )
+        self.assertEqual(
+            result["teacher_distribution_guard_candidate_action"]["rule"],
+            "teacher_basic_to_medium_metal_activity_dual_evidence_candidate",
+        )
+        self.assertFalse(
+            result["teacher_distribution_guard_writeback_applied"]
+        )
+        self.assertIn(
+            "teacher_basic_to_medium_metal_activity_dual_evidence_candidate",
+            result["teacher_distribution_guard_writeback_blocked_reason"],
+        )
+
     def test_prompt_names_feature_container_shapes_explicitly(self) -> None:
         prompt = PROMPT_PATH.read_text(encoding="utf-8")
 

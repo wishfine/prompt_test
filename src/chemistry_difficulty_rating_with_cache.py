@@ -165,6 +165,7 @@ TEACHER_GUARD_AUDIT_ONLY_RULES = frozenset(
         "teacher_easy_to_basic_reported_four_fact_floor",
         "teacher_basic_to_medium_multi_rule_breadth_candidate",
         "teacher_basic_to_medium_parallel_reaction_multitopic_candidate",
+        "teacher_basic_to_medium_metal_activity_dual_evidence_candidate",
         "teacher_hard_to_final_qualitative_evidence_network_candidate",
         "teacher_hard_to_final_deep_quantitative_chain",
         "teacher_medium_to_hard_explicit_difference_method",
@@ -2195,6 +2196,62 @@ def observable_parallel_phenomena_multitopic_medium_signal(
     )
 
 
+def metal_activity_dual_evidence_medium_candidate_signal(
+    data: Dict[str, Any],
+) -> Optional[str]:
+    """识别三种金属由两类独立反应证据共同排序的窄审计候选。
+
+    历史回放仅覆盖两个重复题型，样本不足以支持自动写回。因此这里
+    只要求题面明确出现三种金属、活动性排序目标、酸反应证据，以及
+    盐溶液置换或氧化反应中的第二类证据；单一酸反应比较不触发。
+    """
+    text = visible_text(data, include_analysis=False)
+    compact = re.sub(r"\s+", "", text)
+    asks_for_order = (
+        "活动性" in compact
+        and contains_any(compact, ["顺序", "由强到弱", "强弱", "比较"])
+    )
+    has_three_metals = (
+        "三种金属" in compact
+        or contains_any(compact, ["X、Y、Z", "X、Y和Z", "甲、乙、丙", "甲、乙和丙"])
+    )
+    has_acid_evidence = (
+        contains_any(compact, ["稀盐酸", "稀硫酸", "盐酸", "硫酸"])
+        and contains_any(compact, ["气泡", "氢气", "反应", "不反应"])
+    )
+    has_displacement_evidence = (
+        contains_any(
+            compact,
+            [
+                "盐溶液",
+                "硫酸铜",
+                "硝酸银",
+                "硫酸亚铁",
+                "氯化铜",
+                "硝酸铜",
+            ],
+        )
+        and contains_any(compact, ["置换", "析出", "表面", "反应", "不反应"])
+    )
+    has_oxidation_evidence = (
+        contains_any(compact, ["氧气", "空气"])
+        and contains_any(compact, ["燃烧", "氧化", "氧化物", "反应"])
+    )
+    if not (
+        asks_for_order
+        and has_three_metals
+        and has_acid_evidence
+        and (has_displacement_evidence or has_oxidation_evidence)
+    ):
+        return None
+    second_source = "盐溶液置换" if has_displacement_evidence else "氧化反应"
+    return (
+        "三种金属的活动性顺序需联合酸反应证据与"
+        f"{second_source}证据，两类独立约束共同确定总排序；"
+        "当前仅作为基础到中等的审计候选"
+    )
+
+
 def observable_high_density_evidence_hard_signal(
     model_features: Dict[str, Any],
 ) -> Optional[str]:
@@ -4067,6 +4124,9 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         if observable_contract
         else None
     )
+    metal_activity_dual_evidence_medium = (
+        metal_activity_dual_evidence_medium_candidate_signal(data)
+    )
     high_density_evidence_hard = (
         observable_high_density_evidence_hard_signal(model_features)
         if observable_contract
@@ -4190,6 +4250,20 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                     "parallel_phenomena_multitopic"
                 ),
                 evidence=[parallel_phenomena_multitopic_medium],
+            )
+        elif (
+            raw_level == "基础题"
+            and metal_activity_dual_evidence_medium
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "中等题",
+                "证据边界候选：两类独立反应证据共同约束三种金属活动性总排序",
+                rule=(
+                    "teacher_basic_to_medium_"
+                    "metal_activity_dual_evidence_candidate"
+                ),
+                evidence=[metal_activity_dual_evidence_medium],
             )
         elif (
             raw_level == "基础题"
