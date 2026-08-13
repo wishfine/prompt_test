@@ -1200,6 +1200,108 @@ class ChemistryV5ProductionRestoreTests(unittest.TestCase):
             "teacher_hard_to_final_multistage_multiquestion_multireaction",
         )
 
+    def test_double_source_multireaction_promotes_without_multiquestion_counts(
+        self,
+    ) -> None:
+        item = hard_rating()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "由第一组数据建立总量关系",
+                    "由第二组数据建立差异关系",
+                    "交叉确定未知组成",
+                ],
+                "task_groups": [
+                    {"task_type": "定量计算", "count": 2},
+                ],
+                "parallel_task_relation": "共享同一化学模型的关联任务",
+                "solution_topology": "双来源交叉验证",
+                "reaction_structure": "产物进入后一反应",
+                "evidence_operations": [],
+                "experiment_operation": "无",
+                "experiment_task_structure": "无实验判断",
+                "calculation_operations": ["多反应定量关系"],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {
+                "stem": "两组反应数据从不同方向共同确定未知组成。",
+                "sub_questions": [{"stem": "求未知组成"}],
+            },
+        )
+
+        self.assertEqual(result["difficulty_level"], "压轴题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "teacher_hard_to_final_double_source_multireaction",
+        )
+
+    def test_double_source_rule_requires_multireaction_calculation(self) -> None:
+        item = hard_rating()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "读取两组数据",
+                    "建立直接比例",
+                    "计算目标量",
+                ],
+                "task_groups": [
+                    {"task_type": "定量计算", "count": 2},
+                ],
+                "solution_topology": "双来源交叉验证",
+                "reaction_structure": "单一反应",
+                "evidence_operations": [],
+                "experiment_operation": "无",
+                "experiment_task_structure": "无实验判断",
+                "calculation_operations": ["单一方程式"],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {
+                "stem": "两组数据分别用于同一个常规方程式计算。",
+                "sub_questions": [{"stem": "求目标量"}],
+            },
+        )
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["postprocess_actions"], [])
+
+    def test_double_source_rule_requires_double_source_topology(self) -> None:
+        item = hard_rating()
+        item["features"].update(
+            {
+                "longest_solution_chain": [
+                    "确定第一反应",
+                    "建立多反应关系",
+                    "计算目标量",
+                ],
+                "task_groups": [
+                    {"task_type": "定量计算", "count": 2},
+                ],
+                "solution_topology": "单线性常规链",
+                "reaction_structure": "产物进入后一反应",
+                "evidence_operations": [],
+                "experiment_operation": "无",
+                "experiment_task_structure": "无实验判断",
+                "calculation_operations": ["多反应定量关系"],
+            }
+        )
+
+        result = self.runtime.postprocess_chemistry_difficulty(
+            item,
+            {
+                "stem": "一条清晰主线中完成多反应定量计算。",
+                "sub_questions": [{"stem": "求目标量"}],
+            },
+        )
+
+        self.assertEqual(result["difficulty_level"], "拔高题")
+        self.assertEqual(result["postprocess_actions"], [])
+
     def test_multistage_multiquestion_rule_rejects_linear_chain(self) -> None:
         item = hard_rating()
         item["features"].update(

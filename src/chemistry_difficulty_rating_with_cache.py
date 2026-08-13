@@ -1591,6 +1591,31 @@ def observable_multistage_multiquestion_multireaction_final_signal(
     )
 
 
+def observable_double_source_multireaction_final_signal(
+    features: Dict[str, Any],
+) -> bool:
+    """识别双来源交叉验证与多反应定量共同出现的压轴窄通道。
+
+    该组合在历史运行回放中是高精度子集，因此不再依赖
+    小问数、任务数或链长的精确分拆。任一信号缺失均不触发。
+    """
+    if not isinstance(features, dict):
+        return False
+    feature_keys = frozenset(features)
+    if feature_keys not in {
+        frozenset(OBSERVABLE_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V6_FEATURE_FIELDS),
+        frozenset(OBSERVABLE_V5_FEATURE_FIELDS),
+    }:
+        return False
+    validated = validate_observable_features(features)
+    return bool(
+        validated["solution_topology"] == "双来源交叉验证"
+        and "多反应定量关系"
+        in validated["calculation_operations"]
+    )
+
+
 def observable_qualitative_evidence_final_signal(
     features: Dict[str, Any],
 ) -> bool:
@@ -4607,6 +4632,30 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                         model_features["longest_solution_chain"]
                     ),
                     "高级计算="
+                    + "、".join(
+                        model_features["calculation_operations"]
+                    ),
+                ],
+            )
+        elif (
+            raw_level == "拔高题"
+            and observable_contract
+            and observable_double_source_multireaction_final_signal(
+                model_features
+            )
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "压轴题",
+                "结构边界窄校准：双来源交叉验证与多反应定量关系共同定解",
+                rule=(
+                    "teacher_hard_to_final_"
+                    "double_source_multireaction"
+                ),
+                evidence=[
+                    "解题拓扑="
+                    + model_features["solution_topology"],
+                    "计算操作="
                     + "、".join(
                         model_features["calculation_operations"]
                     ),
