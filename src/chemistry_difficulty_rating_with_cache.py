@@ -185,7 +185,7 @@ def build_run_config(
         "num": num,
         "feature_schema_version": junior_schema.FEATURE_SCHEMA_VERSION,
         "structured_output_mode": "prompt_json_local_strict_schema",
-        "postprocess_mode": "teacher_factor_boundary_review_writeback_v4",
+        "postprocess_mode": "teacher_factor_adjacent_review_v7",
     }
 
 
@@ -793,6 +793,7 @@ async def process_single_question(
                     rating_result = junior_schema.postprocess_chemistry_difficulty(
                         candidate,
                         question_input,
+                        allow_legacy_fields=False,
                     )
                 except junior_schema.ChemistrySchemaError as exc:
                     schema_errors.append(str(exc))
