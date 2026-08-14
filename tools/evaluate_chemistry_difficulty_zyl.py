@@ -106,31 +106,44 @@ def load_labels(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def load_human_jsonl_labels(path: Path) -> dict[str, dict[str, Any]]:
-    """读取可视化人工复核结果；没有明确人工档位的记录不臆造标签。"""
+    """读取标准标签或人工复核 JSONL。"""
     labels: dict[str, dict[str, Any]] = {}
     for line_number, row in jsonl_items(path):
         question_id = str(row.get("question_id", "")).strip()
         if not question_id:
             continue
-        level_name = str(
-            row.get("human_difficulty_level", "") or ""
-        ).strip()
-        if not level_name:
-            continue
-        level = LEVEL_NAME_TO_NUMBER.get(level_name)
-        if level is None:
-            raise ValueError(
-                f"{path} 第{line_number}行人工等级非法: {level_name!r}"
-            )
+        standard_level = row.get("standard_level")
+        if standard_level not in (None, ""):
+            level = int(standard_level)
+            if level not in LEVEL_NUMBER_TO_NAME:
+                raise ValueError(
+                    f"{path} 第{line_number}行标准等级非法: {level}"
+                )
+            level_name = str(
+                row.get("standard_level_name") or LEVEL_NUMBER_TO_NAME[level]
+            ).strip()
+        else:
+            level_name = str(
+                row.get("human_difficulty_level", "") or ""
+            ).strip()
+            if not level_name:
+                continue
+            level = LEVEL_NAME_TO_NUMBER.get(level_name)
+            if level is None:
+                raise ValueError(
+                    f"{path} 第{line_number}行人工等级非法: {level_name!r}"
+                )
         if question_id in labels:
             raise ValueError(
                 f"标签中存在重复 question_id: {question_id}"
             )
         labels[question_id] = {
-            "standard_stars": "",
+            "standard_stars": str(row.get("standard_stars", "") or ""),
             "standard_level": level,
             "standard_level_name": level_name,
-            "reason": str(row.get("human_notes", "") or ""),
+            "reason": str(
+                row.get("reason") or row.get("human_notes", "") or ""
+            ),
             "verdict": str(row.get("verdict", "") or ""),
             "human_reviewed": row.get("human_reviewed"),
         }
