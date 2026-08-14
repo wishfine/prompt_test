@@ -64,7 +64,7 @@ LEVEL_NAMES = {
 FULL_FEATURE_FIELDS: Tuple[Tuple[str, str], ...] = (
     ("longest_solution_chain", "最长解题链"),
     ("task_groups", "考查任务"),
-    ("rule_families", "解题方法"),
+    ("rule_families", "题目考查点"),
     ("curriculum_topics", "涉及教材课题"),
     ("parallel_task_relation", "选项/小问关联方式"),
     ("solution_topology", "解题任务结构"),
@@ -198,7 +198,7 @@ def build_priority_feature_items(
             "考查任务",
             _display_value(features.get("task_groups"), field="task_groups"),
         ),
-        ("解题方法", _display_value(features.get("rule_families"))),
+        ("题目考查点", _display_value(features.get("rule_families"))),
         ("计算方法", _display_value(features.get("calculation_operations"))),
         ("误差分析", _display_value(features.get("error_analysis_operation"))),
         ("知识点跨度", _display_curriculum_span(metrics.get("curriculum_span_summary"))),
