@@ -285,6 +285,34 @@ class JuniorChemistrySchemaTests(unittest.TestCase):
             result["postprocess"]["candidates"][-1]["evidence"]["matched_review_paths"],
         )
 
+    def test_multi_evidence_conclusion_path_promotes_foundation_to_medium(self):
+        value = rating("基础题", ["U03_T01"])
+        value["features"].update({
+            "task_structure": "多个独立任务",
+            "step_count": "2-3步",
+            "information_complexity": "比较整理多条信息",
+            "experiment_analysis": ["根据现象或数据得出结论"],
+        })
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "中等题")
+        self.assertIn(
+            "比较整理多条现象或数据并经2-3步得出结论",
+            result["postprocess"]["candidates"][-1]["evidence"]["matched_review_paths"],
+        )
+
+    def test_independent_tasks_alone_do_not_promote_foundation(self):
+        value = rating("基础题", ["U02_T03", "U06_T03", "U08_T01"])
+        value["features"]["task_structure"] = "多个独立任务"
+        result = schema.postprocess_chemistry_difficulty(value, {})
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertFalse(result["postprocess"]["candidates"][-1]["writeback_allowed"])
+
+    def test_prompt_reviews_real_foundation_medium_boundary(self):
+        prompt = (ROOT / "prompts" / "初中化学难度打标提示词.txt").read_text(encoding="utf-8")
+        self.assertIn("必须复核`基础题/中等题`", prompt)
+        self.assertIn("不得只复核`送分题/基础题`", prompt)
+        self.assertIn("独立只表示没有纵向依赖", prompt)
+
     def test_reaction_order_path_promotes_medium_to_hard(self):
         value = rating("中等题", ["U08_T02", "U11_T04"])
         value["features"]["reaction_structure"] = "反应先后或过量不足"

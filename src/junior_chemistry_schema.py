@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v31"
+FEATURE_SCHEMA_VERSION = "junior_chemistry_teacher_factors_v32"
 CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "JUNIOR_CHEMISTRY_CURRICULUM.md"
 TOOL_NAME = "submit_junior_chemistry_rating"
 
@@ -1083,6 +1083,12 @@ def _build_boundary_review_candidate(result: dict[str, Any]) -> dict[str, Any] |
             matched_paths.append("至少4个知识点且要求书写化学方程式")
         if knowledge_count >= 3 and "实验现象或操作规范描述" in expressions:
             matched_paths.append("至少3个知识点且要求规范描述实验现象或操作")
+        if (
+            features["step_count"] == "2-3步"
+            and features["information_complexity"] == "比较整理多条信息"
+            and "根据现象或数据得出结论" in experiment_analysis
+        ):
+            matched_paths.append("比较整理多条现象或数据并经2-3步得出结论")
     elif target == "拔高题":
         if features["reaction_structure"] == "反应先后或过量不足":
             matched_paths.append("需要处理反应先后或过量不足")
