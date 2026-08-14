@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-import chemistry_difficulty_rating_with_cache as rating  # noqa: E402
+import chemistry_difficulty_rating_with_cache_zyl as rating  # noqa: E402
 
 
 load_dotenv()

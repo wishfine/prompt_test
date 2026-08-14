@@ -38,7 +38,7 @@ from asyncio import Lock, Semaphore
 from dotenv import load_dotenv
 
 try:
-    from chemistry_observable_features import (
+    from chemistry_observable_features_zyl import (
         OBSERVABLE_FEATURE_FIELDS,
         OBSERVABLE_V6_FEATURE_FIELDS,
         OBSERVABLE_V5_FEATURE_FIELDS,
@@ -53,7 +53,7 @@ try:
         validate_observable_features,
     )
 except ModuleNotFoundError:
-    from src.chemistry_observable_features import (
+    from src.chemistry_observable_features_zyl import (
         OBSERVABLE_FEATURE_FIELDS,
         OBSERVABLE_V6_FEATURE_FIELDS,
         OBSERVABLE_V5_FEATURE_FIELDS,

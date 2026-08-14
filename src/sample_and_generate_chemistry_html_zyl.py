@@ -30,9 +30,9 @@ except ImportError:  # 作为 src.* 模块导入时
     )
 
 try:
-    from chemistry_observable_features import CURRICULUM_TOPIC_NAMES
+    from chemistry_observable_features_zyl import CURRICULUM_TOPIC_NAMES
 except ImportError:
-    from src.chemistry_observable_features import CURRICULUM_TOPIC_NAMES
+    from src.chemistry_observable_features_zyl import CURRICULUM_TOPIC_NAMES
 
 
 CHEMISTRY_FROZEN_RELEASE = "d7fc644"
