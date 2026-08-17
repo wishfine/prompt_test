@@ -1993,6 +1993,19 @@ def derive_question_structure_metrics(data: Dict[str, Any]) -> Dict[str, int]:
     }
 
 
+def fill_blank_subquestion_count(data: Dict[str, Any]) -> int:
+    """统计结构化填空小问，避免把选择项计作小问。"""
+    sub_questions = data.get("sub_questions", []) or []
+    if not isinstance(sub_questions, list):
+        return 0
+    return sum(
+        1
+        for sub_question in sub_questions
+        if isinstance(sub_question, dict)
+        and not str(sub_question.get("options", "") or "").strip()
+    )
+
+
 def count_choice_options(data: Dict[str, Any]) -> int:
     """统计显式 A-D 选项，仅作客观结构门控。"""
     options = str(data.get("options", "") or "")
@@ -3933,10 +3946,11 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
     )
     model_features = rating_result["features"]
     observable_contract = is_observable_feature_contract(model_features)
+    question_metrics = derive_question_structure_metrics(data or {})
     schema_version = ""
     if observable_contract:
         observable_metrics = derive_observable_metrics(model_features)
-        observable_metrics.update(derive_question_structure_metrics(data))
+        observable_metrics.update(question_metrics)
         features = project_observable_to_core12(model_features)
         schema_version = observable_feature_schema_version(model_features)
         rating_result["feature_schema_version"] = schema_version
@@ -4157,6 +4171,9 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
         rating_result,
         data,
     )
+    easy_many_fill_blank_subquestions_floor = (
+        fill_blank_subquestion_count(data or {}) >= 4
+    )
     measuring_cylinder_error_chain = (
         measuring_cylinder_error_chain_signal(data)
     )
@@ -4225,6 +4242,20 @@ def postprocess_chemistry_difficulty(rating_result: Dict[str, Any], data: Dict[s
                 "严重低估安全底线：四项非重复事实核验不能压缩为单点直接检索",
                 rule="teacher_easy_to_basic_reported_four_fact_floor",
                 evidence=[reported_four_fact_floor],
+            )
+        elif (
+            raw_level == "送分题"
+            and easy_many_fill_blank_subquestions_floor
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "基础题",
+                "教师口径：四个及以上填空小问不按送分题处理",
+                rule="teacher_easy_to_basic_four_fill_blank_subquestions",
+                evidence=[
+                    "填空小问数="
+                    + str(fill_blank_subquestion_count(data or {})),
+                ],
             )
         elif (
             raw_level == "送分题"
