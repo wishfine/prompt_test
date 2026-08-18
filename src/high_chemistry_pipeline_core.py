@@ -15,6 +15,10 @@ from typing import Any
 
 LEVEL_ORDER = ["难度1档", "难度2档", "难度3档", "难度4档", "难度5档"]
 LEVEL_INDEX = {level: index for index, level in enumerate(LEVEL_ORDER)}
+AUDIT_ONLY_FEATURE_VALUE = "未确定（仅审计）"
+AUDIT_ONLY_KNOWLEDGE_L1 = "未确定知识模块（仅审计）"
+AUDIT_ONLY_KNOWLEDGE_L2 = "未确定二级模块（仅审计）"
+AUDIT_ONLY_KNOWLEDGE_POINT = "未确定知识点（仅审计）"
 KNOWLEDGE_L1 = {
     "化学基本概念与定量关系",
     "元素化学与无机反应",
@@ -22,6 +26,7 @@ KNOWLEDGE_L1 = {
     "物质结构与性质",
     "有机化学",
     "化学实验与探究",
+    AUDIT_ONLY_KNOWLEDGE_L1,
 }
 
 KNOWLEDGE_L2_TO_L1 = {
@@ -49,6 +54,7 @@ KNOWLEDGE_L2_TO_L1 = {
     "检验、鉴别与分离提纯": "化学实验与探究",
     "定量实验与数据处理": "化学实验与探究",
     "实验探究与方案评价": "化学实验与探究",
+    AUDIT_ONLY_KNOWLEDGE_L2: AUDIT_ONLY_KNOWLEDGE_L1,
 }
 KNOWLEDGE_L2 = set(KNOWLEDGE_L2_TO_L1)
 
@@ -108,6 +114,8 @@ FEATURE_OPTIONS: dict[str, set[str]] = {
     "separation_purification": {"无", "直接选择操作", "多步操作组合", "自主设计或方案评价"},
     "context_type": {"纯化学", "生活生产", "工业流程", "实验探究", "科技前沿"},
 }
+for _options in FEATURE_OPTIONS.values():
+    _options.add(AUDIT_ONLY_FEATURE_VALUE)
 
 FEATURE_VALUE_ALIASES: dict[str, dict[str, Any]] = {
     "knowledge_L2": {
@@ -378,11 +386,7 @@ def _normalization_entry(*, field: str, raw: Any, normalized: Any, action: str) 
 
 
 def normalize_stage1_rating(result: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """按字段白名单归一化模型近义枚举，并完整记录审计日志。
-
-    不使用编辑距离或模糊猜测。无法安全解释的普通枚举留给严格 schema
-    校验拒绝；未知 chemistry_methods 因不参与高难乘数而保守删除。
-    """
+    """归一化第一阶段特征，并将无法唯一解释的值降级为仅审计值。"""
     if not isinstance(result, dict):
         raise ValueError("第一阶段结果必须为对象")
     normalized = copy.deepcopy(result)
@@ -391,59 +395,97 @@ def normalize_stage1_rating(result: dict[str, Any]) -> tuple[dict[str, Any], lis
         raise ValueError("第一阶段结果缺少 features 对象")
     log: list[dict[str, Any]] = []
 
-    for field, aliases in FEATURE_VALUE_ALIASES.items():
+    def record(field: str, raw: Any, repaired: Any, action: str) -> None:
+        if raw != repaired:
+            log.append(_normalization_entry(
+                field=field, raw=raw, normalized=repaired, action=action
+            ))
+
+    raw_points = features.get("knowledge_points")
+    points: list[str] = []
+    if isinstance(raw_points, list):
+        for point in raw_points:
+            clean = str(point).strip() if isinstance(point, str) else ""
+            if clean and clean not in points:
+                points.append(clean)
+    if not points:
+        points = [AUDIT_ONLY_KNOWLEDGE_POINT]
+        record("knowledge_points", raw_points, points, "audit_only_fallback")
+    else:
+        record("knowledge_points", raw_points, points, "deduplicate_or_clean")
+    features["knowledge_points"] = points
+
+    raw_l2 = features.get("knowledge_L2")
+    l2_values: list[str] = []
+    if isinstance(raw_l2, list):
+        for item in raw_l2:
+            if not isinstance(item, str):
+                mapped_items = [AUDIT_ONLY_KNOWLEDGE_L2]
+                record("knowledge_L2", item, mapped_items, "audit_only_fallback")
+            else:
+                parts = [part.strip() for part in re.split(r"[，,；;]", item) if part.strip()]
+                if len(parts) > 1:
+                    record("knowledge_L2", item, parts, "split_delimited_values")
+                mapped_items = []
+                for part in parts or [item.strip()]:
+                    mapped = FEATURE_VALUE_ALIASES["knowledge_L2"].get(part, part)
+                    mapped_items.extend(mapped if isinstance(mapped, list) else [mapped])
+            for mapped in mapped_items:
+                if mapped not in KNOWLEDGE_L2_TO_L1:
+                    record("knowledge_L2", mapped, AUDIT_ONLY_KNOWLEDGE_L2, "audit_only_fallback")
+                    mapped = AUDIT_ONLY_KNOWLEDGE_L2
+                if mapped not in l2_values:
+                    l2_values.append(mapped)
+    if not l2_values:
+        l2_values = [AUDIT_ONLY_KNOWLEDGE_L2]
+        record("knowledge_L2", raw_l2, l2_values, "audit_only_fallback")
+    features["knowledge_L2"] = l2_values
+
+    l1_order = [
+        "化学基本概念与定量关系", "元素化学与无机反应", "化学反应原理",
+        "物质结构与性质", "有机化学", "化学实验与探究", AUDIT_ONLY_KNOWLEDGE_L1,
+    ]
+    derived_l1 = [
+        value for value in l1_order
+        if value in {KNOWLEDGE_L2_TO_L1[item] for item in l2_values}
+    ]
+    record("knowledge_L1", features.get("knowledge_L1"), derived_l1, "derive_from_knowledge_L2")
+    features["knowledge_L1"] = derived_l1
+
+    for field, options in FEATURE_OPTIONS.items():
         value = features.get(field)
-        if field == "knowledge_L2":
-            if not isinstance(value, list):
-                continue
-            normalized_values: list[Any] = []
-            for item in value:
-                mapped = aliases.get(item, item) if isinstance(item, str) else item
-                if mapped != item:
-                    log.append(_normalization_entry(
-                        field=field, raw=item, normalized=mapped, action="alias_mapping"
-                    ))
-                mapped_items = mapped if isinstance(mapped, list) else [mapped]
-                for mapped_item in mapped_items:
-                    if mapped_item not in normalized_values:
-                        normalized_values.append(mapped_item)
-                    else:
-                        log.append(_normalization_entry(
-                            field=field, raw=mapped_item, normalized=mapped_item, action="deduplicate"
-                        ))
-            features[field] = normalized_values
-            continue
         if field == "reaction_relation" and value in {"连续反应", "反应链"}:
             strong_chain = (
                 features.get("step_count") in {"6-8步", "9-12步", "12步以上"}
                 and features.get("process_state_relation") == "前后状态强依赖"
             )
             mapped = "多阶段强依赖反应链" if strong_chain else "简单连续反应"
+            action = "contextual_mapping"
         else:
-            mapped = aliases.get(value, value) if isinstance(value, str) else value
-        if mapped != value:
-            features[field] = mapped
-            log.append(_normalization_entry(
-                field=field, raw=value, normalized=mapped,
-                action="contextual_mapping" if field == "reaction_relation" else "alias_mapping",
-            ))
+            clean = "".join(value.strip().split()) if isinstance(value, str) else value
+            mapped = FEATURE_VALUE_ALIASES.get(field, {}).get(clean, clean)
+            action = "alias_mapping"
+        if mapped not in options:
+            record(field, value, AUDIT_ONLY_FEATURE_VALUE, "audit_only_fallback")
+            mapped = AUDIT_ONLY_FEATURE_VALUE
+        else:
+            record(field, value, mapped, action)
+        features[field] = mapped
 
     methods = features.get("chemistry_methods")
     if isinstance(methods, list):
         normalized_methods: list[Any] = []
         for method in methods:
             if not isinstance(method, str):
-                normalized_methods.append(method)
+                record("chemistry_methods", method, None, "audit_only_fallback")
                 continue
-            mapped = CHEMISTRY_METHOD_ALIASES.get(method, method)
+            mapped = CHEMISTRY_METHOD_ALIASES.get("".join(method.strip().split()), method)
             if mapped != method:
                 log.append(_normalization_entry(
                     field="chemistry_methods", raw=method, normalized=mapped, action="alias_mapping"
                 ))
             if mapped not in CHEMISTRY_METHODS:
-                log.append(_normalization_entry(
-                    field="chemistry_methods", raw=method, normalized=None, action="drop_unknown_method"
-                ))
+                record("chemistry_methods", method, None, "audit_only_fallback")
                 continue
             if mapped in normalized_methods:
                 log.append(_normalization_entry(
@@ -453,24 +495,27 @@ def normalize_stage1_rating(result: dict[str, Any]) -> tuple[dict[str, Any], lis
             normalized_methods.append(mapped)
         features["chemistry_methods"] = normalized_methods
 
-    knowledge_l2 = features.get("knowledge_L2")
-    if (
-        isinstance(knowledge_l2, list)
-        and knowledge_l2
-        and all(value in KNOWLEDGE_L2_TO_L1 for value in knowledge_l2)
-    ):
-        l1_order = [
-            "化学基本概念与定量关系", "元素化学与无机反应", "化学反应原理",
-            "物质结构与性质", "有机化学", "化学实验与探究",
-        ]
-        derived_set = {KNOWLEDGE_L2_TO_L1[value] for value in knowledge_l2}
-        derived_l1 = [value for value in l1_order if value in derived_set]
-        if features.get("knowledge_L1") != derived_l1:
-            log.append(_normalization_entry(
-                field="knowledge_L1", raw=features.get("knowledge_L1"),
-                normalized=derived_l1, action="derive_from_knowledge_L2",
-            ))
-            features["knowledge_L1"] = derived_l1
+    derived_count = _derived_knowledge_count(points)
+    record("knowledge_count", features.get("knowledge_count"), derived_count, "derive_from_knowledge_points")
+    features["knowledge_count"] = derived_count
+    derived_scope = _derived_knowledge_scope(derived_l1, l2_values, points)
+    record("knowledge_scope", features.get("knowledge_scope"), derived_scope, "derive_from_knowledge_structure")
+    features["knowledge_scope"] = derived_scope
+
+    raw_shared_model = features.get("shared_model_across_subquestions")
+    if type(raw_shared_model) is not bool:
+        clean_shared_model = "".join(str(raw_shared_model or "").strip().lower().split())
+        if clean_shared_model in {"true", "是"}:
+            shared_model = True
+            action = "alias_mapping"
+        elif clean_shared_model in {"false", "否"}:
+            shared_model = False
+            action = "alias_mapping"
+        else:
+            shared_model = False
+            action = "audit_only_fallback"
+        record("shared_model_across_subquestions", raw_shared_model, shared_model, action)
+        features["shared_model_across_subquestions"] = shared_model
 
     try:
         accuracy = float(normalized.get("predicted_accuracy"))
@@ -796,6 +841,14 @@ def _accuracy_scale_audit(
     }
 
 
+def _audit_only_fields(normalization_log: list[dict[str, Any]] | None) -> list[str]:
+    return sorted({
+        str(item.get("field"))
+        for item in normalization_log or []
+        if item.get("action") == "audit_only_fallback" and item.get("field")
+    })
+
+
 def enrich_stage1_rating(
     stage1_rating: dict[str, Any],
     *,
@@ -809,6 +862,9 @@ def enrich_stage1_rating(
     rating["features_model_raw"] = copy.deepcopy(features if features_model_raw is None else features_model_raw)
     rating["enum_normalization_log"] = copy.deepcopy(normalization_log or [])
     rating["enum_normalization_applied"] = bool(normalization_log)
+    audit_only_fields = _audit_only_fields(normalization_log)
+    rating["feature_schema_audit_only"] = bool(audit_only_fields)
+    rating["feature_schema_audit_only_fields"] = audit_only_fields
 
     features["knowledge_points"] = list(dict.fromkeys(value.strip() for value in features["knowledge_points"]))
     rating["knowledge_count_model_raw"] = features["knowledge_count"]
@@ -827,7 +883,10 @@ def enrich_stage1_rating(
     _validate_stage1_metadata(rating, original_accuracy)
 
     active_features = detect_active_features(features)
-    detection = detect_high_difficulty_features(features)
+    detection = (
+        HighDifficultyDetection(names=[], evidence=[], possible_overlap_groups=[])
+        if audit_only_fields else detect_high_difficulty_features(features)
+    )
     multiplier = multiplier_for_high_count(len(detection.names))
     adjusted_accuracy = round(original_accuracy * multiplier, 1)
     rating["original_predicted_accuracy"] = round(original_accuracy, 1)
@@ -840,6 +899,7 @@ def enrich_stage1_rating(
     rating["high_difficulty_feature_evidence"] = detection.evidence
     rating["possible_high_feature_overlaps"] = detection.possible_overlap_groups
     rating["high_difficulty_feature_count"] = len(detection.names)
+    rating["high_difficulty_detection_suppressed"] = bool(audit_only_fields)
     rating["multiplier_applied"] = multiplier
     rating["predicted_accuracy"] = adjusted_accuracy
     rating["difficulty_level_step1"] = map_accuracy_to_level(adjusted_accuracy)

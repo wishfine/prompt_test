@@ -246,8 +246,12 @@ def main() -> None:
     write_mismatches(mismatch_path, mismatches)
     final = report["final"]
     print(
-        f"评测完成：ACC={final['exact_match_rate']}，±1档={final['within_one_level_rate']}，"
-        f"MAE={final['mae']}；报告={report_path}；错配样本={mismatch_path}"
+        "评测完成：\n"
+        f"  ACC：{final['exact_match_rate']}\n"
+        f"  ±1档：{final['within_one_level_rate']}\n"
+        f"  MAE：{final['mae']}\n"
+        f"  报告：{report_path}\n"
+        f"  错配样本：{mismatch_path}"
     )
 
 

@@ -183,7 +183,7 @@ class Stage1Tests(unittest.TestCase):
             "can_reach_88": False, "can_reach_75": True,
             "can_reach_55": True, "can_reach_35": True,
         })
-        self.assertTrue(any(item["action"] == "drop_unknown_method" for item in log))
+        self.assertTrue(any(item["action"] == "audit_only_fallback" for item in log))
 
     def test_legacy_combined_l2_expands_without_losing_knowledge_domain(self):
         rating = stage1_rating(base_features(
@@ -238,6 +238,38 @@ class Stage1Tests(unittest.TestCase):
                 self.assertEqual(
                     normalized["features"]["experiment_requirement"], "方案设计或可行性评价"
                 )
+
+    def test_unknown_feature_uses_audit_only_fallback_without_multiplier(self):
+        rating = stage1_rating(base_features(
+            reaction_relation="未定义的反应关系",
+            substance_count="7种及以上",
+            reaction_count="4个及以上",
+            reasoning_chain="多层因果",
+        ), 80)
+        normalized, log = core.normalize_stage1_rating(rating)
+        enriched = core.enrich_stage1_rating(
+            normalized, features_model_raw=rating["features"], normalization_log=log
+        )
+        self.assertEqual(
+            enriched["features"]["reaction_relation"], core.AUDIT_ONLY_FEATURE_VALUE
+        )
+        self.assertTrue(enriched["feature_schema_audit_only"])
+        self.assertEqual(enriched["feature_schema_audit_only_fields"], ["reaction_relation"])
+        self.assertEqual(enriched["high_difficulty_feature_count"], 0)
+        self.assertEqual(enriched["multiplier_applied"], 1.0)
+
+    def test_unknown_knowledge_l2_uses_audit_only_knowledge_module(self):
+        rating = stage1_rating(base_features(
+            knowledge_L2=["配位化合物"],
+            knowledge_points=["配位化合物"],
+        ), 80)
+        normalized, log = core.normalize_stage1_rating(rating)
+        enriched = core.enrich_stage1_rating(
+            normalized, features_model_raw=rating["features"], normalization_log=log
+        )
+        self.assertEqual(normalized["features"]["knowledge_L2"], [core.AUDIT_ONLY_KNOWLEDGE_L2])
+        self.assertEqual(normalized["features"]["knowledge_L1"], [core.AUDIT_ONLY_KNOWLEDGE_L1])
+        self.assertIn("knowledge_L2", enriched["feature_schema_audit_only_fields"])
 
     def test_model_explicitness_alias_is_normalized(self):
         rating = stage1_rating(base_features(model_explicitness="完全显性"), 80)
