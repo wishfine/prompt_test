@@ -124,7 +124,7 @@ context_type：纯化学 / 生活生产 / 工业流程 / 实验探究 / 科技�
 
 4. 在前三项结构判断完成后，直接估计目标考生完成整题的连续原始正确率。
 
-局部模型熟悉不等于整题正确率高。具体执行时，必须先确定 score_band，再确定该区间内的具体分数。多个课内标准反应组成的长链、多状态流程、多问依赖或多阶段连续失分任务，仍可能对应较低完成率；反过来，出现陌生物质名称、长化学式、流程图、谱图或普通易错概念，不能把低结构题自动估为低完成率。
+局部模型熟悉不等于整题正确率高。多个课内标准反应组成的长链、多状态流程、多问依赖或多阶段连续失分任务，仍可能对应较低完成率；反过来，出现陌生物质名称、长化学式、流程图、谱图或普通易错概念，不能把低结构题自动估为低完成率。
 
 task_completion_structure 描述答案数量和失分传播方式，不能替代 shared_model_across_subquestions。多个设问答案可以互不依赖，但若必须共同理解同一非常规装置、反应网络、平衡体系、工艺流程、统一参数或系统误差模型，仍要把共享模型负担计入 whole_question_burden。
 
@@ -134,9 +134,7 @@ task_completion_structure 描述答案数量和失分传播方式，不能替代
 
 不要先选择档位、区间、端点、中点或习惯分数，再为它补充理由。应基于 local_model_familiarity、whole_question_burden、task_completion_structure 以及题目中的实际失分来源，直接估计：在目标考生中，完成整道题的考生比例约为多少。估分时看完成全部必要任务的可能性，而不是只看最难的局部步骤；同属熟悉模型的题目，若关键条件筛选、信息转换、计算关系或连续依赖不同，其正确率也应不同。只有实质任务结构和主要失分机制相近时，才可给出相近分数。可以输出整数或一位小数；不要反复使用少数模板分数。
 
-先输出 score_band：88及以上 / 75至87.9 / 55至74.9 / 35至54.9 / 35以下。它表示乘数前原始正确率区间，不是最终难度档位。随后在该区间内给出具体 predicted_accuracy；不得先给出分数后再反推 score_band。
-
-score_evidence 只写一段可定位的估分依据，说明哪些任务、条件、转换、计算或依赖会造成失分，以及为什么其完成负担对应所给比例。程序会校验 score_band 与 predicted_accuracy 的一致性，并自动生成档位边界审计信息；不要输出 threshold_review 或 threshold_evidence。
+score_evidence 只写一段可定位的估分依据，说明哪些任务、条件、转换、计算或依赖会造成失分，以及为什么其完成负担对应所给比例。程序会根据 predicted_accuracy 自动生成档位边界审计信息；不要输出 threshold_review 或 threshold_evidence。
 
 ### 输出前自检
 
@@ -194,7 +192,6 @@ score_evidence 只写一段可定位的估分依据，说明哪些任务、条�
   "local_model_familiarity": "熟悉标准模型",
   "whole_question_burden": "较高",
   "task_completion_structure": "单一评分任务",
-  "score_band": "55至74.9",
   "score_evidence": "需要连续完成物质识别、反应验证和条件核对；反应关系显性且主要链条可分解，因此普通考生完成率约为72%。",
   "predicted_accuracy": 72.0
 }
@@ -206,7 +203,7 @@ score_evidence 只写一段可定位的估分依据，说明哪些任务、条�
 
 FEATURE_EXTRACTION_PROMPT_SUFFIX = r"""
 
-请按唯一枚举如实提取 features，依次判断 local_model_familiarity、whole_question_burden、task_completion_structure，先输出乘数处理前的 score_band，再在该区间内估计连续原始 predicted_accuracy，并写出 score_evidence。不要输出档位或 threshold_review、threshold_evidence。只输出合法 JSON。
+请按唯一枚举如实提取 features，依次判断 local_model_familiarity、whole_question_burden、task_completion_structure，再直接估计乘数处理前的连续原始 predicted_accuracy，并写出 score_evidence。不要输出档位或边界字段。只输出合法 JSON。
 """
 
 

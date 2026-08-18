@@ -242,9 +242,6 @@ TASK_COMPLETION_STRUCTURE_OPTIONS = {
 }
 THRESHOLD_REVIEW_KEYS = ("can_reach_88", "can_reach_75", "can_reach_55", "can_reach_35")
 THRESHOLD_EVIDENCE_KEYS = ("boundary_88", "boundary_75", "boundary_55", "boundary_35")
-RAW_SCORE_BAND_OPTIONS = {
-    "88及以上", "75至87.9", "55至74.9", "35至54.9", "35以下",
-}
 
 UNTRUSTED_LABEL_FIELDS = {
     "difficulty", "percent_correct", "answered_count", "teacher_label",
@@ -304,24 +301,6 @@ def map_accuracy_to_level(predicted_accuracy: Any) -> str:
     if accuracy >= 35:
         return "难度4档"
     return "难度5档"
-
-
-def score_band_for_accuracy(predicted_accuracy: Any) -> str:
-    try:
-        accuracy = float(predicted_accuracy)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"predicted_accuracy 必须为数值，实际为 {predicted_accuracy!r}") from exc
-    if not 0 <= accuracy <= 100:
-        raise ValueError("predicted_accuracy 必须位于 0 到 100")
-    if accuracy >= 88:
-        return "88及以上"
-    if accuracy >= 75:
-        return "75至87.9"
-    if accuracy >= 55:
-        return "55至74.9"
-    if accuracy >= 35:
-        return "35至54.9"
-    return "35以下"
 
 
 def multiplier_for_high_count(high_count: int) -> float:
@@ -543,16 +522,6 @@ def normalize_stage1_rating(result: dict[str, Any]) -> tuple[dict[str, Any], lis
     except (TypeError, ValueError):
         accuracy = None
     if accuracy is not None:
-        expected_band = score_band_for_accuracy(accuracy)
-        raw_band = normalized.get("score_band")
-        if raw_band is not None and raw_band != expected_band:
-            normalized["score_band_model_raw"] = copy.deepcopy(raw_band)
-            log.append(_normalization_entry(
-                field="score_band", raw=raw_band, normalized=expected_band,
-                action="derive_from_predicted_accuracy",
-            ))
-        normalized["score_band"] = expected_band
-
         expected = _expected_threshold_review(accuracy)
         raw_review = normalized.get("threshold_review")
         if isinstance(raw_review, dict) and raw_review != expected:
@@ -780,10 +749,6 @@ def _validate_stage1_metadata(rating: dict[str, Any], accuracy: float) -> None:
         raise ValueError("whole_question_burden 非法")
     if rating.get("task_completion_structure") not in TASK_COMPLETION_STRUCTURE_OPTIONS:
         raise ValueError("task_completion_structure 非法")
-    if rating.get("score_band") not in RAW_SCORE_BAND_OPTIONS:
-        raise ValueError("score_band 非法")
-    if rating["score_band"] != score_band_for_accuracy(accuracy):
-        raise ValueError("score_band 与 predicted_accuracy 区间不一致")
     review = rating.get("threshold_review")
     if not isinstance(review, dict) or any(type(review.get(key)) is not bool for key in THRESHOLD_REVIEW_KEYS):
         raise ValueError("threshold_review 必须包含四个布尔值")
