@@ -561,7 +561,7 @@ def build_stage2_fallback(
 ) -> dict[str, Any]:
     return {
         **output_base,
-        "pipeline_version": "high_chemistry_two_stage_v8_continuous_accuracy",
+        "pipeline_version": "high_chemistry_two_stage_v9_score_band_accuracy",
         "model_name": MODEL_NAME,
         "difficulty_rating_stage1": stage1,
         "difficulty_level_step1": stage1["difficulty_level_step1"],
@@ -632,7 +632,7 @@ async def process_question(
             total_usage = {key: usage1[key] + usage2[key] for key in usage1}
             await append_jsonl(output_path, {
                 **output_base,
-                "pipeline_version": "high_chemistry_two_stage_v8_continuous_accuracy",
+                "pipeline_version": "high_chemistry_two_stage_v9_score_band_accuracy",
                 "model_name": MODEL_NAME,
                 "temperature": TEMPERATURE,
                 "stage2_auto_adjustment_enabled": ENABLE_STAGE2_AUTO_ADJUST,

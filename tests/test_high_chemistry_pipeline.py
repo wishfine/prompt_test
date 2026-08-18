@@ -66,6 +66,7 @@ def stage1_rating(features=None, accuracy=90.0):
         "features": copy.deepcopy(features or base_features()),
         "reason": "教材直接概念辨析，只有一个评分任务。",
         "score_evidence": "教材直接概念辨析，只有一个评分任务。",
+        "score_band": core.score_band_for_accuracy(accuracy),
         "local_model_familiarity": "教材直接结论",
         "whole_question_burden": "低",
         "task_completion_structure": "单一评分任务",
@@ -96,6 +97,17 @@ class AccuracyAndSchemaTests(unittest.TestCase):
         for value, expected in cases:
             with self.subTest(value=value):
                 self.assertEqual(core.map_accuracy_to_level(value), expected)
+
+    def test_score_bands_follow_raw_accuracy_intervals(self):
+        cases = [
+            (88, "88及以上"), (87.9, "75至87.9"),
+            (75, "75至87.9"), (74.9, "55至74.9"),
+            (55, "55至74.9"), (54.9, "35至54.9"),
+            (35, "35至54.9"), (34.9, "35以下"),
+        ]
+        for value, expected in cases:
+            with self.subTest(value=value):
+                self.assertEqual(core.score_band_for_accuracy(value), expected)
 
     def test_l1_must_match_l2(self):
         features = base_features(
@@ -318,6 +330,14 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(
             enriched["threshold_evidence"]["boundary_75"], rating["score_evidence"]
         )
+
+    def test_score_band_mismatch_is_normalized_and_logged(self):
+        rating = stage1_rating(accuracy=80)
+        rating["score_band"] = "55至74.9"
+        normalized, log = core.normalize_stage1_rating(rating)
+        self.assertEqual(normalized["score_band"], "75至87.9")
+        self.assertEqual(normalized["score_band_model_raw"], "55至74.9")
+        self.assertTrue(any(item["field"] == "score_band" for item in log))
 
     def test_multiplier_is_applied_after_original_accuracy(self):
         features = base_features(
@@ -567,12 +587,12 @@ class PromptAssetTests(unittest.TestCase):
             "task_completion_structure", "score_evidence",
             "不得把各选项判断正确率相乘",
             "不得把四项正确率机械相乘",
-            "不要先选择档位、区间、端点、中点或习惯分数",
+            "先输出 score_band",
             "不要输出 threshold_review 或 threshold_evidence",
         ):
             self.assertIn(phrase, text)
 
-    def test_stage1_prompt_does_not_require_numeric_boundary_review(self):
+    def test_stage1_prompt_requires_one_score_band_not_four_boundary_reviews(self):
         path = ROOT / "prompts" / "高中化学难度打标提示词.txt"
         namespace = {}
         exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), namespace)
@@ -580,7 +600,7 @@ class PromptAssetTests(unittest.TestCase):
             namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
             + namespace["FEATURE_EXTRACTION_PROMPT_SUFFIX"]
         )
-        self.assertNotIn("88、75、55、35", stage1_prompt)
+        self.assertIn("score_band", stage1_prompt)
         self.assertIn("不要输出 threshold_review 或 threshold_evidence", stage1_prompt)
 
     def test_prompt_defines_task_modeling_without_task_unit_schema(self):
@@ -596,7 +616,7 @@ class RunnerAssetTests(unittest.TestCase):
 
     def test_runner_compiles(self):
         compile(self.source, str(self.path), "exec")
-        self.assertIn('"high_chemistry_two_stage_v8_continuous_accuracy"', self.source)
+        self.assertIn('"high_chemistry_two_stage_v9_score_band_accuracy"', self.source)
         self.assertIn("_stage1_repair_feedback", self.source)
         self.assertIn("_is_retriable_image_download_timeout", self.source)
         self.assertIn("timeout while downloading url", self.source)
