@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional, Sequence
 try:
     from chemistry_observable_features_fxz import (
         OBSERVABLE_FEATURE_FIELDS,
-        OBSERVABLE_FALLBACK_LABELS,
         derive_observable_metrics,
         normalize_observable_features,
         observable_feature_quality_flags,
@@ -22,7 +21,6 @@ try:
 except ModuleNotFoundError:
     from src.chemistry_observable_features_fxz import (
         OBSERVABLE_FEATURE_FIELDS,
-        OBSERVABLE_FALLBACK_LABELS,
         derive_observable_metrics,
         normalize_observable_features,
         observable_feature_quality_flags,
@@ -47,6 +45,11 @@ VISUAL_REFERENCE_RE = re.compile(
     r"曲线|坐标图|关系图|图像|图象|表格|微观示意|粒子图|"
     r"看图|观察图|由图|据图|结合图)"
 )
+
+# 规则保留候选动作与证据，但不自动改写最终档位；待积累题目口径后再收紧。
+TEACHER_GUARD_CANDIDATE_ONLY_RULES = {
+    "teacher_basic_to_medium_parallel_phenomena_multitopic",
+}
 
 
 def is_observable_feature_contract(features: Any) -> bool:
@@ -226,23 +229,6 @@ def observable_multistage_multiquestion_multireaction_final_signal(
         and validated["solution_topology"]
         == "多阶段反应网络"
         and validated["reaction_structure"] != "无反应任务"
-        and "多反应定量关系"
-        in validated["calculation_operations"]
-    )
-
-
-def observable_double_source_multireaction_final_signal(
-    features: Dict[str, Any],
-) -> bool:
-    """识别双来源交叉验证与多反应定量共同出现的压轴窄通道。
-
-    不依赖小问数、任务数或链长的精确分拆；任一信号缺失均不触发。
-    """
-    if not is_observable_feature_contract(features):
-        return False
-    validated = validate_observable_features(features)
-    return bool(
-        validated["solution_topology"] == "双来源交叉验证"
         and "多反应定量关系"
         in validated["calculation_operations"]
     )
@@ -605,75 +591,14 @@ def count_reaction_arrows(text: str) -> int:
     )
 
 
-def parallel_application_floor_signal(
-    data: Dict[str, Any],
-) -> Optional[str]:
-    """识别不应落入纯直接检索的窄结构。
-
-    这些信号只建立基础题下限，不按物质名直接定档。所有判断均来自
-    题干和选项，不读取解析，也不依赖模型自报的 Core-12。
-    """
-    text = visible_text(data, include_analysis=False)
-    if count_choice_options(data) < 4:
-        return None
-
-    if (
-        re.search(
-            r"长期(?:暴露|露置)|长时间(?:暴露|露置)|"
-            r"久置|敞口放置",
-            text,
-        )
-    ):
-        return "多种物质在空气中变化需要分别应用吸水、挥发或反应规则"
-
-    numbered_items = re.findall(
-        r"(?:[①②③④⑤⑥⑦⑧⑨⑩]|"
-        r"(?<!\d)[（\(][1-9][）\)])",
-        text,
-    )
-    if (
-        len(numbered_items) >= 5
-        and re.search(r"(?:分别)?(?:放入|加入).{0,20}水", text)
-        and "充分搅拌" in text
-        and "得到溶液" in text
-    ):
-        return "多种材料需逐项判断分散体系形成条件"
-
-    property_families = sum(
-        bool(re.search(pattern, text))
-        for pattern in (
-            r"用途|清洁|清洗|去油污",
-            r"腐蚀|安全|皮肤|危险",
-            r"变质|久置|空气|密封",
-            r"指示剂|酚酞|石蕊|酸碱性",
-        )
-    )
-    if property_families >= 3:
-        return "同一物质的用途、安全、保存或指示剂性质需切换多类规则"
-
-    periodic_families = sum(
-        bool(re.search(pattern, text))
-        for pattern in (
-            r"元素符号|符号为",
-            r"质子数|电子数|原子序数",
-            r"相对原子质量|原子质量",
-            r"属于.{0,3}(?:金属|非金属)元素",
-        )
-    )
-    if periodic_families >= 3:
-        return "元素信息题同时核验符号、粒子数、类别或相对原子质量"
-
-    return None
-
-
 def observable_multi_rule_multitopic_medium_signal(
     model_features: Dict[str, Any],
 ) -> Optional[str]:
     """V5下窄化的“基础→中等”多规则跨课题信号。
 
     只接受正式 V5 十七项契约，并同时要求至少四项任务、
-    三类具体回答规则和两个课题；题长、小问数或单纯跨课题
-    都不能单独触发。
+    三类具体回答规则、两个课题和必要视觉表征。题长、小问数、
+    单纯跨课题或不依赖图示的并列直接回答都不能单独触发。
     """
     if not is_observable_feature_contract(model_features):
         return None
@@ -682,6 +607,8 @@ def observable_multi_rule_multitopic_medium_signal(
         metrics["effective_task_count"] >= 4
         and metrics["rule_family_count"] >= 3
         and metrics["curriculum_topic_count"] >= 2
+        and model_features.get("visual_task_structure")
+        != "无必要视觉信息"
     ):
         return None
     return (
@@ -793,206 +720,6 @@ def reaction_validation_floor_signal(
         return "每个候选同时核验方程式事实、配平条件和反应类型"
 
     return None
-
-
-def _valid_operations(features: Dict[str, Any], field: str) -> set[str]:
-    return set(features[field]) - OBSERVABLE_FALLBACK_LABELS
-
-
-def _has_cross_module_fusion(metrics: Dict[str, Any]) -> bool:
-    return bool(
-        metrics["curriculum_unit_count"] >= 2
-        and metrics["curriculum_coupling_type"]
-        not in {"同单元跨课题并列", "跨单元并列"}
-    )
-
-
-def _has_nontrivial_chain(features: Dict[str, Any], metrics: Dict[str, Any]) -> bool:
-    return bool(
-        _valid_operations(features, "condition_operations")
-        or _valid_operations(features, "representation_operations")
-        or _valid_operations(features, "evidence_operations")
-        or _valid_operations(features, "calculation_operations")
-        or features["reaction_structure"] != "无反应任务"
-        or features["experiment_operation"] != "无"
-        or features["graph_table_operation"] != "无"
-        or features["new_information_operation"] != "无新信息"
-        or metrics["longest_chain_steps"] > 1
-    )
-
-
-def _has_advanced_experiment(features: Dict[str, Any]) -> bool:
-    return bool(
-        features["experiment_operation"]
-        in {
-            "变量控制",
-            "现象解释",
-            "数据归纳",
-            "方案设计",
-            "方案评价或补充实验",
-            "多阶段定量探究",
-        }
-        or features["error_analysis_operation"]
-        in {"多因素误差比较", "定量误差修正"}
-        or (
-            features["error_analysis_operation"]
-            in {
-                "读数偏差到实际量判断",
-                "操作偏差到最终结果方向",
-            }
-            and features["experiment_operation"] == "基础操作或读数"
-        )
-    )
-
-
-def _has_high_evidence(features: Dict[str, Any]) -> bool:
-    return bool(
-        _valid_operations(features, "evidence_operations")
-        & {
-            "多证据共同成立",
-            "排除一个候选",
-            "排除多个候选解释",
-            "处理冲突证据",
-            "补充实验获得唯一结论",
-        }
-    )
-
-
-def coordinated_multigraph_reaction_signal(
-    features: Dict[str, Any],
-    metrics: Dict[str, Any],
-    data: Dict[str, Any],
-) -> bool:
-    """识别同一反应进程中三幅以上关联图像的联合反推。"""
-    text = visible_text(data, include_analysis=False)
-    figure_markers: set[str] = set()
-    for left, right in re.findall(
-        r"([甲乙丙丁戊己])\s*图|图\s*([甲乙丙丁戊己])",
-        text,
-    ):
-        figure_markers.add(left or right)
-    return bool(
-        len(figure_markers) >= 3
-        and re.search(r"同一.{0,8}(?:实验|反应|过程)", text)
-        and re.search(r"随.{0,6}(?:时间|反应).{0,8}变化", text)
-        and features["graph_table_operation"] == "拐点平台或分段"
-        and _has_cross_module_fusion(metrics)
-        and metrics["representation_operation_count"] >= 2
-        and metrics["condition_operation_count"] >= 2
-        and _has_high_evidence(features)
-    )
-
-
-def cross_module_knowledge_breadth_signal(
-    features: Dict[str, Any],
-    metrics: Dict[str, Any],
-    data: Dict[str, Any],
-) -> bool:
-    """识别跨多个生活板块、含大量独立判断的知识归纳题。"""
-    text = visible_text(data, include_analysis=False)
-    numbered_items = re.findall(
-        r"[①②③④⑤⑥⑦⑧⑨⑩]|(?<!\d)[（\(][1-9][）\)]",
-        text,
-    )
-    knowledge_sections = re.findall(
-        r"化学与[\u4e00-\u9fff]{1,8}",
-        text,
-    )
-    return bool(
-        len(numbered_items) >= 8
-        and len(knowledge_sections) >= 3
-        and metrics["longest_chain_steps"] <= 1
-        and _has_cross_module_fusion(metrics)
-        and metrics["representation_operation_count"] == 0
-        and features["experiment_operation"] == "无"
-        and features["graph_table_operation"] == "无"
-        and metrics["calculation_operation_count"] == 0
-        and features["parallel_task_relation"]
-        in {"同一规则下多个对象", "不同规则的独立任务"}
-    )
-
-
-def controllable_gas_scheme_signal(
-    features: Dict[str, Any],
-    metrics: Dict[str, Any],
-    data: Dict[str, Any],
-) -> bool:
-    """识别可随开随停装置对多组气体制备方案的双约束筛选。"""
-    text = visible_text(data, include_analysis=False)
-    numbered_items = re.findall(
-        r"[①②③④⑤⑥⑦⑧⑨⑩]|(?<!\d)[（\(][1-9][）\)]",
-        text,
-    )
-    return bool(
-        len(numbered_items) >= 4
-        and contains_any(text, ["制备气体", "制取气体"])
-        and re.search(
-            r"控制反应的(?:发生与停止|发生和停止)|"
-            r"随时控制反应|随开随停|启普发生器",
-            text,
-        )
-        and metrics["condition_operation_count"] >= 2
-        and features["experiment_operation"] != "无"
-    )
-
-
-def multi_activity_project_signal(
-    features: Dict[str, Any],
-    metrics: Dict[str, Any],
-    data: Dict[str, Any],
-) -> bool:
-    """识别至少两项活动、三项实验构成的项目式探究链。"""
-    text = visible_text(data, include_analysis=False)
-    activity_markers = set(
-        re.findall(r"活动\s*[一二三四五六123456]", text)
-    )
-    experiment_markers = set(
-        re.findall(r"实验\s*[一二三四五六123456]", text)
-    )
-    return bool(
-        contains_any(text, ["项目式学习", "项目学习"])
-        and len(activity_markers) >= 2
-        and len(experiment_markers) >= 3
-        and metrics["condition_operation_count"] >= 2
-        and _has_advanced_experiment(features)
-    )
-
-
-def dense_project_experiment_signal(
-    features: Dict[str, Any],
-    metrics: Dict[str, Any],
-    data: Dict[str, Any],
-) -> bool:
-    text = visible_text(data, include_analysis=False)
-    experiment_markers = set(re.findall(
-        r"实验[一二三四五六123456]",
-        text,
-    ))
-    all_markers = set(re.findall(
-        r"(?:活动|任务|实验)[一二三四五六123456]",
-        text,
-    ))
-    return bool(
-        len(experiment_markers) >= 4
-        and len(all_markers) >= 6
-        and metrics["condition_operation_count"] >= 2
-        and _has_high_evidence(features)
-        and _has_advanced_experiment(features)
-    )
-
-
-def strong_segment_graph_chain_signal(
-    features: Dict[str, Any],
-    metrics: Dict[str, Any],
-) -> bool:
-    return bool(
-        features["graph_table_operation"] == "拐点平台或分段"
-        and _has_cross_module_fusion(metrics)
-        and metrics["representation_operation_count"] >= 2
-        and metrics["condition_operation_count"] >= 2
-        and _has_high_evidence(features)
-        and _has_advanced_experiment(features)
-    )
 
 
 def sync_reasoning_after_postprocess(rating_result: Dict[str, Any]) -> None:
@@ -1155,7 +882,6 @@ def postprocess_chemistry_difficulty(
         or teacher_distribution_guards_writeback_enabled
     )
     teacher_candidate_result = copy.deepcopy(rating_result)
-    parallel_floor = parallel_application_floor_signal(data)
     easy_many_fill_blank_subquestions_floor = (
         fill_blank_subquestion_count(data or {}) >= 4
     )
@@ -1177,29 +903,6 @@ def postprocess_chemistry_difficulty(
     if teacher_guard_active:
         if (
             raw_level == "送分题"
-            and reaction_floor
-        ):
-            set_level_with_reason(
-                teacher_candidate_result,
-                "中等题",
-                "严重低估安全底线：多选项连续反应核验不是直接识记",
-                rule="teacher_easy_to_medium_reaction_conversion_floor",
-                evidence=[reaction_floor],
-                max_level_distance=2,
-            )
-        elif (
-            raw_level == "送分题"
-            and parallel_floor
-        ):
-            set_level_with_reason(
-                teacher_candidate_result,
-                "基础题",
-                "严重低估安全底线：多个对象需要切换不同化学应用规则",
-                rule="teacher_easy_to_basic_parallel_application_floor",
-                evidence=[parallel_floor],
-            )
-        elif (
-            raw_level == "送分题"
             and easy_many_fill_blank_subquestions_floor
         ):
             set_level_with_reason(
@@ -1210,29 +913,6 @@ def postprocess_chemistry_difficulty(
                 evidence=[
                     "填空小问数="
                     + str(fill_blank_subquestion_count(data or {})),
-                ],
-            )
-        elif (
-            raw_level == "基础题"
-            and model_features.get("error_analysis_operation")
-            in {
-                "读数偏差到实际量判断",
-                "操作偏差到最终结果方向",
-            }
-            and len(model_features["longest_solution_chain"]) >= 2
-        ):
-            set_level_with_reason(
-                teacher_candidate_result,
-                "中等题",
-                "结构边界窄校准：误差题需要由偏差来源连续推到实际量或最终结果",
-                rule="teacher_basic_to_medium_observable_error_chain",
-                evidence=[
-                    "误差操作="
-                    + model_features["error_analysis_operation"],
-                    "最长链="
-                    + " → ".join(
-                        model_features["longest_solution_chain"]
-                    ),
                 ],
             )
         elif (
@@ -1283,71 +963,6 @@ def postprocess_chemistry_difficulty(
                 evidence=[reaction_floor],
             )
         elif (
-            raw_level == "基础题"
-            and controllable_gas_scheme_signal(
-                model_features, observable_metrics, data
-            )
-        ):
-            set_level_with_reason(
-                teacher_candidate_result,
-                "中等题",
-                "严重低估安全底线：可控气体发生装置需对多组方案进行双约束筛选",
-                rule="teacher_basic_to_medium_controllable_gas_scheme_floor",
-                evidence=[
-                    "题面同时出现可随开随停装置和四组以上制气方案",
-                    "条件操作数="
-                    + str(observable_metrics["condition_operation_count"]),
-                    "实验操作=" + model_features["experiment_operation"],
-                ],
-            )
-        elif (
-            raw_level == "基础题"
-            and cross_module_knowledge_breadth_signal(
-                model_features, observable_metrics, data
-            )
-        ):
-            set_level_with_reason(
-                teacher_candidate_result,
-                "中等题",
-                "严重低估安全底线：跨多个生活板块的大量独立判断形成真实任务广度",
-                rule="teacher_basic_to_medium_cross_module_breadth_floor",
-                evidence=[
-                    "题面包含三个以上知识板块和八项以上独立判断",
-                    "课程单元数="
-                    + str(observable_metrics["curriculum_unit_count"]),
-                    "并行任务关系="
-                    + model_features["parallel_task_relation"],
-                ],
-            )
-        elif (
-            raw_level == "基础题"
-            and _has_nontrivial_chain(model_features, observable_metrics)
-            and observable_metrics["condition_operation_count"] == 2
-            and (
-                observable_metrics["curriculum_topic_count"] >= 2
-                or observable_metrics["rule_family_count"] >= 2
-            )
-            and observable_metrics["representation_operation_count"] >= 1
-        ):
-            set_level_with_reason(
-                teacher_candidate_result,
-                "中等题",
-                "结构边界窄校准：关联约束、知识关系与表征转换共同形成完整常规模型",
-                rule="teacher_basic_to_medium_linked_application",
-                evidence=[
-                    "最长链步骤="
-                    + str(observable_metrics["longest_chain_steps"]),
-                    "条件操作数="
-                    + str(observable_metrics["condition_operation_count"]),
-                    "课题数="
-                    + str(observable_metrics["curriculum_topic_count"]),
-                    "表征操作数="
-                    + str(
-                        observable_metrics["representation_operation_count"]
-                    ),
-                ],
-            )
-        elif (
             raw_level == "中等题"
             and high_density_evidence_hard
         ):
@@ -1357,96 +972,6 @@ def postprocess_chemistry_difficulty(
                 "结构边界窄校准：高密度回答规则与多证据联合形成综合分析链",
                 rule="teacher_medium_to_hard_high_density_evidence",
                 evidence=[high_density_evidence_hard],
-            )
-        elif (
-            raw_level == "中等题"
-            and coordinated_multigraph_reaction_signal(
-                model_features, observable_metrics, data
-            )
-        ):
-            set_level_with_reason(
-                teacher_candidate_result,
-                "拔高题",
-                "严重低估安全底线：三幅以上关联图像共同描述同一反应进程",
-                rule="teacher_medium_to_hard_coordinated_multigraph_floor",
-                evidence=[
-                    "图表操作=" + model_features["graph_table_operation"],
-                    "表征操作数="
-                    + str(
-                        observable_metrics["representation_operation_count"]
-                    ),
-                    "条件操作数="
-                    + str(observable_metrics["condition_operation_count"]),
-                    "证据操作="
-                    + "、".join(model_features["evidence_operations"]),
-                ],
-            )
-        elif (
-            raw_level == "中等题"
-            and observable_metrics["longest_chain_steps"] >= 2
-            and dense_project_experiment_signal(
-                model_features, observable_metrics, data
-            )
-        ):
-            set_level_with_reason(
-                teacher_candidate_result,
-                "拔高题",
-                "严重低估安全底线：四个以上实验形成变量、证据和方案的项目链",
-                rule="teacher_medium_to_hard_dense_project_floor",
-                evidence=[
-                    "最长链步骤="
-                    + str(observable_metrics["longest_chain_steps"]),
-                    "实验操作=" + model_features["experiment_operation"],
-                    "条件操作数="
-                    + str(observable_metrics["condition_operation_count"]),
-                    "证据操作="
-                    + "、".join(model_features["evidence_operations"]),
-                ],
-            )
-        elif (
-            raw_level == "中等题"
-            and multi_activity_project_signal(
-                model_features, observable_metrics, data
-            )
-        ):
-            set_level_with_reason(
-                teacher_candidate_result,
-                "拔高题",
-                "严重低估安全底线：多活动、多实验共同形成变量与证据项目链",
-                rule="teacher_medium_to_hard_multi_activity_project_floor",
-                evidence=[
-                    "题面包含至少两项活动和三项实验",
-                    "实验操作=" + model_features["experiment_operation"],
-                    "条件操作数="
-                    + str(observable_metrics["condition_operation_count"]),
-                ],
-            )
-        elif (
-            raw_level == "中等题"
-            and observable_metrics["longest_chain_steps"] >= 2
-            and strong_segment_graph_chain_signal(
-                model_features, observable_metrics
-            )
-        ):
-            set_level_with_reason(
-                teacher_candidate_result,
-                "拔高题",
-                "结构边界窄校准：分段图像与跨模块表征、约束和实验证据共同建模",
-                rule="teacher_medium_to_hard_strong_graph_chain",
-                evidence=[
-                    "最长链步骤="
-                    + str(observable_metrics["longest_chain_steps"]),
-                    "图表操作=" + model_features["graph_table_operation"],
-                    "课程单元数="
-                    + str(observable_metrics["curriculum_unit_count"]),
-                    "表征操作数="
-                    + str(
-                        observable_metrics["representation_operation_count"]
-                    ),
-                    "条件操作数="
-                    + str(observable_metrics["condition_operation_count"]),
-                    "实验操作=" + model_features["experiment_operation"],
-                ],
             )
         elif (
             raw_level == "拔高题"
@@ -1477,29 +1002,6 @@ def postprocess_chemistry_difficulty(
                         model_features["longest_solution_chain"]
                     ),
                     "高级计算="
-                    + "、".join(
-                        model_features["calculation_operations"]
-                    ),
-                ],
-            )
-        elif (
-            raw_level == "拔高题"
-            and observable_double_source_multireaction_final_signal(
-                model_features
-            )
-        ):
-            set_level_with_reason(
-                teacher_candidate_result,
-                "压轴题",
-                "结构边界窄校准：双来源交叉验证与多反应定量关系共同定解",
-                rule=(
-                    "teacher_hard_to_final_"
-                    "double_source_multireaction"
-                ),
-                evidence=[
-                    "解题拓扑="
-                    + model_features["solution_topology"],
-                    "计算操作="
                     + "、".join(
                         model_features["calculation_operations"]
                     ),
@@ -1582,11 +1084,17 @@ def postprocess_chemistry_difficulty(
         if teacher_guard_action
         else raw_level
     )
+    teacher_guard_candidate_only = bool(
+        teacher_guard_action
+        and teacher_guard_action.get("rule")
+        in TEACHER_GUARD_CANDIDATE_ONLY_RULES
+    )
 
     teacher_guard_writeback_applied = bool(
         teacher_distribution_guards_writeback_enabled
         and teacher_guard_action
         and not feature_quality_blocks_writeback
+        and not teacher_guard_candidate_only
     )
     if teacher_guard_writeback_applied:
         rating_result = teacher_candidate_result
@@ -1606,6 +1114,8 @@ def postprocess_chemistry_difficulty(
         "特征存在兜底或证据不完整，禁止自动写回："
         + "、".join(feature_quality_flags)
         if teacher_guard_action and feature_quality_blocks_writeback
+        else "该规则当前仅记录候选动作，等待结合题目口径收紧后再开放写回"
+        if teacher_guard_candidate_only
         else ""
     )
 
@@ -1623,6 +1133,11 @@ def postprocess_chemistry_difficulty(
         rating_result["feature_audit_flags"].append(
             "特征存在仅审计兜底或证据不完整，已阻止自动写回："
             + "、".join(feature_quality_flags)
+        )
+    elif teacher_guard_candidate_only:
+        rating_result["feature_audit_flags"].append(
+            "规则当前仅审计，不自动写回最终档位："
+            + str(teacher_guard_action.get("rule", ""))
         )
     elif (
         teacher_guard_action
