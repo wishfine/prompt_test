@@ -65,6 +65,7 @@ def stage1_rating(features=None, accuracy=90.0):
     return {
         "features": copy.deepcopy(features or base_features()),
         "reason": "教材直接概念辨析，只有一个评分任务。",
+        "score_evidence": "教材直接概念辨析，只有一个评分任务。",
         "local_model_familiarity": "教材直接结论",
         "whole_question_burden": "低",
         "task_completion_structure": "单一评分任务",
@@ -239,12 +240,15 @@ class Stage1Tests(unittest.TestCase):
                     normalized["features"]["experiment_requirement"], "方案设计或可行性评价"
                 )
 
-    def test_unknown_feature_uses_audit_only_fallback_without_multiplier(self):
+    def test_unknown_feature_uses_audit_only_fallback_without_disabling_multiplier(self):
         rating = stage1_rating(base_features(
             reaction_relation="未定义的反应关系",
             substance_count="7种及以上",
             reaction_count="4个及以上",
             reasoning_chain="多层因果",
+            constraint_structure="多约束联合筛选",
+            model_relation="多模型或多平衡耦合",
+            process_state_relation="前后状态强依赖",
         ), 80)
         normalized, log = core.normalize_stage1_rating(rating)
         enriched = core.enrich_stage1_rating(
@@ -253,9 +257,7 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(
             enriched["features"]["reaction_relation"], core.AUDIT_ONLY_FEATURE_VALUE
         )
-        self.assertTrue(enriched["feature_schema_audit_only"])
-        self.assertEqual(enriched["feature_schema_audit_only_fields"], ["reaction_relation"])
-        self.assertEqual(enriched["high_difficulty_feature_count"], 0)
+        self.assertGreaterEqual(enriched["high_difficulty_feature_count"], 2)
         self.assertEqual(enriched["multiplier_applied"], 1.0)
 
     def test_unknown_knowledge_l2_uses_audit_only_knowledge_module(self):
@@ -269,7 +271,10 @@ class Stage1Tests(unittest.TestCase):
         )
         self.assertEqual(normalized["features"]["knowledge_L2"], [core.AUDIT_ONLY_KNOWLEDGE_L2])
         self.assertEqual(normalized["features"]["knowledge_L1"], [core.AUDIT_ONLY_KNOWLEDGE_L1])
-        self.assertIn("knowledge_L2", enriched["feature_schema_audit_only_fields"])
+        self.assertTrue(any(
+            item["field"] == "knowledge_L2" and item["action"] == "audit_only_fallback"
+            for item in log
+        ))
 
     def test_model_explicitness_alias_is_normalized(self):
         rating = stage1_rating(base_features(model_explicitness="完全显性"), 80)
@@ -288,11 +293,31 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(enriched["features"]["knowledge_count"], "4个及以上")
         self.assertEqual(enriched["features"]["knowledge_scope"], "跨模块综合")
 
-    def test_threshold_review_must_match_accuracy(self):
+    def test_threshold_review_is_derived_from_accuracy(self):
         rating = stage1_rating(accuracy=80)
         rating["threshold_review"]["can_reach_88"] = True
-        with self.assertRaisesRegex(ValueError, "区间不一致"):
-            core.enrich_stage1_rating(rating)
+        normalized, _ = core.normalize_stage1_rating(rating)
+        self.assertEqual(normalized["threshold_review"], {
+            "can_reach_88": False, "can_reach_75": True,
+            "can_reach_55": True, "can_reach_35": True,
+        })
+
+    def test_stage1_without_boundary_fields_is_enriched(self):
+        rating = stage1_rating(accuracy=80)
+        rating.pop("threshold_review")
+        rating.pop("threshold_evidence")
+        normalized, log = core.normalize_stage1_rating(rating)
+        enriched = core.enrich_stage1_rating(
+            normalized, features_model_raw=rating["features"], normalization_log=log
+        )
+        self.assertEqual(enriched["difficulty_level_step1"], "难度2档")
+        self.assertEqual(enriched["threshold_review"], {
+            "can_reach_88": False, "can_reach_75": True,
+            "can_reach_55": True, "can_reach_35": True,
+        })
+        self.assertEqual(
+            enriched["threshold_evidence"]["boundary_75"], rating["score_evidence"]
+        )
 
     def test_multiplier_is_applied_after_original_accuracy(self):
         features = base_features(
@@ -535,16 +560,28 @@ class PromptAssetTests(unittest.TestCase):
         text = (ROOT / "prompts" / "高中化学难度打标提示词.txt").read_text(encoding="utf-8")
         self.assertIn("知识模块只标注解题必需的化学知识，不按工业流程、生活生产等情境分类", text)
 
-    def test_prompt_requires_four_step_accuracy_review_and_option_detail(self):
+    def test_prompt_requires_continuous_accuracy_estimate_and_option_detail(self):
         text = (ROOT / "prompts" / "高中化学难度打标提示词.txt").read_text(encoding="utf-8")
         for phrase in (
             "local_model_familiarity", "whole_question_burden",
-            "task_completion_structure", "88、75、55、35",
+            "task_completion_structure", "score_evidence",
             "不得把各选项判断正确率相乘",
             "不得把四项正确率机械相乘",
-            "三个及以上关联状态", "四个及以上强依赖反应",
+            "不要先选择档位、区间、端点、中点或习惯分数",
+            "不要输出 threshold_review 或 threshold_evidence",
         ):
             self.assertIn(phrase, text)
+
+    def test_stage1_prompt_does_not_require_numeric_boundary_review(self):
+        path = ROOT / "prompts" / "高中化学难度打标提示词.txt"
+        namespace = {}
+        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), namespace)
+        stage1_prompt = (
+            namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
+            + namespace["FEATURE_EXTRACTION_PROMPT_SUFFIX"]
+        )
+        self.assertNotIn("88、75、55、35", stage1_prompt)
+        self.assertIn("不要输出 threshold_review 或 threshold_evidence", stage1_prompt)
 
     def test_prompt_defines_task_modeling_without_task_unit_schema(self):
         text = (ROOT / "prompts" / "高中化学难度打标提示词.txt").read_text(encoding="utf-8")
@@ -559,7 +596,7 @@ class RunnerAssetTests(unittest.TestCase):
 
     def test_runner_compiles(self):
         compile(self.source, str(self.path), "exec")
-        self.assertIn('"high_chemistry_two_stage_v7"', self.source)
+        self.assertIn('"high_chemistry_two_stage_v8_continuous_accuracy"', self.source)
         self.assertIn("_stage1_repair_feedback", self.source)
         self.assertIn("_is_retriable_image_download_timeout", self.source)
         self.assertIn("timeout while downloading url", self.source)
