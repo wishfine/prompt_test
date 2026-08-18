@@ -561,7 +561,7 @@ def build_stage2_fallback(
 ) -> dict[str, Any]:
     return {
         **output_base,
-        "pipeline_version": "high_chemistry_two_stage_v8_continuous_accuracy",
+        "pipeline_version": "high_chemistry_two_stage_v7",
         "model_name": MODEL_NAME,
         "difficulty_rating_stage1": stage1,
         "difficulty_level_step1": stage1["difficulty_level_step1"],
@@ -570,6 +570,31 @@ def build_stage2_fallback(
         "final_adjustment": "第二阶段失败，维持第一阶段并转人工复核",
         "needs_manual_review": True,
         "pipeline_warning": f"stage2_failed: {type(error).__name__}: {error}",
+        "api_stage1_time_seconds": round(elapsed1, 2),
+        "api_stage1_usage": usage1,
+    }
+
+
+def build_audit_only_feature_result(
+    output_base: dict[str, Any],
+    stage1: dict[str, Any],
+    usage1: dict[str, int],
+    elapsed1: float,
+) -> dict[str, Any]:
+    fields = "、".join(stage1.get("feature_schema_audit_only_fields", []))
+    return {
+        **output_base,
+        "pipeline_version": "high_chemistry_two_stage_v7",
+        "model_name": MODEL_NAME,
+        "temperature": TEMPERATURE,
+        "stage2_auto_adjustment_enabled": ENABLE_STAGE2_AUTO_ADJUST,
+        "difficulty_rating_stage1": stage1,
+        "difficulty_level_step1": stage1["difficulty_level_step1"],
+        "verification": None,
+        "final_difficulty_level": stage1["difficulty_level_step1"],
+        "final_adjustment": "特征存在仅审计兜底值，维持第一阶段并转人工复核",
+        "needs_manual_review": True,
+        "pipeline_warning": f"feature_schema_audit_only: {fields}",
         "api_stage1_time_seconds": round(elapsed1, 2),
         "api_stage1_usage": usage1,
     }
@@ -604,6 +629,12 @@ async def process_question(
                 image_urls=prepared.selected_image_urls, cache_state=cache_state,
                 retries=retries, timeout=timeout,
             )
+            if stage1["feature_schema_audit_only"]:
+                await append_jsonl(
+                    output_path,
+                    build_audit_only_feature_result(output_base, stage1, usage1, elapsed1),
+                )
+                return
             try:
                 verification, usage2, elapsed2 = await call_stage2(
                     session=session, question_text=question_text,
@@ -632,7 +663,7 @@ async def process_question(
             total_usage = {key: usage1[key] + usage2[key] for key in usage1}
             await append_jsonl(output_path, {
                 **output_base,
-                "pipeline_version": "high_chemistry_two_stage_v8_continuous_accuracy",
+                "pipeline_version": "high_chemistry_two_stage_v7",
                 "model_name": MODEL_NAME,
                 "temperature": TEMPERATURE,
                 "stage2_auto_adjustment_enabled": ENABLE_STAGE2_AUTO_ADJUST,

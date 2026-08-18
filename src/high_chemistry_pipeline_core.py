@@ -521,25 +521,16 @@ def normalize_stage1_rating(result: dict[str, Any]) -> tuple[dict[str, Any], lis
         accuracy = float(normalized.get("predicted_accuracy"))
     except (TypeError, ValueError):
         accuracy = None
-    if accuracy is not None:
+    raw_review = normalized.get("threshold_review")
+    if accuracy is not None and isinstance(raw_review, dict):
         expected = _expected_threshold_review(accuracy)
-        raw_review = normalized.get("threshold_review")
-        if isinstance(raw_review, dict) and raw_review != expected:
+        if raw_review != expected:
             normalized["threshold_review_model_raw"] = copy.deepcopy(raw_review)
+            normalized["threshold_review"] = expected
             log.append(_normalization_entry(
                 field="threshold_review", raw=raw_review, normalized=expected,
                 action="derive_from_predicted_accuracy",
             ))
-        normalized["threshold_review"] = expected
-
-    score_evidence = str(normalized.get("score_evidence") or normalized.get("reason") or "").strip()
-    normalized["score_evidence"] = score_evidence
-    raw_evidence = normalized.get("threshold_evidence")
-    if isinstance(raw_evidence, dict):
-        normalized["threshold_evidence_model_raw"] = copy.deepcopy(raw_evidence)
-    normalized["threshold_evidence"] = {
-        key: score_evidence for key in THRESHOLD_EVIDENCE_KEYS
-    }
     return normalized, log
 
 
@@ -754,8 +745,9 @@ def _validate_stage1_metadata(rating: dict[str, Any], accuracy: float) -> None:
         raise ValueError("threshold_review 必须包含四个布尔值")
     if review != _expected_threshold_review(accuracy):
         raise ValueError("threshold_review 与 predicted_accuracy 区间不一致")
-    if not str(rating.get("score_evidence", "")).strip():
-        raise ValueError("score_evidence 不得为空")
+    evidence = rating.get("threshold_evidence")
+    if not isinstance(evidence, dict) or any(not str(evidence.get(key, "")).strip() for key in THRESHOLD_EVIDENCE_KEYS):
+        raise ValueError("threshold_evidence 四项均须为非空字符串")
     if not str(rating.get("reason", "")).strip():
         raise ValueError("reason 不得为空")
 
@@ -849,6 +841,14 @@ def _accuracy_scale_audit(
     }
 
 
+def _audit_only_fields(normalization_log: list[dict[str, Any]] | None) -> list[str]:
+    return sorted({
+        str(item.get("field"))
+        for item in normalization_log or []
+        if item.get("action") == "audit_only_fallback" and item.get("field")
+    })
+
+
 def enrich_stage1_rating(
     stage1_rating: dict[str, Any],
     *,
@@ -862,6 +862,9 @@ def enrich_stage1_rating(
     rating["features_model_raw"] = copy.deepcopy(features if features_model_raw is None else features_model_raw)
     rating["enum_normalization_log"] = copy.deepcopy(normalization_log or [])
     rating["enum_normalization_applied"] = bool(normalization_log)
+    audit_only_fields = _audit_only_fields(normalization_log)
+    rating["feature_schema_audit_only"] = bool(audit_only_fields)
+    rating["feature_schema_audit_only_fields"] = audit_only_fields
 
     features["knowledge_points"] = list(dict.fromkeys(value.strip() for value in features["knowledge_points"]))
     rating["knowledge_count_model_raw"] = features["knowledge_count"]
@@ -880,7 +883,10 @@ def enrich_stage1_rating(
     _validate_stage1_metadata(rating, original_accuracy)
 
     active_features = detect_active_features(features)
-    detection = detect_high_difficulty_features(features)
+    detection = (
+        HighDifficultyDetection(names=[], evidence=[], possible_overlap_groups=[])
+        if audit_only_fields else detect_high_difficulty_features(features)
+    )
     multiplier = multiplier_for_high_count(len(detection.names))
     adjusted_accuracy = round(original_accuracy * multiplier, 1)
     rating["original_predicted_accuracy"] = round(original_accuracy, 1)
@@ -893,6 +899,7 @@ def enrich_stage1_rating(
     rating["high_difficulty_feature_evidence"] = detection.evidence
     rating["possible_high_feature_overlaps"] = detection.possible_overlap_groups
     rating["high_difficulty_feature_count"] = len(detection.names)
+    rating["high_difficulty_detection_suppressed"] = bool(audit_only_fields)
     rating["multiplier_applied"] = multiplier
     rating["predicted_accuracy"] = adjusted_accuracy
     rating["difficulty_level_step1"] = map_accuracy_to_level(adjusted_accuracy)
