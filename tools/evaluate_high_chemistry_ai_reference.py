@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""按高中物理口径评测高中化学流程档位与独立 AI 盲标档位。"""
+"""评测高中化学单阶段预测档位与 AI 金标档位。"""
 
 from __future__ import annotations
 
@@ -121,32 +121,6 @@ def evaluate(labels: dict[str, dict[str, Any]], predictions: dict[str, dict[str,
     }
 
 
-def review_diagnostics(predictions: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    records_with_verification = structural_revision_count = manual_review_count = 0
-    multiplier_bucket_change_count = final_differs_from_step1_count = 0
-    direction_distribution: Counter[str] = Counter()
-    for row in predictions.values():
-        final_differs_from_step1_count += row.get("final_difficulty_level") != row.get("difficulty_level_step1")
-        manual_review_count += row.get("needs_manual_review") is True
-        verification = row.get("verification")
-        if not isinstance(verification, dict):
-            continue
-        records_with_verification += 1
-        structural_revision_count += verification.get("has_structural_revision") is True
-        multiplier_bucket_change_count += verification.get("multiplier_reasonableness") == "不合理"
-        direction = verification.get("reviewed_direction")
-        if isinstance(direction, str) and direction:
-            direction_distribution[direction] += 1
-    return {
-        "records_with_verification": records_with_verification,
-        "structural_revision_count": structural_revision_count,
-        "multiplier_bucket_change_count": multiplier_bucket_change_count,
-        "top_level_manual_review_count": manual_review_count,
-        "final_differs_from_step1_count": final_differs_from_step1_count,
-        "reviewed_direction_distribution": dict(direction_distribution),
-    }
-
-
 def accuracy_scale_diagnostics(predictions: dict[str, dict[str, Any]]) -> dict[str, Any]:
     familiarity: Counter[str] = Counter()
     burden: Counter[str] = Counter()
@@ -155,7 +129,7 @@ def accuracy_scale_diagnostics(predictions: dict[str, dict[str, Any]]) -> dict[s
     records_with_stage1 = threshold_inconsistent = low_structure_conflict = 0
     high_burden_conflict = three_state_risk = multi_reaction_risk = 0
     for row in predictions.values():
-        stage1 = row.get("difficulty_rating_stage1")
+        stage1 = row.get("difficulty_rating") or row.get("difficulty_rating_stage1")
         if not isinstance(stage1, dict):
             continue
         records_with_stage1 += 1
@@ -202,11 +176,14 @@ def mismatch_rows(labels: dict[str, dict[str, Any]], predictions: dict[str, dict
             "question_id": question_id,
             "reference_level": truth,
             "final_level": prediction,
-            "step1_level": row.get("difficulty_level_step1", ""),
             "gap": LEVEL_INDEX[prediction] - LEVEL_INDEX[truth],
             "reference_confidence": labels[question_id].get("confidence", ""),
             "reference_reason": labels[question_id].get("reason", ""),
-            "pipeline_reason": (row.get("difficulty_rating_stage1") or {}).get("reason", ""),
+            "pipeline_reason": (
+                row.get("difficulty_rating")
+                or row.get("difficulty_rating_stage1")
+                or {}
+            ).get("reason", ""),
             "stem": row.get("stem", ""),
         })
     return rows
@@ -216,7 +193,7 @@ def write_mismatches(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=[
-            "question_id", "reference_level", "final_level", "step1_level", "gap",
+            "question_id", "reference_level", "final_level", "gap",
             "reference_confidence", "reference_reason", "pipeline_reason", "stem",
         ])
         writer.writeheader()
@@ -234,9 +211,7 @@ def main() -> None:
     predictions = read_by_id(Path(args.predictions))
     report = {
         "final": evaluate(labels, predictions, "final_difficulty_level"),
-        "step1": evaluate(labels, predictions, "difficulty_level_step1"),
         "accuracy_scale_diagnostics": accuracy_scale_diagnostics(predictions),
-        "review_diagnostics": review_diagnostics(predictions),
     }
     report_path = Path(args.report)
     report_path.parent.mkdir(parents=True, exist_ok=True)

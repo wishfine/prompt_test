@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-"""高中化学两阶段难度评级 Pipeline。
+"""高中化学单阶段难度评级 Pipeline。
 
 流程：模型提取化学结构特征和原始正确率；程序检测十类高难特征、应用
-1.00/0.85/0.70 乘数并映射五档；第二次模型调用只复核结构事实和相邻边界；
-程序重算并输出可审计结果。原 difficulty、percent_correct、answered_count
-不会发送给模型。
+1.00/0.85/0.70 乘数并映射五档，直接输出可审计结果。原 difficulty、
+percent_correct、answered_count 不会发送给模型。
 """
 
 from __future__ import annotations
@@ -31,13 +30,10 @@ except ImportError as exc:  # pragma: no cover - 项目 venv 中执行
     ) from exc
 
 from high_chemistry_pipeline_core import (
-    HIGH_DIFFICULTY_FEATURE_NAMES,
-    REQUIRED_FEATURE_FIELDS,
+    build_stage1_output_schema,
     enrich_stage1_rating,
-    finalize_level,
-    normalize_stage1_rating,
+    prepare_stage1_rating,
     prepare_question,
-    recalculate_verification,
 )
 
 
@@ -47,15 +43,14 @@ API_KEY = os.getenv("API_KEY", "not-needed")
 BASE_URL = os.getenv("BASE_URL", "http://172.22.0.35:4466/v1").rstrip("/") + "/"
 MODEL_NAME = os.getenv("MODEL_NAME", "doubao-seed-2.0-lite")
 TEMPERATURE_RAW = os.getenv("TEMPERATURE", "")
-ENABLE_STAGE2_AUTO_ADJUST = os.getenv("ENABLE_STAGE2_AUTO_ADJUST", "0").strip() == "1"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 OUTPUTS_ROOT = PROJECT_ROOT / "outputs"
 DEFAULT_INPUT = PROJECT_ROOT / "data" / "samples" / "high-chemistry-sample25k.jsonl"
 DEFAULT_PROMPT = PROJECT_ROOT / "prompts" / "高中化学难度打标提示词.txt"
-DEFAULT_OUTPUT = OUTPUTS_ROOT / "model_runs" / "high_chemistry_two_stage.jsonl"
-DEFAULT_ERRORS = OUTPUTS_ROOT / "model_runs" / "high_chemistry_two_stage_errors.jsonl"
+DEFAULT_OUTPUT = OUTPUTS_ROOT / "model_runs" / "high_chemistry_single_stage.jsonl"
+DEFAULT_ERRORS = OUTPUTS_ROOT / "model_runs" / "high_chemistry_single_stage_errors.jsonl"
 DEFAULT_CACHE = OUTPUTS_ROOT / "cache" / "high_chemistry_stage1_prefix_cache.json"
 
 CACHE_EXPIRE_SECONDS = 5 * 24 * 3600
@@ -65,8 +60,6 @@ CACHE_CREATE_LOCK = asyncio.Lock()
 
 FEATURE_EXTRACTION_PROMPT_PREFIX = ""
 FEATURE_EXTRACTION_PROMPT_SUFFIX = ""
-VERIFICATION_PROMPT_PREFIX = ""
-VERIFICATION_PROMPT_SUFFIX = ""
 
 
 class PrefixCacheState:
@@ -89,8 +82,6 @@ TEMPERATURE = resolve_temperature(MODEL_NAME, TEMPERATURE_RAW)
 def load_prompt_config(path: str | Path) -> None:
     global FEATURE_EXTRACTION_PROMPT_PREFIX
     global FEATURE_EXTRACTION_PROMPT_SUFFIX
-    global VERIFICATION_PROMPT_PREFIX
-    global VERIFICATION_PROMPT_SUFFIX
     prompt_path = Path(path)
     if not prompt_path.exists():
         raise FileNotFoundError(f"找不到 Prompt：{prompt_path}")
@@ -100,16 +91,12 @@ def load_prompt_config(path: str | Path) -> None:
     names = (
         "FEATURE_EXTRACTION_PROMPT_PREFIX",
         "FEATURE_EXTRACTION_PROMPT_SUFFIX",
-        "VERIFICATION_PROMPT_PREFIX",
-        "VERIFICATION_PROMPT_SUFFIX",
     )
     missing = [name for name in names if not namespace.get(name)]
     if missing:
         raise ValueError(f"Prompt 缺少变量：{', '.join(missing)}")
     FEATURE_EXTRACTION_PROMPT_PREFIX = str(namespace[names[0]])
     FEATURE_EXTRACTION_PROMPT_SUFFIX = str(namespace[names[1]])
-    VERIFICATION_PROMPT_PREFIX = str(namespace[names[2]])
-    VERIFICATION_PROMPT_SUFFIX = str(namespace[names[3]])
 
 
 def _prefix_hash() -> str:
@@ -254,24 +241,6 @@ def _json_block(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-def _stage1_repair_feedback(error: ValueError, parsed: dict[str, Any]) -> str:
-    """为字段串位和一致性冲突补充定向修复说明，不改写模型结论。"""
-    message = str(error)
-    if "experiment_requirement 非法值" in message:
-        hint = (
-            "experiment_requirement 只描述本题要求完成的实验任务强度，"
-            "不能填写 knowledge_L2 名称（如‘检验、鉴别与分离提纯’）。"
-        )
-    elif "model_explicitness 非法值" in message:
-        hint = "model_explicitness 必须使用完整枚举值，例如‘模型完全显性’。"
-    else:
-        hint = "请仅修复报错字段，保留其余已正确的题目判断。"
-    return (
-        f"上一次校验失败：{message}\n{hint}\n"
-        f"上一次输出：\n{_json_block(parsed)}"
-    )
-
-
 def construct_question_text(question: dict[str, Any], input_quality: dict[str, Any]) -> str:
     return (
         "【输入质量】\n" + _json_block(input_quality)
@@ -285,94 +254,6 @@ def _content_with_images(text: str, image_urls: list[str]) -> str | list[dict[st
     content: list[dict[str, Any]] = [{"type": "input_text", "text": text}]
     content.extend({"type": "input_image", "image_url": url} for url in image_urls)
     return content
-
-
-def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
-    required = {
-        "difficulty_source", "feature_corrections", "missed_features",
-        "has_structural_revision", "adjacent_boundary_review", "confidence",
-        "reviewed_original_predicted_accuracy", "reviewed_high_difficulty_features",
-        "analysis",
-    }
-    missing = sorted(required - result.keys())
-    if missing:
-        raise ValueError(f"第二阶段缺少字段：{missing}")
-    required_text = ("difficulty_source", "analysis")
-    for field in required_text:
-        if not str(result.get(field, "")).strip():
-            raise ValueError(f"{field} 必须为非空字符串")
-    if type(result.get("has_structural_revision")) is not bool:
-        raise ValueError("has_structural_revision 必须为布尔值")
-    corrections = result.get("feature_corrections")
-    if not isinstance(corrections, list):
-        raise ValueError("feature_corrections 必须为列表")
-    valid_corrections = []
-    ignored_corrections = []
-    for correction in corrections:
-        if not isinstance(correction, dict):
-            raise ValueError("feature_corrections 每项必须为对象")
-        correction_missing = {
-            "field", "original_value", "reviewed_value", "evidence"
-        } - correction.keys()
-        if correction_missing:
-            raise ValueError(f"feature_corrections 缺少字段：{sorted(correction_missing)}")
-        if "reviewed_value" not in correction:
-            raise ValueError("feature_corrections 缺少 reviewed_value")
-        if not str(correction.get("evidence", "")).strip():
-            raise ValueError("feature_corrections.evidence 不得为空")
-        if correction.get("field") == "high_difficulty_features":
-            ignored_corrections.append(correction)
-            continue
-        if correction.get("field") not in REQUIRED_FEATURE_FIELDS:
-            raise ValueError(f"feature_corrections 含非法字段：{correction.get('field')!r}")
-        valid_corrections.append(correction)
-    result["feature_corrections"] = valid_corrections
-    if ignored_corrections:
-        result["ignored_feature_corrections"] = ignored_corrections
-    names = result.get("reviewed_high_difficulty_features")
-    if not isinstance(names, list):
-        raise ValueError("reviewed_high_difficulty_features 必须为列表")
-    if len(names) != len(set(names)):
-        raise ValueError("reviewed_high_difficulty_features 不得重复")
-    if any(not isinstance(name, str) for name in names):
-        raise ValueError("reviewed_high_difficulty_features 每项必须为字符串")
-    invalid = [name for name in names if name not in HIGH_DIFFICULTY_FEATURE_NAMES]
-    if invalid:
-        raise ValueError(f"reviewed_high_difficulty_features 含非法值：{invalid}")
-    if result.get("confidence") not in {"高", "中", "低"}:
-        raise ValueError("confidence 非法")
-    missed_features = result.get("missed_features")
-    if (
-        not isinstance(missed_features, list)
-        or not missed_features
-        or any(not isinstance(value, str) or not value.strip() for value in missed_features)
-    ):
-        raise ValueError("missed_features 必须为非空字符串列表")
-    boundary = result.get("adjacent_boundary_review")
-    if not isinstance(boundary, dict):
-        raise ValueError("adjacent_boundary_review 必须为对象")
-    if boundary.get("verdict") not in {"维持", "应更简单一档", "应更难一档"}:
-        raise ValueError("adjacent_boundary_review.verdict 非法")
-    legal_boundaries = {"88边界", "75边界", "55边界", "35边界"}
-    if (
-        not isinstance(boundary.get("boundaries_checked"), list)
-        or not boundary["boundaries_checked"]
-        or any(value not in legal_boundaries for value in boundary["boundaries_checked"])
-    ):
-        raise ValueError("boundaries_checked 必须为非空列表")
-    if (
-        not isinstance(boundary.get("decisive_evidence"), list)
-        or not boundary["decisive_evidence"]
-        or any(not isinstance(value, str) or not value.strip() for value in boundary["decisive_evidence"])
-    ):
-        raise ValueError("decisive_evidence 必须为非空列表")
-    try:
-        accuracy = float(result.get("reviewed_original_predicted_accuracy"))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("reviewed_original_predicted_accuracy 必须为数值") from exc
-    if not 0 <= accuracy <= 100:
-        raise ValueError("reviewed_original_predicted_accuracy 必须位于0到100")
-    return copy.deepcopy(result)
 
 
 async def call_stage1(
@@ -389,17 +270,22 @@ async def call_stage1(
     started = time.time()
     total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     last_error = ""
-    repair_feedback: str | None = None
     for attempt in range(retries):
-        use_cache = bool(cache_id and repair_feedback is None)
+        use_cache = bool(cache_id)
         prompt_text = dynamic_text if use_cache else FEATURE_EXTRACTION_PROMPT_PREFIX + "\n\n" + dynamic_text
-        if repair_feedback:
-            prompt_text += "\n\n【格式修复要求】\n" + repair_feedback + "\n请重新输出完整合法JSON。"
         payload: dict[str, Any] = {
             "model": MODEL_NAME,
             "input": [{"role": "user", "content": _content_with_images(prompt_text, image_urls)}],
             "thinking": {"type": "disabled"},
             "max_output_tokens": 5000,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "high_chemistry_rating",
+                    "strict": True,
+                    "schema": build_stage1_output_schema(),
+                }
+            },
         }
         if use_cache:
             payload["previous_response_id"] = cache_id
@@ -412,20 +298,9 @@ async def call_stage1(
                 for key in total_usage:
                     total_usage[key] += current[key]
                 parsed = _parse_json_object(_extract_output_text(body))
-                try:
-                    raw_features = copy.deepcopy(parsed.get("features"))
-                    normalized, log = normalize_stage1_rating(parsed)
-                    enriched = enrich_stage1_rating(
-                        normalized,
-                        features_model_raw=raw_features,
-                        normalization_log=log,
-                    )
-                except ValueError as exc:
-                    if attempt < retries - 1:
-                        repair_feedback = _stage1_repair_feedback(exc, parsed)
-                        last_error = str(exc)
-                        continue
-                    raise
+                raw_features = copy.deepcopy(parsed.get("features"))
+                prepared = prepare_stage1_rating(parsed)
+                enriched = enrich_stage1_rating(prepared, features_model_raw=raw_features)
                 return enriched, total_usage, time.time() - started
             last_error = f"HTTP {status}: {error[:400]}"
             if use_cache and "PreviousResponseNotFound" in error and cache_state:
@@ -438,59 +313,11 @@ async def call_stage1(
                 continue
             if status != 429 and status < 500 and not _is_retriable_image_download_timeout(status, error):
                 break
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             last_error = str(exc)
         if attempt < retries - 1:
             await asyncio.sleep(2 ** attempt + random.random())
     raise RuntimeError(f"第一阶段请求失败：{last_error}")
-
-
-async def call_stage2(
-    *,
-    session: aiohttp.ClientSession,
-    question_text: str,
-    image_urls: list[str],
-    stage1: dict[str, Any],
-    retries: int,
-    timeout: int,
-) -> tuple[dict[str, Any], dict[str, int], float]:
-    text = (
-        VERIFICATION_PROMPT_PREFIX + "\n\n【题目信息】\n" + question_text
-        + "\n\n【第一阶段与程序处理结果】\n" + _json_block(stage1)
-        + VERIFICATION_PROMPT_SUFFIX
-    )
-    started = time.time()
-    total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-    last_error = ""
-    for attempt in range(retries):
-        payload: dict[str, Any] = {
-            "model": MODEL_NAME,
-            "input": [{"role": "user", "content": _content_with_images(text, image_urls)}],
-            "thinking": {"type": "disabled"},
-            "max_output_tokens": 3000,
-        }
-        if TEMPERATURE is not None:
-            payload["temperature"] = TEMPERATURE
-        try:
-            status, body, error = await _post_response(session, payload, timeout)
-            if status == 200 and body:
-                current = _usage(body)
-                for key in total_usage:
-                    total_usage[key] += current[key]
-                parsed = validate_verification(_parse_json_object(_extract_output_text(body)))
-                return recalculate_verification(
-                    stage1,
-                    parsed,
-                    allow_auto_adjustment=ENABLE_STAGE2_AUTO_ADJUST,
-                ), total_usage, time.time() - started
-            last_error = f"HTTP {status}: {error[:400]}"
-            if status != 429 and status < 500:
-                break
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
-            last_error = str(exc)
-        if attempt < retries - 1:
-            await asyncio.sleep(2 ** attempt + random.random())
-    raise RuntimeError(f"第二阶段请求失败：{last_error}")
 
 
 async def append_jsonl(path: Path, value: dict[str, Any]) -> None:
@@ -552,54 +379,6 @@ def sample_questions_per_level(
     return sampled
 
 
-def build_stage2_fallback(
-    output_base: dict[str, Any],
-    stage1: dict[str, Any],
-    error: Exception,
-    usage1: dict[str, int],
-    elapsed1: float,
-) -> dict[str, Any]:
-    return {
-        **output_base,
-        "pipeline_version": "high_chemistry_two_stage_v7",
-        "model_name": MODEL_NAME,
-        "difficulty_rating_stage1": stage1,
-        "difficulty_level_step1": stage1["difficulty_level_step1"],
-        "verification": None,
-        "final_difficulty_level": stage1["difficulty_level_step1"],
-        "final_adjustment": "第二阶段失败，维持第一阶段并转人工复核",
-        "needs_manual_review": True,
-        "pipeline_warning": f"stage2_failed: {type(error).__name__}: {error}",
-        "api_stage1_time_seconds": round(elapsed1, 2),
-        "api_stage1_usage": usage1,
-    }
-
-
-def build_audit_only_feature_result(
-    output_base: dict[str, Any],
-    stage1: dict[str, Any],
-    usage1: dict[str, int],
-    elapsed1: float,
-) -> dict[str, Any]:
-    fields = "、".join(stage1.get("feature_schema_audit_only_fields", []))
-    return {
-        **output_base,
-        "pipeline_version": "high_chemistry_two_stage_v7",
-        "model_name": MODEL_NAME,
-        "temperature": TEMPERATURE,
-        "stage2_auto_adjustment_enabled": ENABLE_STAGE2_AUTO_ADJUST,
-        "difficulty_rating_stage1": stage1,
-        "difficulty_level_step1": stage1["difficulty_level_step1"],
-        "verification": None,
-        "final_difficulty_level": stage1["difficulty_level_step1"],
-        "final_adjustment": "特征存在仅审计兜底值，维持第一阶段并转人工复核",
-        "needs_manual_review": True,
-        "pipeline_warning": f"feature_schema_audit_only: {fields}",
-        "api_stage1_time_seconds": round(elapsed1, 2),
-        "api_stage1_usage": usage1,
-    }
-
-
 async def process_question(
     *,
     source: dict[str, Any],
@@ -629,72 +408,30 @@ async def process_question(
                 image_urls=prepared.selected_image_urls, cache_state=cache_state,
                 retries=retries, timeout=timeout,
             )
-            if stage1["feature_schema_audit_only"]:
-                await append_jsonl(
-                    output_path,
-                    build_audit_only_feature_result(output_base, stage1, usage1, elapsed1),
-                )
-                return
-            try:
-                verification, usage2, elapsed2 = await call_stage2(
-                    session=session, question_text=question_text,
-                    image_urls=prepared.selected_image_urls, stage1=stage1,
-                    retries=retries, timeout=timeout,
-                )
-            except Exception as exc:
-                await append_jsonl(
-                    output_path,
-                    build_stage2_fallback(output_base, stage1, exc, usage1, elapsed1),
-                )
-                await append_jsonl(error_path, {
-                    **output_base, "stage": "stage2", "error_type": type(exc).__name__, "error": str(exc)
-                })
-                return
-            final = finalize_level(
-                current_level=stage1["difficulty_level_step1"],
-                reasonableness=verification["rating_reasonableness"],
-                model_suggested_level=verification["adjusted_difficulty_level"],
-                multiplier_reasonableness=verification["multiplier_reasonableness"],
-                input_sufficiency=prepared.input_quality["input_sufficiency"],
-                original_high_count=stage1["high_difficulty_feature_count"],
-                reviewed_high_count=verification["reviewed_high_difficulty_feature_count"],
-                enable_auto_adjust=ENABLE_STAGE2_AUTO_ADJUST,
-            )
-            total_usage = {key: usage1[key] + usage2[key] for key in usage1}
             await append_jsonl(output_path, {
                 **output_base,
-                "pipeline_version": "high_chemistry_two_stage_v7",
+                "pipeline_version": "high_chemistry_single_stage_v2_strict_schema",
                 "model_name": MODEL_NAME,
                 "temperature": TEMPERATURE,
-                "stage2_auto_adjustment_enabled": ENABLE_STAGE2_AUTO_ADJUST,
-                "difficulty_rating_stage1": stage1,
-                "difficulty_level_step1": stage1["difficulty_level_step1"],
-                "verification": verification,
-                "reviewed_high_difficulty_feature_count": verification["reviewed_high_difficulty_feature_count"],
-                "model_suggested_level": final.model_suggested_level,
-                "final_difficulty_level": final.final_level,
-                "final_adjustment": final.adjustment_desc,
-                "needs_manual_review": final.needs_manual_review or verification["review_requires_manual"],
-                "api_stage1_time_seconds": round(elapsed1, 2),
-                "api_stage2_time_seconds": round(elapsed2, 2),
-                "api_stage1_usage": usage1,
-                "api_stage2_usage": usage2,
-                "api_total_usage": total_usage,
+                "difficulty_rating": stage1,
+                "final_difficulty_level": stage1["difficulty_level"],
+                "api_time_seconds": round(elapsed1, 2),
+                "api_usage": usage1,
             })
         except Exception as exc:
             await append_jsonl(error_path, {
                 **output_base,
-                "stage": "stage1" if stage1 is None else "pipeline",
+                "stage": "rating" if stage1 is None else "pipeline",
                 "error_type": type(exc).__name__,
                 "error": str(exc),
-                "difficulty_rating_stage1": stage1,
-                "api_stage1_usage": usage1,
-                "api_stage1_time_seconds": elapsed1,
+                "difficulty_rating": stage1,
+                "api_usage": usage1,
+                "api_time_seconds": elapsed1,
             })
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="高中化学两阶段难度评级")
+    parser = argparse.ArgumentParser(description="高中化学单阶段难度评级")
     parser.add_argument("-i", "--input", default=str(DEFAULT_INPUT))
     parser.add_argument("-o", "--output", default=str(DEFAULT_OUTPUT))
     parser.add_argument("-e", "--errors", default=str(DEFAULT_ERRORS))

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""高中化学两阶段难度 Pipeline 的离线单元测试。"""
+"""高中化学单阶段难度 Pipeline 的离线单元测试。"""
 
 from __future__ import annotations
 
@@ -68,18 +68,6 @@ def stage1_rating(features=None, accuracy=90.0):
         "local_model_familiarity": "教材直接结论",
         "whole_question_burden": "低",
         "task_completion_structure": "单一评分任务",
-        "threshold_review": {
-            "can_reach_88": accuracy >= 88,
-            "can_reach_75": accuracy >= 75,
-            "can_reach_55": accuracy >= 55,
-            "can_reach_35": accuracy >= 35,
-        },
-        "threshold_evidence": {
-            "boundary_88": "教材直接结论。",
-            "boundary_75": "没有隐藏关系。",
-            "boundary_55": "没有长链。",
-            "boundary_35": "没有压轴结构。",
-        },
         "predicted_accuracy": accuracy,
     }
 
@@ -168,113 +156,29 @@ class HighDifficultyFeatureTests(unittest.TestCase):
 
 
 class Stage1Tests(unittest.TestCase):
-    def test_normalization_uses_whitelist_and_derives_l1(self):
+    def test_preparation_derives_l1_without_alias_mapping(self):
         rating = stage1_rating(base_features(
             knowledge_L1=["有机化学"],
-            knowledge_L2=["仪器操作与实验安全", "仪器操作与实验安全"],
-            chemistry_methods=["质量守恒", "不存在的方法"],
+            knowledge_L2=["实验基础与安全"],
         ), 80)
-        rating["threshold_review"]["can_reach_88"] = True
-        normalized, log = core.normalize_stage1_rating(rating)
-        self.assertEqual(normalized["features"]["knowledge_L2"], ["实验基础与安全"])
-        self.assertEqual(normalized["features"]["knowledge_L1"], ["化学实验与探究"])
-        self.assertEqual(normalized["features"]["chemistry_methods"], ["守恒思想"])
-        self.assertEqual(normalized["threshold_review"], {
-            "can_reach_88": False, "can_reach_75": True,
-            "can_reach_55": True, "can_reach_35": True,
-        })
-        self.assertTrue(any(item["action"] == "audit_only_fallback" for item in log))
+        prepared = core.prepare_stage1_rating(rating)
+        self.assertEqual(prepared["features"]["knowledge_L2"], ["实验基础与安全"])
+        self.assertEqual(prepared["features"]["knowledge_L1"], ["化学实验与探究"])
 
-    def test_legacy_combined_l2_expands_without_losing_knowledge_domain(self):
-        rating = stage1_rating(base_features(
-            knowledge_L2=["化学用语与化学计量"],
-        ), 90)
-        normalized, _ = core.normalize_stage1_rating(rating)
-        self.assertEqual(normalized["features"]["knowledge_L2"], [
-            "化学用语与物质组成", "物质的量与化学计量",
-        ])
-        self.assertEqual(normalized["features"]["knowledge_L1"], ["化学基本概念与定量关系"])
+    def test_unknown_enum_is_rejected_instead_of_repaired(self):
+        rating = stage1_rating(base_features(reaction_relation="未定义的反应关系"), 80)
+        with self.assertRaisesRegex(ValueError, "reaction_relation 非法值"):
+            core.prepare_stage1_rating(rating)
 
-    def test_common_calculation_aliases_are_normalized(self):
-        rating = stage1_rating(base_features(
-            calculation_complexity="参数计算",
-            stoichiometric_calculation="守恒计算",
-        ), 80)
-        normalized, _ = core.normalize_stage1_rating(rating)
-        self.assertEqual(
-            normalized["features"]["calculation_complexity"], "参数或范围计算"
-        )
-        self.assertEqual(
-            normalized["features"]["stoichiometric_calculation"], "守恒差量或混合计算"
-        )
-
-    def test_operation_and_industry_aliases_are_normalized(self):
-        rating = stage1_rating(base_features(
-            experiment_requirement="多步实验操作",
-            context_type="工业生产",
-        ), 80)
-        normalized, _ = core.normalize_stage1_rating(rating)
-        self.assertEqual(normalized["features"]["experiment_requirement"], "多步操作组合")
-        self.assertEqual(normalized["features"]["context_type"], "工业流程")
-
-    def test_recent_stage1_enum_aliases_are_normalized(self):
-        rating = stage1_rating(base_features(
-            context_type="实验制备",
-            critical_condition="显性临界过量条件",
-            state_count="2-3种",
-            experiment_requirement="定量实验与数据处理",
-        ), 80)
-        normalized, _ = core.normalize_stage1_rating(rating)
-        self.assertEqual(normalized["features"]["context_type"], "实验探究")
-        self.assertEqual(normalized["features"]["critical_condition"], "显性临界或过量条件")
-        self.assertEqual(normalized["features"]["state_count"], "2个")
-        self.assertEqual(normalized["features"]["experiment_requirement"], "标准数据处理")
-
-    def test_experiment_feasibility_alias_is_normalized(self):
-        for value in ("方案可行性评价", "实验探究与方案评价"):
-            with self.subTest(value=value):
-                rating = stage1_rating(base_features(experiment_requirement=value), 80)
-                normalized, _ = core.normalize_stage1_rating(rating)
-                self.assertEqual(
-                    normalized["features"]["experiment_requirement"], "方案设计或可行性评价"
-                )
-
-    def test_unknown_feature_uses_audit_only_fallback_without_multiplier(self):
-        rating = stage1_rating(base_features(
-            reaction_relation="未定义的反应关系",
-            substance_count="7种及以上",
-            reaction_count="4个及以上",
-            reasoning_chain="多层因果",
-        ), 80)
-        normalized, log = core.normalize_stage1_rating(rating)
-        enriched = core.enrich_stage1_rating(
-            normalized, features_model_raw=rating["features"], normalization_log=log
-        )
-        self.assertEqual(
-            enriched["features"]["reaction_relation"], core.AUDIT_ONLY_FEATURE_VALUE
-        )
-        self.assertTrue(enriched["feature_schema_audit_only"])
-        self.assertEqual(enriched["feature_schema_audit_only_fields"], ["reaction_relation"])
-        self.assertEqual(enriched["high_difficulty_feature_count"], 0)
-        self.assertEqual(enriched["multiplier_applied"], 1.0)
-
-    def test_unknown_knowledge_l2_uses_audit_only_knowledge_module(self):
-        rating = stage1_rating(base_features(
-            knowledge_L2=["配位化合物"],
-            knowledge_points=["配位化合物"],
-        ), 80)
-        normalized, log = core.normalize_stage1_rating(rating)
-        enriched = core.enrich_stage1_rating(
-            normalized, features_model_raw=rating["features"], normalization_log=log
-        )
-        self.assertEqual(normalized["features"]["knowledge_L2"], [core.AUDIT_ONLY_KNOWLEDGE_L2])
-        self.assertEqual(normalized["features"]["knowledge_L1"], [core.AUDIT_ONLY_KNOWLEDGE_L1])
-        self.assertIn("knowledge_L2", enriched["feature_schema_audit_only_fields"])
-
-    def test_model_explicitness_alias_is_normalized(self):
-        rating = stage1_rating(base_features(model_explicitness="完全显性"), 80)
-        normalized, _ = core.normalize_stage1_rating(rating)
-        self.assertEqual(normalized["features"]["model_explicitness"], "模型完全显性")
+    def test_strict_output_schema_uses_canonical_enums(self):
+        schema = core.build_stage1_output_schema()
+        self.assertFalse(schema["additionalProperties"])
+        features = schema["properties"]["features"]
+        self.assertFalse(features["additionalProperties"])
+        self.assertEqual(set(features["required"]), set(core.REQUIRED_FEATURE_FIELDS))
+        reaction_enum = features["properties"]["reaction_relation"]["enum"]
+        self.assertEqual(set(reaction_enum), core.FEATURE_OPTIONS["reaction_relation"])
+        self.assertNotIn("未确定（仅审计）", reaction_enum)
 
     def test_enrichment_derives_knowledge_fields(self):
         features = base_features(
@@ -288,11 +192,9 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(enriched["features"]["knowledge_count"], "4个及以上")
         self.assertEqual(enriched["features"]["knowledge_scope"], "跨模块综合")
 
-    def test_threshold_review_must_match_accuracy(self):
-        rating = stage1_rating(accuracy=80)
-        rating["threshold_review"]["can_reach_88"] = True
-        with self.assertRaisesRegex(ValueError, "区间不一致"):
-            core.enrich_stage1_rating(rating)
+    def test_stage1_rating_does_not_require_threshold_fields(self):
+        enriched = core.enrich_stage1_rating(stage1_rating(accuracy=80))
+        self.assertEqual(enriched["original_predicted_accuracy"], 80)
 
     def test_multiplier_is_applied_after_original_accuracy(self):
         features = base_features(
@@ -309,7 +211,7 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(enriched["original_predicted_accuracy"], 80)
         self.assertEqual(enriched["multiplier_applied"], 0.70)
         self.assertEqual(enriched["predicted_accuracy"], 56)
-        self.assertEqual(enriched["difficulty_level_step1"], "难度3档")
+        self.assertEqual(enriched["difficulty_level"], "难度3档")
 
     def test_low_structure_score_conflict_is_audited_not_overwritten(self):
         enriched = core.enrich_stage1_rating(stage1_rating(accuracy=70))
@@ -399,116 +301,8 @@ class InputPreparationTests(unittest.TestCase):
         self.assertEqual(prepared.selected_image_urls, [])
 
 
-class VerificationTests(unittest.TestCase):
-    def test_no_structural_revision_forces_original_values(self):
-        stage1 = core.enrich_stage1_rating(stage1_rating(accuracy=80))
-        result = core.recalculate_verification(stage1, {
-            "difficulty_source": "无新证据",
-            "feature_corrections": [],
-            "missed_features": ["无"],
-            "has_structural_revision": False,
-            "adjacent_boundary_review": {
-                "boundaries_checked": ["75边界", "55边界"],
-                "verdict": "维持",
-                "decisive_evidence": ["特征与解析一致"],
-            },
-            "confidence": "高",
-            "reviewed_original_predicted_accuracy": 20,
-            "reviewed_high_difficulty_features": [],
-            "analysis": "维持",
-        })
-        self.assertEqual(result["reviewed_original_predicted_accuracy"], 80)
-        self.assertEqual(result["reviewed_difficulty_level"], "难度2档")
-
-    def test_high_feature_revision_recalculates_multiplier(self):
-        features = base_features(
-            substance_count="7种及以上",
-            reaction_count="4个及以上",
-            reaction_relation="竞争或副反应",
-            reasoning_chain="多层因果",
-            constraint_structure="多约束联合筛选",
-            classification_discussion="3类讨论",
-            model_relation="多模型或多平衡耦合",
-            process_state_relation="前后状态强依赖",
-        )
-        stage1 = core.enrich_stage1_rating(stage1_rating(features, 80))
-        reviewed_names = stage1["high_difficulty_features"][:2]
-        result = core.recalculate_verification(stage1, {
-            "difficulty_source": "两类触发共享同一反应网络，去除重复计数",
-            "feature_corrections": [],
-            "missed_features": ["无"],
-            "has_structural_revision": True,
-            "adjacent_boundary_review": {
-                "boundaries_checked": ["55边界", "35边界"],
-                "verdict": "应更简单一档",
-                "decisive_evidence": ["高难特征重复计数"],
-            },
-            "confidence": "高",
-            "reviewed_original_predicted_accuracy": 80,
-            "reviewed_high_difficulty_features": reviewed_names,
-            "analysis": "保留两个独立高难结构",
-        })
-        self.assertTrue(result["has_structural_revision"])
-        self.assertEqual(result["reviewed_high_difficulty_feature_count"], 2)
-        self.assertEqual(result["reviewed_multiplier_applied"], 1.0)
-
-    def test_disabled_auto_adjust_routes_changed_level_to_manual_review(self):
-        final = core.finalize_level(
-            current_level="难度3档",
-            reasonableness="偏低",
-            model_suggested_level="难度4档",
-            multiplier_reasonableness="合理",
-            input_sufficiency="充分",
-            original_high_count=0,
-            reviewed_high_count=0,
-            enable_auto_adjust=False,
-        )
-        self.assertEqual(final.final_level, "难度3档")
-        self.assertTrue(final.needs_manual_review)
-
-    def test_correction_with_stale_original_value_is_rejected(self):
-        stage1 = core.enrich_stage1_rating(stage1_rating(accuracy=80))
-        result = core.recalculate_verification(stage1, {
-            "difficulty_source": "模型显性度复核",
-            "feature_corrections": [{
-                "field": "model_explicitness", "original_value": "隐含模型",
-                "reviewed_value": "半隐含模型", "evidence": "题干明确给出部分关系",
-            }],
-            "missed_features": ["无"], "has_structural_revision": True,
-            "adjacent_boundary_review": {
-                "boundaries_checked": ["75边界", "55边界"], "verdict": "维持",
-                "decisive_evidence": ["原值与第一阶段记录不一致"],
-            },
-            "confidence": "高", "reviewed_original_predicted_accuracy": 70,
-            "reviewed_high_difficulty_features": [], "analysis": "不采纳",
-        })
-        self.assertFalse(result["has_structural_revision"])
-        self.assertEqual(len(result["unsupported_feature_corrections"]), 1)
-        self.assertEqual(result["reviewed_original_predicted_accuracy"], 80)
-
-    def test_auto_adjust_requires_one_step_direction_and_boundary_agreement(self):
-        final = core.finalize_level(
-            current_level="难度3档", reasonableness="偏低",
-            model_suggested_level="难度5档", multiplier_reasonableness="合理",
-            input_sufficiency="充分", original_high_count=0,
-            reviewed_high_count=0, enable_auto_adjust=True,
-        )
-        self.assertEqual(final.final_level, "难度4档")
-        self.assertTrue(final.needs_manual_review)
-
-    def test_multiplier_bucket_change_always_routes_to_manual_review(self):
-        final = core.finalize_level(
-            current_level="难度3档", reasonableness="偏高",
-            model_suggested_level="难度2档", multiplier_reasonableness="不合理",
-            input_sufficiency="充分", original_high_count=2,
-            reviewed_high_count=3, enable_auto_adjust=True,
-        )
-        self.assertEqual(final.final_level, "难度3档")
-        self.assertTrue(final.needs_manual_review)
-
-
 class PromptAssetTests(unittest.TestCase):
-    def test_prompt_compiles_and_exposes_four_sections(self):
+    def test_prompt_compiles_and_exposes_single_stage_sections(self):
         path = ROOT / "prompts" / "高中化学难度打标提示词.txt"
         source = path.read_text(encoding="utf-8")
         namespace = {}
@@ -516,10 +310,10 @@ class PromptAssetTests(unittest.TestCase):
         for name in (
             "FEATURE_EXTRACTION_PROMPT_PREFIX",
             "FEATURE_EXTRACTION_PROMPT_SUFFIX",
-            "VERIFICATION_PROMPT_PREFIX",
-            "VERIFICATION_PROMPT_SUFFIX",
         ):
             self.assertTrue(namespace.get(name))
+        self.assertNotIn("VERIFICATION_PROMPT_PREFIX", namespace)
+        self.assertNotIn("VERIFICATION_PROMPT_SUFFIX", namespace)
 
     def test_prompt_contains_every_required_feature(self):
         text = (ROOT / "prompts" / "高中化学难度打标提示词.txt").read_text(encoding="utf-8")
@@ -535,14 +329,18 @@ class PromptAssetTests(unittest.TestCase):
         text = (ROOT / "prompts" / "高中化学难度打标提示词.txt").read_text(encoding="utf-8")
         self.assertIn("知识模块只标注解题必需的化学知识，不按工业流程、生活生产等情境分类", text)
 
-    def test_prompt_requires_four_step_accuracy_review_and_option_detail(self):
+    def test_prompt_requires_interval_positioning_and_option_detail(self):
         text = (ROOT / "prompts" / "高中化学难度打标提示词.txt").read_text(encoding="utf-8")
         for phrase in (
             "local_model_familiarity", "whole_question_burden",
-            "task_completion_structure", "88、75、55、35",
+            "task_completion_structure", "五个正确率区间",
+            "区间内分数统一规则",
+            "有效决策负担", "失分传播与整题完成",
+            "至少4项支持上部", "至少3项支持下部",
+            "不得默认使用区间端点、中点或89、78、48、42等历史习惯分数",
             "不得把各选项判断正确率相乘",
             "不得把四项正确率机械相乘",
-            "三个及以上关联状态", "四个及以上强依赖反应",
+            "共享复杂模型",
         ):
             self.assertIn(phrase, text)
 
@@ -559,10 +357,16 @@ class RunnerAssetTests(unittest.TestCase):
 
     def test_runner_compiles(self):
         compile(self.source, str(self.path), "exec")
-        self.assertIn('"high_chemistry_two_stage_v7"', self.source)
-        self.assertIn("_stage1_repair_feedback", self.source)
+        self.assertIn('"high_chemistry_single_stage_v2_strict_schema"', self.source)
+        self.assertIn('"type": "json_schema"', self.source)
+        self.assertIn('"strict": True', self.source)
+        self.assertIn("build_stage1_output_schema", self.source)
         self.assertIn("_is_retriable_image_download_timeout", self.source)
         self.assertIn("timeout while downloading url", self.source)
+        self.assertNotIn("call_stage2", self.source)
+        self.assertNotIn("ENABLE_STAGE2_AUTO_ADJUST", self.source)
+        self.assertNotIn('"difficulty_rating_stage1": stage1', self.source)
+        self.assertNotIn('"needs_manual_review"', self.source)
 
     def test_runner_has_required_controls(self):
         for flag in (
