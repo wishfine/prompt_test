@@ -262,18 +262,8 @@ def _stage1_repair_feedback(error: ValueError, parsed: dict[str, Any]) -> str:
             "experiment_requirement 只描述本题要求完成的实验任务强度，"
             "不能填写 knowledge_L2 名称（如‘检验、鉴别与分离提纯’）。"
         )
-    elif "primary_problem_structure 非法值" in message:
-        hint = (
-            "primary_problem_structure 只描述题目主结构，"
-            "不能填写 knowledge_L2 名称（如‘定量实验与数据处理’）。"
-        )
     elif "model_explicitness 非法值" in message:
         hint = "model_explicitness 必须使用完整枚举值，例如‘模型完全显性’。"
-    elif "graph_structure 表明存在信息转换" in message:
-        hint = (
-            "请按题干重新核对这两个字段：若保留关系转换/反推类 graph_structure，"
-            "model_conversion_required 必须为 true；若无需转换，应改为与题意一致的图表结构。"
-        )
     else:
         hint = "请仅修复报错字段，保留其余已正确的题目判断。"
     return (
@@ -363,7 +353,7 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("adjacent_boundary_review 必须为对象")
     if boundary.get("verdict") not in {"维持", "应更简单一档", "应更难一档"}:
         raise ValueError("adjacent_boundary_review.verdict 非法")
-    legal_boundaries = {"88边界", "85边界", "58边界", "38边界"}
+    legal_boundaries = {"88边界", "75边界", "55边界", "35边界"}
     if (
         not isinstance(boundary.get("boundaries_checked"), list)
         or not boundary["boundaries_checked"]

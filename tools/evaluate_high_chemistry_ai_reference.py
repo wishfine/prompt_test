@@ -190,44 +190,6 @@ def accuracy_scale_diagnostics(predictions: dict[str, dict[str, Any]]) -> dict[s
     }
 
 
-def essential_task_threshold_diagnostics(
-    labels: dict[str, dict[str, Any]], predictions: dict[str, dict[str, Any]]
-) -> dict[str, Any]:
-    """专项统计任务数≥5规则的实际收益，供 V6 及后续实验验收。"""
-    trigger_count = correct_promotions = incorrect_promotions = still_underestimated = 0
-    for question_id in labels.keys() & predictions.keys():
-        truth = label_level(labels[question_id])
-        row = predictions[question_id]
-        prediction = row.get("final_difficulty_level")
-        stage1 = row.get("difficulty_rating_stage1")
-        if (
-            truth not in LEVEL_INDEX
-            or prediction not in LEVEL_INDEX
-            or not isinstance(stage1, dict)
-        ):
-            continue
-        triggers = (stage1.get("structural_level_audit") or {}).get("triggers", [])
-        if "essential_task_count_at_least_five" not in triggers:
-            continue
-        trigger_count += 1
-        raw_base = stage1.get("base_difficulty_level_model_raw")
-        if raw_base != "难度2档" or prediction != "难度3档":
-            continue
-        if truth == "难度3档":
-            correct_promotions += 1
-        elif truth == "难度2档":
-            incorrect_promotions += 1
-        elif LEVEL_INDEX[truth] > LEVEL_INDEX[prediction]:
-            still_underestimated += 1
-    return {
-        "trigger_count": trigger_count,
-        "correct_promotions": correct_promotions,
-        "incorrect_promotions": incorrect_promotions,
-        "still_underestimated": still_underestimated,
-        "net_benefit": correct_promotions - incorrect_promotions,
-    }
-
-
 def mismatch_rows(labels: dict[str, dict[str, Any]], predictions: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for question_id in sorted(labels.keys() & predictions.keys()):
@@ -274,7 +236,6 @@ def main() -> None:
         "final": evaluate(labels, predictions, "final_difficulty_level"),
         "step1": evaluate(labels, predictions, "difficulty_level_step1"),
         "accuracy_scale_diagnostics": accuracy_scale_diagnostics(predictions),
-        "essential_task_threshold_diagnostics": essential_task_threshold_diagnostics(labels, predictions),
         "review_diagnostics": review_diagnostics(predictions),
     }
     report_path = Path(args.report)

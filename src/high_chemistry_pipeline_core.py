@@ -15,10 +15,6 @@ from typing import Any
 
 LEVEL_ORDER = ["难度1档", "难度2档", "难度3档", "难度4档", "难度5档"]
 LEVEL_INDEX = {level: index for index, level in enumerate(LEVEL_ORDER)}
-STRUCTURAL_BASE_LEVELS = frozenset(LEVEL_ORDER[:3])
-TASK_UNIT_COMPLEXITIES = frozenset({"直接基础", "非平凡"})
-TASK_UNITS_RELATIONS = frozenset({"同质", "异质"})
-
 KNOWLEDGE_L1 = {
     "化学基本概念与定量关系",
     "元素化学与无机反应",
@@ -71,10 +67,6 @@ FEATURE_OPTIONS: dict[str, set[str]] = {
     "knowledge_count": {"1个", "2-3个", "4个及以上"},
     "knowledge_scope": {"单知识点", "同章节综合", "同模块跨章节", "跨模块综合"},
     "knowledge_depth": {"基础概念", "标准模型", "深层课内模型", "陌生迁移"},
-    "primary_problem_structure": {
-        "概念辨析", "直接计算", "综合计算", "无机推断", "有机推断",
-        "图表分析", "实验探究", "工艺流程", "信息迁移", "复合题",
-    },
     "step_count": {"1-2步", "3-5步", "6-8步", "9-12步", "12步以上"},
     "substance_count": {"1种", "2-3种", "4-6种", "7种及以上"},
     "reaction_count": {"0个", "1个", "2-3个", "4个及以上"},
@@ -98,13 +90,10 @@ FEATURE_OPTIONS: dict[str, set[str]] = {
     "variable_relation": {
         "无变量关系", "简单正反比", "函数或图像关系", "分段或非线性关系", "多变量耦合",
     },
-    "equation_count": {"0-1个", "2-3个", "4-6个", "7个以上"},
     "equation_structure": {"无方程", "单方程", "2-3个方程联立", "4个以上方程或不等式组"},
     "calculation_complexity": {"无需计算", "简单代数", "多方程联立", "参数或范围计算", "复杂近似计算"},
     "stoichiometric_calculation": {"无", "单一化学计量", "多步化学计量", "守恒差量或混合计算"},
     "equilibrium_calculation": {"无", "定性判断", "单一平衡定量", "多平衡耦合定量"},
-    "parameter_operation": {"无参数", "单参数", "双参数", "多参数"},
-    "numerical_complexity": {"无数值计算", "简单整数", "常规小数或科学记数", "复杂数值或近似"},
     "information_carrier": {
         "纯文字", "单一示意图", "表格", "函数曲线", "实验装置", "工艺流程图", "光谱或图谱", "多载体综合",
     },
@@ -118,8 +107,6 @@ FEATURE_OPTIONS: dict[str, set[str]] = {
     "synthesis_route": {"无", "补全单步反应", "常规多步路线", "自主设计或路线评价"},
     "separation_purification": {"无", "直接选择操作", "多步操作组合", "自主设计或方案评价"},
     "context_type": {"纯化学", "生活生产", "工业流程", "实验探究", "科技前沿"},
-    "context_load": {"纯包装", "简单规律映射", "需要信息转换", "需要自主情境建模"},
-    "error_risk": {"无明显易错点", "轻微易错点", "明显易错点", "高易错点"},
 }
 
 FEATURE_VALUE_ALIASES: dict[str, dict[str, Any]] = {
@@ -167,9 +154,6 @@ FEATURE_VALUE_ALIASES: dict[str, dict[str, Any]] = {
     },
     "state_count": {
         "2-3种": "2个",
-    },
-    "numerical_complexity": {
-        "常规小数": "常规小数或科学记数",
     },
     "calculation_complexity": {
         "直接判断": "无需计算",
@@ -248,8 +232,8 @@ TASK_COMPLETION_STRUCTURE_OPTIONS = {
     "单一评分任务", "多个同质独立任务", "多个异质独立任务",
     "多个前后依赖任务", "多阶段连续失分任务",
 }
-THRESHOLD_REVIEW_KEYS = ("can_reach_88", "can_reach_85", "can_reach_58", "can_reach_38")
-THRESHOLD_EVIDENCE_KEYS = ("boundary_88", "boundary_85", "boundary_58", "boundary_38")
+THRESHOLD_REVIEW_KEYS = ("can_reach_88", "can_reach_75", "can_reach_55", "can_reach_35")
+THRESHOLD_EVIDENCE_KEYS = ("boundary_88", "boundary_75", "boundary_55", "boundary_35")
 
 UNTRUSTED_LABEL_FIELDS = {
     "difficulty", "percent_correct", "answered_count", "teacher_label",
@@ -302,21 +286,13 @@ def map_accuracy_to_level(predicted_accuracy: Any) -> str:
         raise ValueError("predicted_accuracy 必须位于 0 到 100")
     if accuracy >= 88:
         return "难度1档"
-    if accuracy >= 85:
+    if accuracy >= 75:
         return "难度2档"
-    if accuracy >= 58:
+    if accuracy >= 55:
         return "难度3档"
-    if accuracy >= 38:
+    if accuracy >= 35:
         return "难度4档"
     return "难度5档"
-
-
-def resolve_structural_base_level(base_level: str, adjusted_accuracy: Any) -> str:
-    """以任务结构确定 1--3 档；仅保留既有正确率映射对 4--5 档的裁定。"""
-    if base_level not in STRUCTURAL_BASE_LEVELS:
-        raise ValueError(f"base_difficulty_level 非法：{base_level!r}")
-    accuracy_level = map_accuracy_to_level(adjusted_accuracy)
-    return accuracy_level if LEVEL_INDEX[accuracy_level] >= LEVEL_INDEX["难度4档"] else base_level
 
 
 def multiplier_for_high_count(high_count: int) -> float:
@@ -696,7 +672,6 @@ def detect_active_features(features: dict[str, Any]) -> list[str]:
         (features.get("experiment_requirement") in {"控制变量或故障分析", "误差分析", "方案设计或可行性评价"}, "实验分析"),
         (features.get("synthesis_route") in {"常规多步路线", "自主设计或路线评价"}, "合成路线"),
         (features.get("separation_purification") in {"多步操作组合", "自主设计或方案评价"}, "分离提纯方案"),
-        (features.get("context_load") in {"需要信息转换", "需要自主情境建模"}, "情境建模"),
     ]
     for enabled, name in gates:
         if enabled and name and name != "None" and name not in active:
@@ -707,9 +682,9 @@ def detect_active_features(features: dict[str, Any]) -> list[str]:
 def _expected_threshold_review(accuracy: float) -> dict[str, bool]:
     return {
         "can_reach_88": accuracy >= 88,
-        "can_reach_85": accuracy >= 85,
-        "can_reach_58": accuracy >= 58,
-        "can_reach_38": accuracy >= 38,
+        "can_reach_75": accuracy >= 75,
+        "can_reach_55": accuracy >= 55,
+        "can_reach_35": accuracy >= 35,
     }
 
 
@@ -720,30 +695,6 @@ def _validate_stage1_metadata(rating: dict[str, Any], accuracy: float) -> None:
         raise ValueError("whole_question_burden 非法")
     if rating.get("task_completion_structure") not in TASK_COMPLETION_STRUCTURE_OPTIONS:
         raise ValueError("task_completion_structure 非法")
-    if rating.get("base_difficulty_level") not in STRUCTURAL_BASE_LEVELS:
-        raise ValueError("base_difficulty_level 必须为难度1档、难度2档或难度3档")
-    level_evidence = rating.get("level_evidence")
-    if (
-        not isinstance(level_evidence, list)
-        or not level_evidence
-        or any(not isinstance(value, str) or not value.strip() for value in level_evidence)
-    ):
-        raise ValueError("level_evidence 必须为非空字符串列表")
-    for field in ("essential_task_count", "substantive_step_count"):
-        value = rating.get(field)
-        if type(value) is not int or not 1 <= value <= 12:
-            raise ValueError(f"{field} 必须为1到12的整数")
-    nontrivial_task_count = rating.get("nontrivial_task_count")
-    if type(nontrivial_task_count) is not int or not 0 <= nontrivial_task_count <= 12:
-        raise ValueError("nontrivial_task_count 必须为0到12的整数")
-    if rating["nontrivial_task_count"] > rating["essential_task_count"]:
-        raise ValueError("nontrivial_task_count 不能大于 essential_task_count")
-    for field in (
-        "option_by_option_verification", "model_conversion_required",
-        "intermediate_result_reuse", "multi_object_multi_dimension",
-    ):
-        if type(rating.get(field)) is not bool:
-            raise ValueError(f"{field} 必须为布尔值")
     review = rating.get("threshold_review")
     if not isinstance(review, dict) or any(type(review.get(key)) is not bool for key in THRESHOLD_REVIEW_KEYS):
         raise ValueError("threshold_review 必须包含四个布尔值")
@@ -754,97 +705,6 @@ def _validate_stage1_metadata(rating: dict[str, Any], accuracy: float) -> None:
         raise ValueError("threshold_evidence 四项均须为非空字符串")
     if not str(rating.get("reason", "")).strip():
         raise ValueError("reason 不得为空")
-
-
-def _derive_task_metadata(rating: dict[str, Any], features: dict[str, Any]) -> None:
-    """校验任务单元并生成唯一的任务数量事实源。"""
-    task_units = rating.get("task_units")
-    if not isinstance(task_units, list) or not 1 <= len(task_units) <= 12:
-        raise ValueError("task_units 必须为包含1到12项的列表")
-    for index, unit in enumerate(task_units, start=1):
-        if not isinstance(unit, dict):
-            raise ValueError(f"task_units 第{index}项必须为对象")
-        if not str(unit.get("task", "")).strip():
-            raise ValueError(f"task_units 第{index}项 task 不得为空")
-        if unit.get("complexity") not in TASK_UNIT_COMPLEXITIES:
-            raise ValueError(f"task_units 第{index}项 complexity 非法")
-    if rating.get("task_units_relation") not in TASK_UNITS_RELATIONS:
-        raise ValueError("task_units_relation 必须为同质或异质")
-
-    rating["essential_task_count"] = len(task_units)
-    rating["nontrivial_task_count"] = sum(
-        unit["complexity"] == "非平凡" for unit in task_units
-    )
-    if rating.get("option_by_option_verification") is True and len(task_units) < 2:
-        raise ValueError("逐项核验要求至少两个不可合并的任务单元")
-    if (
-        features.get("graph_structure") in {"单图关系转换", "单图反推隐藏量", "多图联合转换"}
-        and rating.get("model_conversion_required") is False
-    ):
-        raise ValueError("graph_structure 表明存在信息转换，但 model_conversion_required=false")
-
-
-def audit_structural_base_level(rating: dict[str, Any]) -> dict[str, Any]:
-    """仅拦截不满足1/2档结构准入的结果，且最多上调一档。"""
-    original = rating["base_difficulty_level"]
-    adjusted = original
-    triggers: list[str] = []
-    essential_tasks = rating["essential_task_count"]
-    nontrivial_tasks = rating["nontrivial_task_count"]
-    substantive_steps = rating["substantive_step_count"]
-    option_check = rating["option_by_option_verification"]
-    conversion = rating["model_conversion_required"]
-    reuse = rating["intermediate_result_reuse"]
-    multi_dimension = rating["multi_object_multi_dimension"]
-    burden = rating["whole_question_burden"]
-    task_structure = rating["task_completion_structure"]
-    task_units_relation = rating["task_units_relation"]
-
-    if original == "难度1档":
-        if essential_tasks != 1:
-            triggers.append("essential_task_count_not_one")
-        if substantive_steps > 1:
-            triggers.append("substantive_step_count_exceeds_one")
-        if option_check:
-            triggers.append("option_by_option_verification")
-        if conversion:
-            triggers.append("model_conversion_required")
-        if reuse:
-            triggers.append("intermediate_result_reuse")
-        if multi_dimension:
-            triggers.append("multi_object_multi_dimension")
-        if burden != "低":
-            triggers.append("whole_question_burden_not_low")
-        if task_structure != "单一评分任务":
-            triggers.append("task_completion_structure_not_single")
-        if triggers:
-            adjusted = "难度2档"
-    elif original == "难度2档":
-        if conversion:
-            triggers.append("model_conversion_required")
-        if reuse:
-            triggers.append("intermediate_result_reuse")
-        if multi_dimension:
-            triggers.append("multi_object_multi_dimension")
-        if essential_tasks >= 5:
-            triggers.append("essential_task_count_at_least_five")
-        if burden in {"较高", "高", "极高"}:
-            triggers.append("whole_question_burden_at_least_high")
-        if (
-            essential_tasks >= 3
-            and nontrivial_tasks >= 2
-            and task_units_relation == "异质"
-        ):
-            triggers.append("multiple_nontrivial_heterogeneous_tasks")
-        if triggers:
-            adjusted = "难度3档"
-    return {
-        "model_base_difficulty_level": original,
-        "effective_base_difficulty_level": adjusted,
-        "adjusted_by_structural_audit": adjusted != original,
-        "triggers": triggers,
-    }
-
 
 def _accuracy_scale_audit(
     *, rating: dict[str, Any], features: dict[str, Any], base_accuracy: float
@@ -899,48 +759,40 @@ def _accuracy_scale_audit(
     three_state_risk = (
         features.get("state_count") == "3个及以上"
         and features.get("process_state_relation") in {"显性顺序衔接", "前后状态强依赖", "连续变化伴随平衡或边界"}
-        and base_accuracy >= 58
+        and base_accuracy >= 55
     )
     multi_reaction_risk = (
         features.get("reaction_count") == "4个及以上"
         and features.get("reaction_relation") in {"多阶段强依赖反应链", "竞争或副反应", "条件改变导致方向或产物变化"}
-        and base_accuracy >= 58
-    )
-    single_response_overcount_risk = (
-        features.get("subquestion_dependency") == "无多问"
-        and features.get("shared_model_across_subquestions") is False
-        and task_structure in {"多个同质独立任务", "多个异质独立任务"}
-        and features.get("primary_problem_structure") not in {"复合题", "实验探究", "工艺流程"}
+        and base_accuracy >= 55
     )
     experiment_high_score_conflict = (
-        features.get("primary_problem_structure") == "实验探究"
+        features.get("context_type") == "实验探究"
         and task_structure == "多个异质独立任务"
         and features.get("step_count") in {"3-5步", "6-8步", "9-12步", "12步以上"}
         and features.get("experiment_requirement") != "无"
         and base_accuracy >= 88
     )
     industrial_flow_high_score_conflict = (
-        features.get("primary_problem_structure") == "工艺流程"
+        features.get("context_type") == "工业流程"
         and features.get("information_carrier") in {"工艺流程图", "多载体综合"}
         and features.get("step_count") in {"6-8步", "9-12步", "12步以上"}
-        and base_accuracy >= 58
+        and base_accuracy >= 55
     )
     return {
-        "metadata_version": "high_chemistry_v2_threshold_review",
+        "metadata_version": "high_chemistry_v3_unified_five_level",
         "metadata_complete": True,
         "threshold_review_consistent": review == _expected_threshold_review(base_accuracy),
         "threshold_evidence_complete": all(str(rating["threshold_evidence"].get(key, "")).strip() for key in THRESHOLD_EVIDENCE_KEYS),
         "expected_threshold_review": _expected_threshold_review(base_accuracy),
-        "low_structure_score_conflict": low_structure and base_accuracy < 85 and task_structure in {"单一评分任务", "多个同质独立任务"},
-        "high_burden_score_conflict": high_burden_structure and base_accuracy >= 58,
+        "low_structure_score_conflict": low_structure and base_accuracy < 75 and task_structure in {"单一评分任务", "多个同质独立任务"},
+        "high_burden_score_conflict": high_burden_structure and base_accuracy >= 55,
         "three_state_boundary_review_risk": three_state_risk,
         "multi_reaction_boundary_review_risk": multi_reaction_risk,
-        "single_response_task_overcount_risk": single_response_overcount_risk,
         "multi_experiment_high_score_conflict": experiment_high_score_conflict,
         "industrial_flow_high_score_conflict": industrial_flow_high_score_conflict,
-        "standard_model_score_inflation_risk": familiarity in {"教材直接结论", "熟悉标准模型"} and (high_burden_structure or complex_signals >= 3) and base_accuracy >= 58,
-        "burden_label_score_conflict": (burden in {"高", "极高"} and base_accuracy >= 58) or (burden == "低" and base_accuracy < 85),
-        "error_risk_boundary_override_risk": low_structure and features.get("error_risk") in {"明显易错点", "高易错点"} and base_accuracy < 85,
+        "standard_model_score_inflation_risk": familiarity in {"教材直接结论", "熟悉标准模型"} and (high_burden_structure or complex_signals >= 3) and base_accuracy >= 55,
+        "burden_label_score_conflict": (burden in {"高", "极高"} and base_accuracy >= 55) or (burden == "低" and base_accuracy < 75),
     }
 
 
@@ -953,7 +805,6 @@ def enrich_stage1_rating(
     rating = copy.deepcopy(stage1_rating)
     features = rating.get("features")
     validate_feature_schema(features)
-    _derive_task_metadata(rating, features)
 
     rating["features_model_raw"] = copy.deepcopy(features if features_model_raw is None else features_model_raw)
     rating["enum_normalization_log"] = copy.deepcopy(normalization_log or [])
@@ -974,10 +825,6 @@ def enrich_stage1_rating(
     if not 0 <= original_accuracy <= 100:
         raise ValueError("predicted_accuracy 必须位于 0 到 100")
     _validate_stage1_metadata(rating, original_accuracy)
-    structural_audit = audit_structural_base_level(rating)
-    rating["base_difficulty_level_model_raw"] = rating["base_difficulty_level"]
-    rating["base_difficulty_level"] = structural_audit["effective_base_difficulty_level"]
-    rating["structural_level_audit"] = structural_audit
 
     active_features = detect_active_features(features)
     detection = detect_high_difficulty_features(features)
@@ -995,9 +842,7 @@ def enrich_stage1_rating(
     rating["high_difficulty_feature_count"] = len(detection.names)
     rating["multiplier_applied"] = multiplier
     rating["predicted_accuracy"] = adjusted_accuracy
-    rating["difficulty_level_step1"] = resolve_structural_base_level(
-        rating["base_difficulty_level"], adjusted_accuracy
-    )
+    rating["difficulty_level_step1"] = map_accuracy_to_level(adjusted_accuracy)
     return rating
 
 
@@ -1079,9 +924,7 @@ def recalculate_verification(
         }
     multiplier = multiplier_for_high_count(len(model_names))
     adjusted = round(reviewed_accuracy * multiplier, 1)
-    reviewed_level = resolve_structural_base_level(
-        stage1["base_difficulty_level"], adjusted
-    )
+    reviewed_level = map_accuracy_to_level(adjusted)
     current_level = stage1["difficulty_level_step1"]
     current_index = LEVEL_INDEX[current_level]
     reviewed_index = LEVEL_INDEX[reviewed_level]
