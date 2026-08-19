@@ -559,16 +559,29 @@ def derive_question_structure_metrics(data: Dict[str, Any]) -> Dict[str, int]:
 
 
 def fill_blank_subquestion_count(data: Dict[str, Any]) -> int:
-    """统计结构化填空小问，避免把选择项计作小问。"""
+    """统计填空小问，避免把选择项计作小问。"""
     sub_questions = data.get("sub_questions", []) or []
-    if not isinstance(sub_questions, list):
+    if isinstance(sub_questions, list) and sub_questions:
+        return sum(
+            1
+            for sub_question in sub_questions
+            if isinstance(sub_question, dict)
+            and not str(sub_question.get("options", "") or "").strip()
+        )
+
+    stem = str(data.get("stem", "") or "")
+    marker_matches = list(re.finditer(r"[（(]\s*\d+\s*[）)]", stem))
+    if not marker_matches:
         return 0
-    return sum(
-        1
-        for sub_question in sub_questions
-        if isinstance(sub_question, dict)
-        and not str(sub_question.get("options", "") or "").strip()
-    )
+    segments = []
+    for index, match in enumerate(marker_matches):
+        next_start = (
+            marker_matches[index + 1].start()
+            if index + 1 < len(marker_matches)
+            else len(stem)
+        )
+        segments.append(stem[match.end():next_start])
+    return sum(bool(re.search(r"[_＿]{2,}", segment)) for segment in segments)
 
 
 def count_choice_options(data: Dict[str, Any]) -> int:
