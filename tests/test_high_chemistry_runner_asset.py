@@ -124,6 +124,25 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertNotIn("70—80", stage1)
         self.assertNotRegex(stage1, r'"predicted_accuracy"\s*:\s*\d')
 
+    def test_stage1_uses_physics_boundaries_with_sharper_85_and_58_semantics(self) -> None:
+        namespace = {}
+        source = PROMPT.read_text(encoding="utf-8")
+        exec(compile(source, str(PROMPT), "exec"), namespace)
+        stage1 = namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
+        for boundary in ("88 分边界", "85 分边界", "58 分边界", "38 分边界"):
+            self.assertIn(boundary, stage1)
+        for obsolete in ("75 分边界", "55 分边界", "35 分边界"):
+            self.assertNotIn(obsolete, stage1)
+        for required in (
+            "三个及以上异质必要决策",
+            "多个必须完整作答的异质输出",
+            "不能因各任务相互独立就默认达到85",
+            "至少一个决定性拔高结构",
+            "两类中等强度高负担结构共同出现",
+            "不机械要求必须同时出现两类强信号",
+        ):
+            self.assertIn(required, stage1)
+
     def test_v2_stage2_audits_both_sides_of_middle_band(self) -> None:
         namespace = {}
         source = PROMPT.read_text(encoding="utf-8")

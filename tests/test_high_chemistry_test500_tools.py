@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
 BUILDER_PATH = ROOT / "tools" / "build_high_chemistry_test500.py"
 EVALUATOR_PATH = ROOT / "tools" / "evaluate_high_chemistry_test500.py"
 
