@@ -575,9 +575,22 @@ def recalculate_verification(
     rejected: list[dict[str, Any]] = []
     for correction in reviewed.get("feature_corrections") or []:
         field = correction.get("field")
+        source = correction.get("from")
         target = correction.get("to")
         if field not in REQUIRED_FEATURE_FIELDS:
             rejected.append({**copy.deepcopy(correction), "reason": "非 feature 字段"})
+            continue
+        if source != corrected_features.get(field):
+            rejected.append({
+                **copy.deepcopy(correction),
+                "reason": "from 与当前已核验 feature 值不一致",
+            })
+            continue
+        if target == source:
+            rejected.append({
+                **copy.deepcopy(correction),
+                "reason": "to 与 from 相同，不构成结构修正",
+            })
             continue
         candidate = copy.deepcopy(corrected_features)
         candidate[field] = target
@@ -590,17 +603,26 @@ def recalculate_verification(
         applied.append(copy.deepcopy(correction))
 
     try:
-        reviewed_accuracy = float(reviewed["reviewed_original_predicted_accuracy"])
+        model_reviewed_accuracy = float(
+            reviewed["reviewed_original_predicted_accuracy"]
+        )
     except (KeyError, TypeError, ValueError):
-        reviewed_accuracy = float(original_accuracy)
-    reviewed_accuracy = min(100.0, max(0.0, reviewed_accuracy))
+        model_reviewed_accuracy = float(original_accuracy)
+    model_reviewed_accuracy = min(100.0, max(0.0, model_reviewed_accuracy))
     high = detect_high_difficulty_features(corrected_features)
+    structural_revision_supported = bool(applied)
+    reviewed_accuracy = (
+        model_reviewed_accuracy
+        if structural_revision_supported
+        else float(original_accuracy)
+    )
     reviewed_count = len(high.names)
     multiplier = multiplier_for_high_count(reviewed_count)
     adjusted_accuracy = round(reviewed_accuracy * multiplier, 1)
     reviewed_level = map_accuracy_to_level(adjusted_accuracy)
     boundary = reviewed.get("adjacent_boundary_review") or {}
-    verdict = boundary.get("verdict", "维持")
+    model_verdict = boundary.get("verdict", "维持")
+    verdict = model_verdict if structural_revision_supported else "维持"
     action_map = {
         "维持": "维持",
         "应更简单一档": "建议降一档",
@@ -629,6 +651,10 @@ def recalculate_verification(
     )
     reviewed.update(
         {
+            "has_structural_revision_model_raw": reviewed.get(
+                "has_structural_revision"
+            ),
+            "has_structural_revision": structural_revision_supported,
             "feature_corrections_applied": applied,
             "feature_corrections_rejected": rejected,
             "reviewed_features": corrected_features,
@@ -640,6 +666,10 @@ def recalculate_verification(
             "reviewed_suppressed_high_feature_overlaps": high.suppressed_overlaps,
             "reviewed_high_difficulty_feature_count": reviewed_count,
             "reviewed_multiplier_applied": multiplier,
+            "reviewed_original_predicted_accuracy_model_raw": (
+                model_reviewed_accuracy
+            ),
+            "reviewed_original_predicted_accuracy": reviewed_accuracy,
             "reviewed_predicted_accuracy": adjusted_accuracy,
             "reviewed_difficulty_level": reviewed_level,
             "review_action": action_map.get(verdict, "维持"),

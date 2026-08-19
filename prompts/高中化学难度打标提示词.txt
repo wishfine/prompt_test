@@ -88,18 +88,15 @@ predicted_accuracy 表示目标考生完成整道题所有评分任务的预测�
 58—85 是常规综合区。标准的无机推断、有机推断、反应原理计算、实验数据分析或工艺流程，若主要由3—5个前后关联的常规决策构成、路径清晰且没有强隐含转换，通常位于本区间。
 但“方法属于课内常规”不等于一定高于58：若整题实际达到约6—8个有效化学决策，并同时具有下列至少两类真实结构，应进入38—58比较：半隐含或隐含模型、多层因果、强依赖的多阶段流程、模型切换或耦合、图表/实验反推、多步定量、联合约束。不得要求必须先出现复杂分类讨论才允许低于58。
 
-58—85 区间内可使用以下非机械参考：
-- 80—85：模型显性，约2—3个有效决策；也可有多个独立基础任务，但没有共享的连续推理链。
-- 70—80：标准综合，约3—5个前后关联决策，包含常规转换、定量计算或数据分析。
-- 58—70：较长的常规综合，接近5—6个有效决策，或存在一项明显的半隐含、多阶段、模型切换、实验反推结构，但尚未形成两类以上高负担结构的联合。
+在58—85区间内，应继续比较题目与85、58上下相邻边界的距离：模型更显性、决策更少、任务可独立完成且失分局部时更接近85；决策链更长、任务依赖更强、信息转换更多或关键错误会向后传播时更接近58。不得先选取固定的“区间中部”代表分数。
 
 ### 38 分边界
 38—58 是较难综合区。典型结构是约6—8个有效化学决策，并由两类以上高负担结构共同形成连续作答链；局部步骤可以是常规方法，但链条不能拆成彼此无关的基础任务。
 低于38要求压轴级全链结构，但不机械要求12步以上。若存在两个以上高阶阶段，且共享同一物质流、装置、状态参数或证据网络，前一阶段的结果限制后一阶段，并进一步包含多路径反应、多平衡耦合、复杂过量临界与分类、多约束方案验证或多源证据反演，可进入38以下比较。
 普通工艺流程图、有机合成路线、K或Ksp计算、实验方案设计名称本身不支持低于38。
 
-正确率要根据题目连续估计，不要只反复使用 89、86、68、52、42 等固定锚点。
-上述内部区间只用于帮助定位，不是要求输出固定分数；应结合整题作答链给出连续估计。
+确定相邻边界后，必须依据有效决策负担、任务关系、模型与条件显性度、信息转换与运算、失分传播与整题完成五方面证据，判断题目与上下相邻边界的距离，再给出连续估计。
+不得把边界值、整数中点或示例值当作模板分数。结构相近的题可以同分，但只有上述五方面证据也相近时才合理；不得为了制造差异加入随机小数。
 “容易混淆”和 error_risk 只能在相邻小范围内微调，不得单独将正确率压过一个主边界。
 
 ================================================================================
@@ -235,50 +232,11 @@ reaction_relation 只描述化学反应节点之间的关系；process_structure
 ================================================================================
 ## 七、输出 JSON
 
-{
-  "features": {
-    "knowledge_L1": ["化学反应原理"],
-    "knowledge_L2": ["水溶液中的离子平衡"],
-    "knowledge_points": ["酸碱平衡", "沉淀溶解平衡"],
-    "knowledge_count": "2-3个",
-    "knowledge_scope": "同章节综合",
-    "substance_count": "2-3种",
-    "substance_relation": "同一反应体系",
-    "reaction_count": "2-3个",
-    "reaction_relation": "显性顺序衔接",
-    "competing_reaction": "常规主反应判断",
-    "process_structure": "两阶段显性流程",
-    "primary_problem_structure": "反应原理综合",
-    "step_count": "3-5步",
-    "subquestion_dependency": "无多问",
-    "shared_model_across_subquestions": false,
-    "model_explicitness": "模型完全显性",
-    "model_relation": "同一模型多状态",
-    "reasoning_chain": "多层因果",
-    "representation_conversion": "一次常规转换",
-    "evidence_relation": "单证据对应",
-    "hidden_conditions": "无",
-    "critical_condition": "显性给出临界",
-    "classification_discussion": "无",
-    "constraint_structure": "单一约束",
-    "chemistry_methods": ["平衡思想"],
-    "calculation_model": "平衡常数或Ka/Kb/Ksp",
-    "equation_structure": "单方程",
-    "calculation_complexity": "多步计算",
-    "parameter_operation": "无参数",
-    "information_carrier": "纯文字",
-    "information_conversion": "单次关系转换",
-    "experiment_requirement": "无",
-    "route_design_requirement": "无",
-    "context_type": "纯化学",
-    "context_load": "纯包装",
-    "error_risk": "明显易错点"
-  },
-  "reason": "用2-4句说明整题的有效化学决策数、主要难度来源、小问依赖或共享模型情况，以及为什么原始正确率位于相应边界内。",
-  "predicted_accuracy": 76.0
-}
+只输出符合接口要求的合法 JSON，顶层字段必须且只能包括 features、reason 和 predicted_accuracy：
 
-注意：JSON 中每个枚举字段只能放一个合法值，不得用斜杠或“或”拼接多个值。
+- features：包含第五节规定的全部字段，每个枚举字段只能放一个合法值，不得用斜杠或“或”拼接多个值；
+- reason：用2—4句说明整题有效化学决策数、主要难度来源、小问依赖或共享模型、与上下相邻边界的距离，以及具体原始正确率的证据；
+- predicted_accuracy：0—100的连续数值，必须针对当前题目独立确定。Prompt 不提供数值示例，避免将格式示例误当成评分锚点。
 """
 
 
@@ -311,8 +269,9 @@ VERIFICATION_PROMPT_PREFIX = r"""
 - 输入信息不足时必须降低信心并说明缺失项，不得臆测图谱或装置信息。
 - 第一阶段给出的每一个 feature 都是待复核结论，不是既定事实；必须以题干、解析和真实作答链为证据。
 - 若第一步档位为难度3档，必须同时检查85边界和58边界，不能因为58—85区间较宽就直接维持：对模型显性、1—2步且无高难结构的题，要说明为什么不能达到85及以上；对6—8步、半隐含、多层因果且含强依赖多阶段或多模型连续使用的题，要说明为什么不应低于58。
-- reviewed_original_predicted_accuracy 必须根据复核后的结构重新独立估计，不能只在原分数上机械加减2—5分。
-- has_structural_revision=true 只表示 features 确实发生结构性修订。此时必须在 feature_corrections 中给出至少一项具体修改，或在 missed_features 中列出真实遗漏特征；不得只修改文字表述。若只是重新解释同一组 features，应填 false。
+- 默认维持第一阶段原始正确率。若没有得到程序支持的真实结构修正，reviewed_original_predicted_accuracy 必须原样保持第一阶段 original_predicted_accuracy，不得因第二次主观估分而变化。
+- 只有 feature_corrections 中存在与第一阶段原值一致、目标值合法且确实改变题目结构的修正时，才允许重新估计 reviewed_original_predicted_accuracy；此时不能只在原分数上机械加减2—5分。
+- has_structural_revision=true 只表示 features 确实发生结构性修订。允许在 missed_features 中记录真实遗漏，但只有把遗漏落实为合法 feature_corrections 后，才允许据此改变 reviewed_original_predicted_accuracy；只记录遗漏或重新解释同一组 features 时，不授权改分，不得只修改文字表述。
 
 只能输出完整合法 JSON。
 """

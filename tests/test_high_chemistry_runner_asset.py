@@ -117,6 +117,12 @@ class HighChemistryAssetTests(unittest.TestCase):
             "模型依赖",
         ):
             self.assertIn(required, stage1)
+        self.assertIn("与上下相邻边界的距离", stage1)
+        self.assertIn("不得把边界值、整数中点或示例值当作模板分数", stage1)
+        self.assertNotIn("89、86、68、52、42", stage1)
+        self.assertNotIn("80—85", stage1)
+        self.assertNotIn("70—80", stage1)
+        self.assertNotRegex(stage1, r'"predicted_accuracy"\s*:\s*\d')
 
     def test_v2_stage2_audits_both_sides_of_middle_band(self) -> None:
         namespace = {}
@@ -129,22 +135,20 @@ class HighChemistryAssetTests(unittest.TestCase):
             "为什么不能达到85及以上",
             "为什么不应低于58",
             "不得只修改文字表述",
+            "没有得到程序支持的真实结构修正",
+            "必须原样保持第一阶段 original_predicted_accuracy",
         ):
             self.assertIn(required, stage2)
 
-    def test_stage1_json_example_matches_program_derived_scope(self) -> None:
+    def test_stage1_output_contract_relies_on_complete_feature_enums(self) -> None:
         namespace = {}
         source = PROMPT.read_text(encoding="utf-8")
         exec(compile(source, str(PROMPT), "exec"), namespace)
         stage1_text = namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
-        start = stage1_text.index('{\n  "features"')
-        end = stage1_text.index('\n\n注意：JSON', start)
-        example = json.loads(stage1_text[start:end])
-        enriched = chemistry_core.enrich_stage1_rating(example)
-        self.assertEqual(
-            example["features"]["knowledge_scope"],
-            enriched["features"]["knowledge_scope"],
-        )
+        self.assertIn("顶层字段必须且只能包括", stage1_text)
+        self.assertIn("features、reason 和 predicted_accuracy", stage1_text)
+        for field in chemistry_core.REQUIRED_FEATURE_FIELDS:
+            self.assertIn(field, stage1_text)
 
     def test_runner_reuses_operational_capabilities_without_sending_label(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")

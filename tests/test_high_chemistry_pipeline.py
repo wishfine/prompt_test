@@ -270,6 +270,93 @@ class PipelineAndInputTests(unittest.TestCase):
         self.assertEqual(output["predicted_accuracy"], 68.0)
         self.assertGreater(output["active_feature_count"], 3)
 
+    def test_review_score_is_locked_without_supported_feature_revision(self) -> None:
+        features = base_features()
+        reviewed = core.recalculate_verification(
+            current_level="难度3档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=70.0,
+            original_features=features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [],
+                "reviewed_high_difficulty_features": [],
+                "reviewed_original_predicted_accuracy": 62.0,
+                "has_structural_revision": False,
+                "adjacent_boundary_review": {"verdict": "维持"},
+                "confidence": "高",
+                "input_sufficiency_review": {"status": "充分"},
+                "high_feature_overlap_review": [],
+            },
+        )
+        self.assertEqual(
+            reviewed["reviewed_original_predicted_accuracy_model_raw"], 62.0
+        )
+        self.assertEqual(reviewed["reviewed_original_predicted_accuracy"], 70.0)
+        self.assertFalse(reviewed["has_structural_revision"])
+
+    def test_review_score_can_change_after_supported_feature_revision(self) -> None:
+        features = base_features()
+        reviewed = core.recalculate_verification(
+            current_level="难度3档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=70.0,
+            original_features=features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [
+                    {
+                        "field": "step_count",
+                        "from": "1-2步",
+                        "to": "3-5步",
+                        "evidence": "解析包含三个前后关联决策",
+                    }
+                ],
+                "reviewed_high_difficulty_features": [],
+                "reviewed_original_predicted_accuracy": 62.0,
+                "has_structural_revision": True,
+                "adjacent_boundary_review": {"verdict": "维持"},
+                "confidence": "高",
+                "input_sufficiency_review": {"status": "充分"},
+                "high_feature_overlap_review": [],
+            },
+        )
+        self.assertEqual(reviewed["reviewed_original_predicted_accuracy"], 62.0)
+        self.assertTrue(reviewed["has_structural_revision"])
+
+    def test_review_rejects_mismatched_from_value_and_locks_score(self) -> None:
+        features = base_features()
+        reviewed = core.recalculate_verification(
+            current_level="难度3档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=70.0,
+            original_features=features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [
+                    {
+                        "field": "step_count",
+                        "from": "6-8步",
+                        "to": "3-5步",
+                        "evidence": "from 与第一阶段事实不一致",
+                    }
+                ],
+                "reviewed_high_difficulty_features": [],
+                "reviewed_original_predicted_accuracy": 62.0,
+                "has_structural_revision": True,
+                "adjacent_boundary_review": {"verdict": "维持"},
+                "confidence": "高",
+                "input_sufficiency_review": {"status": "充分"},
+                "high_feature_overlap_review": [],
+            },
+        )
+        self.assertEqual(reviewed["reviewed_original_predicted_accuracy"], 70.0)
+        self.assertFalse(reviewed["has_structural_revision"])
+        self.assertEqual(len(reviewed["feature_corrections_rejected"]), 1)
+
     def test_experiment_task_does_not_force_cross_content_module(self) -> None:
         features = base_features(
             knowledge_L1=["化学反应原理", "化学实验"],
