@@ -22,8 +22,12 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertTrue(RUNNER.exists())
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn("high_chemistry_two_stage_v2", source)
+        self.assertIn("high_chemistry_two_stage_v3", source)
         self.assertIn("ENABLE_STAGE2_AUTO_ADJUST", source)
+        self.assertIn("ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER", source)
+        self.assertIn('os.getenv("ENABLE_STAGE2_AUTO_ADJUST", "1")', source)
+        self.assertIn("shared_runner.ENABLE_STAGE2_AUTO_ADJUST =", source)
+        self.assertIn("_shared_finalize_level", source)
 
     def test_prompt_defines_both_stages_and_complete_schema(self) -> None:
         self.assertTrue(PROMPT.exists())
@@ -137,11 +141,28 @@ class HighChemistryAssetTests(unittest.TestCase):
             "三个及以上异质必要决策",
             "多个必须完整作答的异质输出",
             "不能因各任务相互独立就默认达到85",
-            "至少一个决定性拔高结构",
-            "两类中等强度高负担结构共同出现",
-            "不机械要求必须同时出现两类强信号",
+            "并同时具有下列至少两类真实结构",
         ):
             self.assertIn(required, stage1)
+
+    def test_stage2_does_not_treat_program_derived_fields_as_structural_revision(self) -> None:
+        namespace = {}
+        source = PROMPT.read_text(encoding="utf-8")
+        exec(compile(source, str(PROMPT), "exec"), namespace)
+        stage2 = namespace["VERIFICATION_PROMPT_PREFIX"]
+        self.assertIn(
+            "knowledge_L1、knowledge_count、knowledge_scope 由程序确定性派生",
+            stage2,
+        )
+        self.assertIn("不得写入 feature_corrections", stage2)
+        for required in (
+            "程序接受的非派生 feature 修正",
+            "confidence=高",
+            "复核后正确率确实跨越相邻边界",
+            "verdict 与程序计算方向一致",
+            "最多调整一档",
+        ):
+            self.assertIn(required, stage2)
 
     def test_v2_stage2_audits_both_sides_of_middle_band(self) -> None:
         namespace = {}

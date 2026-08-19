@@ -4,7 +4,7 @@
 本模块不依赖网络请求，集中处理：
 1. 化学 feature schema 校验；
 2. 高难特征严格触发与重复计数抑制；
-3. 0.85 / 0.70 乘数效应和固定正确率分档；
+3. 可选的 0.85 / 0.70 乘数效应和固定正确率分档；
 4. 输入标签清洗、子题解析和图片充分性检查；
 5. 第二阶段默认审计、启用时最多调整一档。
 """
@@ -19,6 +19,12 @@ from typing import Any
 
 LEVEL_ORDER = ["难度1档", "难度2档", "难度3档", "难度4档", "难度5档"]
 LEVEL_INDEX = {value: index for index, value in enumerate(LEVEL_ORDER)}
+CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER_ENABLED = False
+PROGRAM_DERIVED_FEATURE_FIELDS = {
+    "knowledge_L1",
+    "knowledge_count",
+    "knowledge_scope",
+}
 
 KNOWLEDGE_L1 = {
     "化学基本概念",
@@ -456,6 +462,7 @@ def enrich_stage1_rating(
     *,
     features_model_raw: dict[str, Any] | None = None,
     normalization_log: list[dict[str, Any]] | None = None,
+    multiplier_enabled: bool | None = None,
 ) -> dict[str, Any]:
     rating = copy.deepcopy(stage1_rating)
     features = rating.get("features")
@@ -497,7 +504,13 @@ def enrich_stage1_rating(
     high = detect_high_difficulty_features(features)
     active = detect_active_features(features)
     high_count = len(high.names)
-    multiplier = multiplier_for_high_count(high_count)
+    enabled = (
+        CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER_ENABLED
+        if multiplier_enabled is None
+        else bool(multiplier_enabled)
+    )
+    multiplier_candidate = multiplier_for_high_count(high_count)
+    multiplier = multiplier_candidate if enabled else 1.0
     adjusted = round(raw_accuracy * multiplier, 1)
     rating["original_predicted_accuracy"] = raw_accuracy
     rating["active_features"] = active
@@ -507,6 +520,8 @@ def enrich_stage1_rating(
     rating["possible_high_feature_overlaps"] = high.possible_overlap_groups
     rating["suppressed_high_feature_overlaps"] = high.suppressed_overlaps
     rating["high_difficulty_feature_count"] = high_count
+    rating["high_difficulty_multiplier_enabled"] = enabled
+    rating["multiplier_candidate"] = multiplier_candidate
     rating["multiplier_applied"] = multiplier
     rating["predicted_accuracy"] = adjusted
     rating["difficulty_level_step1"] = map_accuracy_to_level(adjusted)
@@ -567,6 +582,7 @@ def recalculate_verification(
     original_features: dict[str, Any],
     allow_auto_adjustment: bool,
     verification: dict[str, Any],
+    multiplier_enabled: bool | None = None,
 ) -> dict[str, Any]:
     """应用二阶段的 feature 修正，再由程序重算高难特征、乘数和档位。"""
     reviewed = copy.deepcopy(verification)
@@ -579,6 +595,12 @@ def recalculate_verification(
         target = correction.get("to")
         if field not in REQUIRED_FEATURE_FIELDS:
             rejected.append({**copy.deepcopy(correction), "reason": "非 feature 字段"})
+            continue
+        if field in PROGRAM_DERIVED_FEATURE_FIELDS:
+            rejected.append({
+                **copy.deepcopy(correction),
+                "reason": "程序派生字段不得授权结构改分",
+            })
             continue
         if source != corrected_features.get(field):
             rejected.append({
@@ -617,23 +639,34 @@ def recalculate_verification(
         else float(original_accuracy)
     )
     reviewed_count = len(high.names)
-    multiplier = multiplier_for_high_count(reviewed_count)
+    enabled = (
+        CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER_ENABLED
+        if multiplier_enabled is None
+        else bool(multiplier_enabled)
+    )
+    multiplier_candidate = multiplier_for_high_count(reviewed_count)
+    multiplier = multiplier_candidate if enabled else 1.0
     adjusted_accuracy = round(reviewed_accuracy * multiplier, 1)
     reviewed_level = map_accuracy_to_level(adjusted_accuracy)
     boundary = reviewed.get("adjacent_boundary_review") or {}
-    model_verdict = boundary.get("verdict", "维持")
-    verdict = model_verdict if structural_revision_supported else "维持"
+    boundary_verdict = boundary.get("verdict", "维持")
+    current_index = LEVEL_INDEX[current_level]
+    reviewed_index = LEVEL_INDEX[reviewed_level]
+    if reviewed_index == current_index:
+        reviewed_direction = "维持"
+        proposed_reasonableness = "合理"
+    elif reviewed_index < current_index:
+        reviewed_direction = "应更简单一档"
+        proposed_reasonableness = "偏高"
+    else:
+        reviewed_direction = "应更难一档"
+        proposed_reasonableness = "偏低"
     action_map = {
         "维持": "维持",
         "应更简单一档": "建议降一档",
         "应更难一档": "建议升一档",
     }
-    reasonableness_map = {
-        "维持": "合理",
-        "应更简单一档": "偏高",
-        "应更难一档": "偏低",
-    }
-    multiplier_reasonable = (
+    multiplier_reasonable = (not enabled) or (
         reviewed_count == original_high_count
         and set(high.names) == set(original_high_features)
     )
@@ -643,11 +676,24 @@ def recalculate_verification(
         for item in reviewed.get("high_feature_overlap_review") or []
         if isinstance(item, dict)
     )
+    boundary_verdict_consistent = boundary_verdict == reviewed_direction
+    auto_adjustment_eligible = (
+        allow_auto_adjustment
+        and structural_revision_supported
+        and reviewed.get("confidence") == "高"
+        and reviewed_direction != "维持"
+        and boundary_verdict_consistent
+        and input_review.get("status") != "信息不足"
+        and not unresolved_overlap
+    )
+    reasonableness = (
+        proposed_reasonableness if auto_adjustment_eligible else "合理"
+    )
+    adjusted_level = (
+        reviewed_level if auto_adjustment_eligible else current_level
+    )
     review_requires_manual = bool(
-        reviewed.get("confidence") == "低"
-        or input_review.get("status") == "信息不足"
-        or unresolved_overlap
-        or abs(LEVEL_INDEX[reviewed_level] - LEVEL_INDEX[current_level]) >= 2
+        reviewed_direction != "维持" and not auto_adjustment_eligible
     )
     reviewed.update(
         {
@@ -665,6 +711,8 @@ def recalculate_verification(
             "reviewed_high_difficulty_feature_evidence": high.evidence,
             "reviewed_suppressed_high_feature_overlaps": high.suppressed_overlaps,
             "reviewed_high_difficulty_feature_count": reviewed_count,
+            "reviewed_high_difficulty_multiplier_enabled": enabled,
+            "reviewed_multiplier_candidate": multiplier_candidate,
             "reviewed_multiplier_applied": multiplier,
             "reviewed_original_predicted_accuracy_model_raw": (
                 model_reviewed_accuracy
@@ -672,9 +720,16 @@ def recalculate_verification(
             "reviewed_original_predicted_accuracy": reviewed_accuracy,
             "reviewed_predicted_accuracy": adjusted_accuracy,
             "reviewed_difficulty_level": reviewed_level,
-            "review_action": action_map.get(verdict, "维持"),
-            "rating_reasonableness": reasonableness_map.get(verdict, "合理"),
-            "adjusted_difficulty_level": reviewed_level,
+            "reviewed_direction": reviewed_direction,
+            "boundary_verdict_consistent": boundary_verdict_consistent,
+            "auto_adjustment_eligible": auto_adjustment_eligible,
+            "review_action": (
+                action_map[reviewed_direction]
+                if auto_adjustment_eligible
+                else "维持"
+            ),
+            "rating_reasonableness": reasonableness,
+            "adjusted_difficulty_level": adjusted_level,
             "multiplier_reasonableness": "合理" if multiplier_reasonable else "不合理",
             "stage2_auto_adjustment_enabled": bool(allow_auto_adjustment),
             "review_requires_manual": review_requires_manual,

@@ -5,12 +5,15 @@
 并发、重试、JSONL 断点续跑、图片输入和 token 统计外壳，但将
 feature schema、高难特征检测、乘数复算和输入清洗替换为高中化学实现。
 
-第二阶段默认只审计不自动改档；只有显式设置
-``ENABLE_STAGE2_AUTO_ADJUST=1`` 时，才允许最多调整一档。
+第二阶段默认开启物理同款证据守卫自动改档；可显式设置
+``ENABLE_STAGE2_AUTO_ADJUST=0`` 关闭，且任何情况下最多调整一档。
+化学高难乘数默认关闭；仅在消融实验中显式设置
+``ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER=1`` 时启用。
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -19,9 +22,20 @@ import high_physics_difficulty_rating_and_verify as shared_runner
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PIPELINE_VERSION = "high_chemistry_two_stage_v2"
-ENABLE_STAGE2_AUTO_ADJUST = shared_runner.ENABLE_STAGE2_AUTO_ADJUST
+PIPELINE_VERSION = "high_chemistry_two_stage_v3"
+ENABLE_STAGE2_AUTO_ADJUST = (
+    os.getenv("ENABLE_STAGE2_AUTO_ADJUST", "1").strip() == "1"
+)
+shared_runner.ENABLE_STAGE2_AUTO_ADJUST = ENABLE_STAGE2_AUTO_ADJUST
+ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER = (
+    os.getenv("ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER", "0").strip()
+    == "1"
+)
+chemistry_core.CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER_ENABLED = (
+    ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER
+)
 _shared_validate_verification = shared_runner.validate_verification
+_shared_finalize_level = shared_runner.finalize_level
 
 # 将共享运行器中的学科纯函数替换为化学实现。
 shared_runner.HIGH_DIFFICULTY_FEATURE_NAMES = (
@@ -101,29 +115,22 @@ def _chemistry_finalize_adapter(
     original_high_count: int | None = None,
     reviewed_high_count: int | None = None,
 ):
-    del original_high_count, reviewed_high_count
-    action = {
-        "合理": "维持",
-        "偏高": "建议降一档",
-        "偏低": "建议升一档",
-    }.get(reasonableness, "维持")
-    result = chemistry_core.finalize_level(
-        current_level=current_level,
-        review_action=action,
-        model_suggested_level=model_suggested_level,
-        input_sufficiency=input_sufficiency,
-        auto_adjustment_enabled=ENABLE_STAGE2_AUTO_ADJUST,
+    # 化学乘数关闭时，高难特征数量变化不再代表乘数桶变化；
+    # 其余改档条件完全复用物理的最多一档与人工复核守卫。
+    counts = (
+        (original_high_count, reviewed_high_count)
+        if ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER
+        else (None, None)
     )
-    # 乘数复核不一致时只转人工，不扩大自动调档权限。
-    if multiplier_reasonableness != "合理":
-        return chemistry_core.FinalizationResult(
-            final_level=current_level,
-            needs_manual_review=True,
-            model_suggested_level=result.model_suggested_level,
-            adjustment_desc=f"乘数复核不一致·维持{current_level}·转人工复核",
-            auto_adjustment_applied=False,
-        )
-    return result
+    return _shared_finalize_level(
+        current_level=current_level,
+        reasonableness=reasonableness,
+        model_suggested_level=model_suggested_level,
+        multiplier_reasonableness=multiplier_reasonableness,
+        input_sufficiency=input_sufficiency,
+        original_high_count=counts[0],
+        reviewed_high_count=counts[1],
+    )
 
 
 shared_runner.finalize_level = _chemistry_finalize_adapter
