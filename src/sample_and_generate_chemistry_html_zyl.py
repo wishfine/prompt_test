@@ -310,15 +310,18 @@ def generate_html_file(
     review_scope: str | None = None,
     release_label: str = CHEMISTRY_FROZEN_RELEASE,
 ) -> None:
+    active_levels = [
+        level for level in sorted(samples) if samples[level]
+    ]
     nav_html = "".join(
         f'        <a href="#level-{level}" data-level="{level}">'
         f'{LEVEL_NAMES[level]} ({len(samples[level])})</a>\n'
-        for level in sorted(samples)
+        for level in active_levels
     )
     cards: List[str] = []
     all_questions: List[Dict[str, Any]] = []
 
-    for level in sorted(samples):
+    for level in active_levels:
         items = samples[level]
         cards.append(
             f'<div id="level-{level}" class="level-section">'
@@ -450,6 +453,12 @@ def generate_html_file(
     }
     for placeholder, value in replacements.items():
         content = content.replace(placeholder, value)
+    content = content.replace(
+        "for (let lvl = 1; lvl <= 5; lvl++) {",
+        "for (const lvl of "
+        + json.dumps(active_levels, ensure_ascii=False)
+        + ") {",
+    )
 
     target = Path(output_path)
     target.parent.mkdir(parents=True, exist_ok=True)

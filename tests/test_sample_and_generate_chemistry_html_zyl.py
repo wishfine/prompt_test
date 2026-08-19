@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "src" / "sample_and_generate_chemistry_html.py"
+SCRIPT = ROOT / "src" / "sample_and_generate_chemistry_html_zyl.py"
 SPEC = importlib.util.spec_from_file_location(
     "sample_and_generate_chemistry_html",
     SCRIPT,
@@ -16,6 +16,35 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
+    def test_generated_page_omits_empty_level_sections(self) -> None:
+        samples = {
+            1: [],
+            2: [
+                {
+                    "question_id": "basic-1",
+                    "difficulty_rating": {
+                        "difficulty_level": "基础题",
+                        "features": {},
+                        "reasoning": {},
+                    },
+                }
+            ],
+            3: [],
+            4: [],
+            5: [],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "basic.html"
+            MODULE.generate_html_file(samples, str(output))
+            rendered = output.read_text(encoding="utf-8")
+
+        self.assertIn('id="level-2"', rendered)
+        self.assertNotIn('id="level-1"', rendered)
+        self.assertNotIn('id="level-3"', rendered)
+        self.assertNotIn("本档验收 0 题", rendered)
+        self.assertNotIn("抽样0", rendered)
+        self.assertIn("for (const lvl of [2])", rendered)
+
     def test_parse_level_plan_accepts_requested_five_counts(self) -> None:
         self.assertEqual(
             MODULE.parse_level_plan("120,120,120,90,50"),
@@ -184,7 +213,7 @@ class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
             [
                 "最长解题链",
                 "考查任务",
-                "解题方法",
+                "题目考查点",
                 "计算方法",
                 "误差分析",
                 "知识点跨度",
@@ -285,7 +314,7 @@ class SampleAndGenerateChemistryHtmlTests(unittest.TestCase):
         self.assertNotIn("知识课题数", rendered)
         self.assertNotIn("题干图片资源数", rendered)
         self.assertIn("考查任务", rendered)
-        self.assertIn("解题方法", rendered)
+        self.assertIn("题目考查点", rendered)
         self.assertIn("审题条件与陷阱", rendered)
         self.assertNotIn("关键条件处理", rendered)
         self.assertIn("选项/小问关联方式", rendered)
