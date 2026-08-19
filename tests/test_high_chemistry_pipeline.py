@@ -76,9 +76,9 @@ class AccuracyAndSchemaTests(unittest.TestCase):
     def test_accuracy_boundaries(self):
         cases = [
             (88, "难度1档"), (87.999, "难度2档"),
-            (75, "难度2档"), (74.999, "难度3档"),
-            (55, "难度3档"), (54.999, "难度4档"),
-            (35, "难度4档"), (34.999, "难度5档"),
+            (85, "难度2档"), (84.999, "难度3档"),
+            (58, "难度3档"), (57.999, "难度4档"),
+            (38, "难度4档"), (37.999, "难度5档"),
         ]
         for value, expected in cases:
             with self.subTest(value=value):
@@ -224,7 +224,7 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(enriched["effective_high_difficulty_feature_count"], 2)
         self.assertEqual(enriched["multiplier_applied"], 1.0)
         self.assertEqual(enriched["predicted_accuracy"], 80)
-        self.assertEqual(enriched["difficulty_level"], "难度2档")
+        self.assertEqual(enriched["difficulty_level"], "难度3档")
 
     def test_low_structure_score_conflict_is_audited_not_overwritten(self):
         enriched = core.enrich_stage1_rating(stage1_rating(accuracy=70))
@@ -346,7 +346,7 @@ class PromptAssetTests(unittest.TestCase):
         text = (ROOT / "prompts" / "高中化学难度打标提示词.txt").read_text(encoding="utf-8")
         for phrase in (
             "local_model_familiarity", "whole_question_burden",
-            "task_completion_structure", "五个正确率区间",
+            "task_completion_structure", "原始正确率的统一五区间",
             "区间内分数统一规则",
             "有效决策负担", "失分传播与整题完成",
             "至少4项支持上部", "至少3项支持下部",

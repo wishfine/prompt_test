@@ -225,11 +225,11 @@ def map_accuracy_to_level(predicted_accuracy: Any) -> str:
         raise ValueError("predicted_accuracy 必须位于 0 到 100")
     if accuracy >= 88:
         return "难度1档"
-    if accuracy >= 75:
+    if accuracy >= 85:
         return "难度2档"
-    if accuracy >= 55:
+    if accuracy >= 58:
         return "难度3档"
-    if accuracy >= 35:
+    if accuracy >= 38:
         return "难度4档"
     return "难度5档"
 
@@ -639,12 +639,12 @@ def _accuracy_scale_audit(
     three_state_risk = (
         features.get("state_count") == "3个及以上"
         and features.get("process_state_relation") in {"显性顺序衔接", "前后状态强依赖", "连续变化伴随平衡或边界"}
-        and base_accuracy >= 55
+        and base_accuracy >= 58
     )
     multi_reaction_risk = (
         features.get("reaction_count") == "4个及以上"
         and features.get("reaction_relation") in {"多阶段强依赖反应链", "竞争或副反应", "条件改变导致方向或产物变化"}
-        and base_accuracy >= 55
+        and base_accuracy >= 58
     )
     experiment_high_score_conflict = (
         features.get("context_type") == "实验探究"
@@ -657,19 +657,19 @@ def _accuracy_scale_audit(
         features.get("context_type") == "工业流程"
         and features.get("information_carrier") in {"工艺流程图", "多载体综合"}
         and features.get("step_count") in {"6-8步", "9-12步", "12步以上"}
-        and base_accuracy >= 55
+        and base_accuracy >= 58
     )
     return {
         "metadata_version": "high_chemistry_v3_unified_five_level",
         "metadata_complete": True,
-        "low_structure_score_conflict": low_structure and base_accuracy < 75 and task_structure in {"单一评分任务", "多个同质独立任务"},
-        "high_burden_score_conflict": high_burden_structure and base_accuracy >= 55,
+        "low_structure_score_conflict": low_structure and base_accuracy < 85 and task_structure in {"单一评分任务", "多个同质独立任务"},
+        "high_burden_score_conflict": high_burden_structure and base_accuracy >= 58,
         "three_state_boundary_review_risk": three_state_risk,
         "multi_reaction_boundary_review_risk": multi_reaction_risk,
         "multi_experiment_high_score_conflict": experiment_high_score_conflict,
         "industrial_flow_high_score_conflict": industrial_flow_high_score_conflict,
-        "standard_model_score_inflation_risk": familiarity in {"教材直接结论", "熟悉标准模型"} and (high_burden_structure or complex_signals >= 3) and base_accuracy >= 55,
-        "burden_label_score_conflict": (burden in {"高", "极高"} and base_accuracy >= 55) or (burden == "低" and base_accuracy < 75),
+        "standard_model_score_inflation_risk": familiarity in {"教材直接结论", "熟悉标准模型"} and (high_burden_structure or complex_signals >= 3) and base_accuracy >= 58,
+        "burden_label_score_conflict": (burden in {"高", "极高"} and base_accuracy >= 58) or (burden == "低" and base_accuracy < 85),
     }
 
 
