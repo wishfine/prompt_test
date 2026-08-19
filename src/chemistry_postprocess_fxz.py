@@ -598,6 +598,25 @@ def fill_blank_subquestion_count(data: Dict[str, Any]) -> int:
     return sum(bool(re.search(r"[_＿]{2,}", segment)) for segment in segments)
 
 
+def poetry_chemistry_floor_signal(data: Dict[str, Any]) -> Optional[str]:
+    """识别必须先把诗词/古文语义还原为化学现象的题目。"""
+    stem = str(data.get("stem", "") or "")
+    text = visible_text(data, include_analysis=False)
+    has_poetry_content = bool(
+        re.search(r"唐诗|宋词|诗词|古诗|诗句|诗歌|诗文|古文|文言", text)
+    )
+    asks_chemistry_judgment = bool(
+        re.search(
+            r"化学变化|物理变化|物质变化|化学现象|"
+            r"是否生成新物质|燃烧|发生反应|化学反应",
+            stem,
+        )
+    )
+    if not (has_poetry_content and asks_chemistry_judgment):
+        return None
+    return "诗词或古文语义必须先转译为具体现象，再作化学判断"
+
+
 def count_choice_options(data: Dict[str, Any]) -> int:
     """统计显式 A-D 选项，仅作客观结构门控。"""
     options = str(data.get("options", "") or "")
@@ -917,6 +936,7 @@ def postprocess_chemistry_difficulty(
         or teacher_distribution_guards_writeback_enabled
     )
     teacher_candidate_result = copy.deepcopy(rating_result)
+    poetry_chemistry_floor = poetry_chemistry_floor_signal(data or {})
     easy_many_fill_blank_subquestions_floor = (
         fill_blank_subquestion_count(data or {}) >= 4
     )
@@ -937,6 +957,17 @@ def postprocess_chemistry_difficulty(
     reaction_floor = reaction_validation_floor_signal(data)
     if teacher_guard_active:
         if (
+            raw_level == "送分题"
+            and poetry_chemistry_floor
+        ):
+            set_level_with_reason(
+                teacher_candidate_result,
+                "基础题",
+                "教师口径：诗词或古文需要先完成语义转译再作化学判断",
+                rule="teacher_easy_to_basic_poetry_translation_floor",
+                evidence=[poetry_chemistry_floor],
+            )
+        elif (
             raw_level == "送分题"
             and easy_many_fill_blank_subquestions_floor
         ):

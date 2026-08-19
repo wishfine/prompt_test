@@ -62,6 +62,36 @@ def hard_rating() -> dict:
     }
 
 
+def easy_rating() -> dict:
+    item = copy.deepcopy(hard_rating())
+    item["features"].update(
+        {
+            "longest_solution_chain": ["直接套用化学变化判据"],
+            "task_groups": [
+                {"task_type": "直接事实与概念", "count": 1}
+            ],
+            "rule_families": ["分类或概念辨析"],
+            "curriculum_topics": ["U1-1"],
+            "parallel_task_relation": "单一答题目标",
+            "solution_topology": "单点直接回答",
+            "reaction_structure": "无反应任务",
+            "condition_operations": [],
+            "representation_operations": [],
+            "evidence_operations": [],
+            "experiment_operation": "无",
+            "experiment_task_structure": "无实验判断",
+            "visual_task_structure": "无必要视觉信息",
+            "graph_table_operation": "无",
+            "error_analysis_operation": "无误差分析",
+            "calculation_operations": [],
+            "new_information_operation": "无新信息",
+        }
+    )
+    item["coarse_difficulty"] = "送分/基础区间（1-2档）"
+    item["difficulty_level"] = "送分题"
+    return item
+
+
 class ChemistryFxzTeacherUpdateTests(unittest.TestCase):
     def test_all_hard_to_final_rules_are_candidate_only(self) -> None:
         self.assertTrue(
@@ -130,6 +160,44 @@ class ChemistryFxzTeacherUpdateTests(unittest.TestCase):
         }
 
         self.assertIsNone(postprocess.reaction_validation_floor_signal(data))
+
+    def test_prompt_sets_poetry_chemistry_judgment_to_basic_floor(self) -> None:
+        prompt = PROMPT_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("诗词或诗句作为待判断内容时至少判为基础题", prompt)
+
+    def test_poetry_chemistry_judgment_writes_easy_back_to_basic(self) -> None:
+        data = {
+            "stem": "唐诗宋词是文化瑰宝。下列诗词蕴含化学变化的是",
+            "options": (
+                "A. 忽如一夜春风来，千树万树梨花开\n"
+                "B. 日照香炉生紫烟，遥看瀑布挂前川\n"
+                "C. 野火烧不尽，春风吹又生\n"
+                "D. 八月秋高风怒号，卷我屋上三重茅"
+            ),
+        }
+        result = postprocess.postprocess_chemistry_difficulty(
+            easy_rating(),
+            data,
+            teacher_distribution_guards_enabled=True,
+            teacher_distribution_guards_writeback_enabled=True,
+        )
+
+        self.assertEqual(result["difficulty_level"], "基础题")
+        self.assertEqual(
+            result["postprocess_actions"][0]["rule"],
+            "teacher_easy_to_basic_poetry_translation_floor",
+        )
+
+    def test_poetry_background_without_interpretation_does_not_trigger(
+        self,
+    ) -> None:
+        data = {
+            "stem": "学校诗歌社团走进化学实验室，下列操作正确的是",
+            "options": "A. 倾倒液体\nB. 加热试管\nC. 过滤\nD. 读量筒",
+        }
+
+        self.assertIsNone(postprocess.poetry_chemistry_floor_signal(data))
 
     def test_new_teacher_labels_and_sample_are_id_aligned(self) -> None:
         label_path = (
