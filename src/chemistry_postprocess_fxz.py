@@ -47,8 +47,13 @@ VISUAL_REFERENCE_RE = re.compile(
 )
 
 # 规则保留候选动作与证据，但不自动改写最终档位；待积累题目口径后再收紧。
+# 新教师集回放表明当前“拔高→压轴”规则均为净误伤，因此整个边界只做
+# 审计：保留命中规则和证据，最终等级保持模型原判。
 TEACHER_GUARD_CANDIDATE_ONLY_RULES = {
     "teacher_basic_to_medium_parallel_phenomena_multitopic",
+    "teacher_hard_to_final_dense_multiquestion_quantitative_chain",
+    "teacher_hard_to_final_multistage_multiquestion_multireaction",
+    "teacher_hard_to_final_strict_deep_quantitative_chain",
 }
 
 
@@ -838,10 +843,10 @@ def postprocess_chemistry_difficulty(
     teacher_distribution_guards_enabled: bool,
     teacher_distribution_guards_writeback_enabled: bool,
 ) -> Dict[str, Any]:
-    """V5正式后处理：仅保留当前Prompt实际使用的窄教师边界校准。
+    """V5正式后处理：执行当前Prompt使用的窄教师边界校准。
 
-    生产路径固定为V5十七项可观测特征，只保留当前实际写回的教师边界规则。
-    已停用的候选审计规则不再进入生产后处理链。
+    生产路径固定为V5十七项可观测特征。低档窄规则可按开关写回；
+    拔高到压轴的规则只保留候选证据，不再改写最终档位。
     """
     if not rating_result:
         return rating_result
@@ -1102,6 +1107,12 @@ def postprocess_chemistry_difficulty(
         and teacher_guard_action.get("rule")
         in TEACHER_GUARD_CANDIDATE_ONLY_RULES
     )
+    hard_to_final_writeback_disabled = bool(
+        teacher_guard_candidate_only
+        and str(teacher_guard_action.get("rule", "")).startswith(
+            "teacher_hard_to_final_"
+        )
+    )
 
     teacher_guard_writeback_applied = bool(
         teacher_distribution_guards_writeback_enabled
@@ -1127,6 +1138,8 @@ def postprocess_chemistry_difficulty(
         "特征存在兜底或证据不完整，禁止自动写回："
         + "、".join(feature_quality_flags)
         if teacher_guard_action and feature_quality_blocks_writeback
+        else "拔高→压轴规则已关闭写回；仅保留候选动作与证据"
+        if hard_to_final_writeback_disabled
         else "该规则当前仅记录候选动作，等待结合题目口径收紧后再开放写回"
         if teacher_guard_candidate_only
         else ""
@@ -1149,7 +1162,11 @@ def postprocess_chemistry_difficulty(
         )
     elif teacher_guard_candidate_only:
         rating_result["feature_audit_flags"].append(
-            "规则当前仅审计，不自动写回最终档位："
+            (
+                "拔高→压轴规则已关闭写回，仅审计候选："
+                if hard_to_final_writeback_disabled
+                else "规则当前仅审计，不自动写回最终档位："
+            )
             + str(teacher_guard_action.get("rule", ""))
         )
     elif (
