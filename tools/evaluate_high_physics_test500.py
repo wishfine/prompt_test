@@ -175,12 +175,16 @@ def review_diagnostics(
             verification.get("multiplier_reasonableness") == "不合理"
         )
         corrections = verification.get("supported_feature_corrections")
+        if not isinstance(corrections, list):
+            corrections = verification.get("feature_corrections_applied")
         if isinstance(corrections, list):
             supported_feature_correction_count += len(corrections)
         high_feature_set_changed_count += (
             verification.get("high_difficulty_features_changed") is True
         )
         direction = verification.get("reviewed_direction")
+        if not isinstance(direction, str) or not direction:
+            direction = verification.get("review_action")
         if isinstance(direction, str) and direction:
             reviewed_direction_distribution[direction] += 1
     return {
@@ -282,6 +286,11 @@ def accuracy_scale_diagnostics(
             audit.get("multi_experiment_high_score_conflict") is True
         )
 
+    score_count = sum(score_dist.values())
+    most_common_score, most_common_count = (
+        score_dist.most_common(1)[0] if score_dist else (None, 0)
+    )
+    top_5_count = sum(count for _, count in score_dist.most_common(5))
     return {
         "records_with_stage1": records_with_stage1,
         "metadata_complete_count": metadata_complete,
@@ -309,6 +318,16 @@ def accuracy_scale_diagnostics(
             {"score": score, "count": count}
             for score, count in score_dist.most_common(15)
         ],
+        "most_common_score": most_common_score,
+        "most_common_score_count": most_common_count,
+        "most_common_score_share": (
+            round(most_common_count / score_count, 4)
+            if score_count else None
+        ),
+        "top_5_score_share": (
+            round(top_5_count / score_count, 4)
+            if score_count else None
+        ),
         "anchor_distribution": dict(anchor_dist),
         "local_model_familiarity_distribution": dict(familiarity_dist),
         "whole_question_burden_distribution": dict(burden_dist),

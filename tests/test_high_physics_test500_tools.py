@@ -103,6 +103,29 @@ class HighPhysicsTest500ToolTests(unittest.TestCase):
         self.assertEqual(report["top_level_manual_review_count"], 2)
         self.assertEqual(report["final_differs_from_step1_count"], 0)
 
+    def test_review_diagnostics_accepts_chemistry_correction_field_names(self) -> None:
+        predictions = {
+            "1": {
+                "difficulty_level_step1": "难度3档",
+                "final_difficulty_level": "难度3档",
+                "needs_manual_review": False,
+                "verification": {
+                    "has_structural_revision": True,
+                    "review_requires_manual": False,
+                    "multiplier_reasonableness": "合理",
+                    "feature_corrections_applied": [{"field": "step_count"}],
+                    "high_difficulty_features_changed": False,
+                    "review_action": "建议升一档",
+                },
+            }
+        }
+        report = evaluator.review_diagnostics(predictions)
+        self.assertEqual(report["supported_feature_correction_count"], 1)
+        self.assertEqual(
+            report["reviewed_direction_distribution"],
+            {"建议升一档": 1},
+        )
+
     def test_evaluator_reports_accuracy_scale_audit_diagnostics(self) -> None:
         predictions = {
             "1": {
@@ -145,6 +168,8 @@ class HighPhysicsTest500ToolTests(unittest.TestCase):
         self.assertEqual(report["error_risk_not_local_count"], 1)
         self.assertEqual(report["unsupported_boundary_evidence_count"], 1)
         self.assertEqual(report["unique_original_accuracy_count"], 2)
+        self.assertEqual(report["most_common_score_share"], 0.5)
+        self.assertEqual(report["top_5_score_share"], 1.0)
         self.assertEqual(
             report["anchor_distribution"],
             {"教材直接原型": 1, "熟悉标准模型": 1},
