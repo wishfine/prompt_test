@@ -410,7 +410,7 @@ async def process_question(
             )
             await append_jsonl(output_path, {
                 **output_base,
-                "pipeline_version": "high_chemistry_single_stage_v2_strict_schema",
+                "pipeline_version": "high_chemistry_single_stage_v3_deduplicated_features",
                 "model_name": MODEL_NAME,
                 "temperature": TEMPERATURE,
                 "difficulty_rating": stage1,

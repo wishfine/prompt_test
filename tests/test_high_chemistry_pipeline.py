@@ -170,6 +170,17 @@ class Stage1Tests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reaction_relation 非法值"):
             core.prepare_stage1_rating(rating)
 
+    def test_exact_array_duplicates_are_deduplicated(self):
+        rating = stage1_rating(base_features(
+            knowledge_L2=["物质组成、分类与分散系", "物质组成、分类与分散系"],
+            knowledge_points=["氧化还原", "氧化还原"],
+            chemistry_methods=["守恒思想", "守恒思想"],
+        ), 80)
+        prepared = core.prepare_stage1_rating(rating)
+        self.assertEqual(prepared["features"]["knowledge_L2"], ["物质组成、分类与分散系"])
+        self.assertEqual(prepared["features"]["knowledge_points"], ["氧化还原"])
+        self.assertEqual(prepared["features"]["chemistry_methods"], ["守恒思想"])
+
     def test_strict_output_schema_uses_canonical_enums(self):
         schema = core.build_stage1_output_schema()
         self.assertFalse(schema["additionalProperties"])
@@ -196,7 +207,7 @@ class Stage1Tests(unittest.TestCase):
         enriched = core.enrich_stage1_rating(stage1_rating(accuracy=80))
         self.assertEqual(enriched["original_predicted_accuracy"], 80)
 
-    def test_multiplier_is_applied_after_original_accuracy(self):
+    def test_overlapping_high_features_are_grouped_before_multiplier(self):
         features = base_features(
             substance_count="7种及以上",
             reaction_count="4个及以上",
@@ -209,9 +220,11 @@ class Stage1Tests(unittest.TestCase):
         )
         enriched = core.enrich_stage1_rating(stage1_rating(features, 80))
         self.assertEqual(enriched["original_predicted_accuracy"], 80)
-        self.assertEqual(enriched["multiplier_applied"], 0.70)
-        self.assertEqual(enriched["predicted_accuracy"], 56)
-        self.assertEqual(enriched["difficulty_level"], "难度3档")
+        self.assertEqual(enriched["high_difficulty_feature_count"], 4)
+        self.assertEqual(enriched["effective_high_difficulty_feature_count"], 2)
+        self.assertEqual(enriched["multiplier_applied"], 1.0)
+        self.assertEqual(enriched["predicted_accuracy"], 80)
+        self.assertEqual(enriched["difficulty_level"], "难度2档")
 
     def test_low_structure_score_conflict_is_audited_not_overwritten(self):
         enriched = core.enrich_stage1_rating(stage1_rating(accuracy=70))
@@ -357,7 +370,7 @@ class RunnerAssetTests(unittest.TestCase):
 
     def test_runner_compiles(self):
         compile(self.source, str(self.path), "exec")
-        self.assertIn('"high_chemistry_single_stage_v2_strict_schema"', self.source)
+        self.assertIn('"high_chemistry_single_stage_v3_deduplicated_features"', self.source)
         self.assertIn('"type": "json_schema"', self.source)
         self.assertIn('"strict": True', self.source)
         self.assertIn("build_stage1_output_schema", self.source)

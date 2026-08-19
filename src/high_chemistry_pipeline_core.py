@@ -257,6 +257,23 @@ def _ensure_unique_strings(values: Any, field: str, *, nonempty: bool = True) ->
     return cleaned
 
 
+def _deduplicate_exact_strings(
+    values: Any, field: str, *, nonempty: bool = True
+) -> list[str]:
+    if not isinstance(values, list):
+        raise ValueError(f"{field} 必须为列表")
+    cleaned: list[str] = []
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{field} 不得包含空值或非字符串")
+        normalized = value.strip()
+        if normalized not in cleaned:
+            cleaned.append(normalized)
+    if nonempty and not cleaned:
+        raise ValueError(f"{field} 不得为空")
+    return cleaned
+
+
 def validate_feature_schema(features: dict[str, Any]) -> None:
     if not isinstance(features, dict):
         raise ValueError("features 必须为对象")
@@ -315,8 +332,14 @@ def prepare_stage1_rating(result: dict[str, Any]) -> dict[str, Any]:
     features = prepared.get("features")
     if not isinstance(features, dict):
         raise ValueError("第一阶段结果缺少 features 对象")
-    points = _ensure_unique_strings(features.get("knowledge_points"), "knowledge_points")
-    l2_values = _ensure_unique_strings(features.get("knowledge_L2"), "knowledge_L2")
+    points = _deduplicate_exact_strings(features.get("knowledge_points"), "knowledge_points")
+    l2_values = _deduplicate_exact_strings(features.get("knowledge_L2"), "knowledge_L2")
+    methods = _deduplicate_exact_strings(
+        features.get("chemistry_methods"), "chemistry_methods", nonempty=False
+    )
+    features["knowledge_points"] = points
+    features["knowledge_L2"] = l2_values
+    features["chemistry_methods"] = methods
     invalid_l2 = [value for value in l2_values if value not in KNOWLEDGE_L2_TO_L1]
     if invalid_l2:
         raise ValueError(f"knowledge_L2 含非法值：{invalid_l2}")
@@ -487,6 +510,36 @@ def detect_high_difficulty_features(features: dict[str, Any]) -> HighDifficultyD
     )
 
 
+def group_overlapping_high_difficulty_features(
+    names: list[str], overlap_pairs: list[list[str]]
+) -> list[list[str]]:
+    """将共享证据字段的高难特征按传递关系合并为独立乘数组。"""
+    adjacency = {name: set() for name in names}
+    for pair in overlap_pairs:
+        if len(pair) != 2 or pair[0] not in adjacency or pair[1] not in adjacency:
+            continue
+        adjacency[pair[0]].add(pair[1])
+        adjacency[pair[1]].add(pair[0])
+
+    groups: list[list[str]] = []
+    visited: set[str] = set()
+    for name in names:
+        if name in visited:
+            continue
+        pending = [name]
+        members: set[str] = {name}
+        visited.add(name)
+        while pending:
+            current = pending.pop()
+            for neighbor in adjacency[current]:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    members.add(neighbor)
+                    pending.append(neighbor)
+        groups.append([candidate for candidate in names if candidate in members])
+    return groups
+
+
 def detect_active_features(features: dict[str, Any]) -> list[str]:
     """记录普通活跃结构；每个认知类别最多计一次，不参与乘数。"""
     active: list[str] = []
@@ -649,7 +702,11 @@ def enrich_stage1_rating(
 
     active_features = detect_active_features(features)
     detection = detect_high_difficulty_features(features)
-    multiplier = multiplier_for_high_count(len(detection.names))
+    multiplier_groups = group_overlapping_high_difficulty_features(
+        detection.names, detection.possible_overlap_groups
+    )
+    effective_high_count = len(multiplier_groups)
+    multiplier = multiplier_for_high_count(effective_high_count)
     adjusted_accuracy = round(original_accuracy * multiplier, 1)
     rating["original_predicted_accuracy"] = round(original_accuracy, 1)
     rating["accuracy_scale_audit"] = _accuracy_scale_audit(
@@ -661,6 +718,8 @@ def enrich_stage1_rating(
     rating["high_difficulty_feature_evidence"] = detection.evidence
     rating["possible_high_feature_overlaps"] = detection.possible_overlap_groups
     rating["high_difficulty_feature_count"] = len(detection.names)
+    rating["high_difficulty_multiplier_groups"] = multiplier_groups
+    rating["effective_high_difficulty_feature_count"] = effective_high_count
     rating["multiplier_applied"] = multiplier
     rating["predicted_accuracy"] = adjusted_accuracy
     rating["difficulty_level"] = map_accuracy_to_level(adjusted_accuracy)
