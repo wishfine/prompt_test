@@ -69,6 +69,11 @@ class ChemistryFxzTeacherUpdateTests(unittest.TestCase):
                 postprocess.TEACHER_GUARD_CANDIDATE_ONLY_RULES
             )
         )
+        self.assertTrue(
+            postprocess.is_teacher_guard_candidate_only_rule(
+                "teacher_hard_to_final_future_rule"
+            )
+        )
 
     def test_dense_hard_to_final_candidate_does_not_write_back(self) -> None:
         result = postprocess.postprocess_chemistry_difficulty(
@@ -105,8 +110,26 @@ class ChemistryFxzTeacherUpdateTests(unittest.TestCase):
             "键能—反应热模型",
             "教师等级：压轴题",
             "不得被同题其余初中常规小问平均降档",
+            "两路制气",
+            "通气先后",
+            "末端气体定量结果反推产量",
         ):
             self.assertIn(text, prompt)
+
+    def test_parallel_single_step_conversions_do_not_form_reaction_floor(
+        self,
+    ) -> None:
+        data = {
+            "stem": "在给定条件下，下列物质间的转化不能实现的是",
+            "options": (
+                "A. Fe → Fe2O3\n"
+                "B. CaCO3 → CO2\n"
+                "C. H2 → H2O\n"
+                "D. Ca(OH)2 → NaOH"
+            ),
+        }
+
+        self.assertIsNone(postprocess.reaction_validation_floor_signal(data))
 
     def test_new_teacher_labels_and_sample_are_id_aligned(self) -> None:
         label_path = (
@@ -144,6 +167,12 @@ class ChemistryFxzTeacherUpdateTests(unittest.TestCase):
             if str(row["question_id"]) == "2754474790292570112"
         )
         self.assertEqual(target["standard_level_name"], "压轴题")
+        additional_target = next(
+            row
+            for row in labels
+            if str(row["question_id"]) == "2811150975861800960"
+        )
+        self.assertEqual(additional_target["standard_level_name"], "压轴题")
 
 
 if __name__ == "__main__":

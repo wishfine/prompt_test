@@ -348,7 +348,7 @@
 {"question_id": "3383614966710784000", "standard_level": 3, "standard_level_name": "中等题", "reason": "", "label_source": "visualizer_0817_4_uncorrected"}
 {"question_id": "2763000225213288448", "standard_level": 3, "standard_level_name": "中等题", "reason": "", "label_source": "visualizer_0817_4_uncorrected"}
 {"question_id": "2769228098986102784", "standard_level": 3, "standard_level_name": "中等题", "reason": "", "label_source": "visualizer_0817_4_uncorrected"}
-{"question_id": "2811150975861800960", "standard_level": 2, "standard_level_name": "基础题", "reason": "属于基础题，基础题中有大量相同类型的题", "label_source": "teacher_review_20260819"}
+{"question_id": "2811150975861800960", "standard_level": 5, "standard_level_name": "压轴题", "reason": "教师补充确认：压轴题", "label_source": "teacher_review_20260819_manual_correction"}
 {"question_id": "2757562555495112704", "standard_level": 3, "standard_level_name": "中等题", "reason": "", "label_source": "visualizer_0817_4_uncorrected"}
 {"question_id": "2764391044120891392", "standard_level": 3, "standard_level_name": "中等题", "reason": "", "label_source": "visualizer_0817_4_uncorrected"}
 {"question_id": "3153323703288999936", "standard_level": 3, "standard_level_name": "中等题", "reason": "", "label_source": "visualizer_0817_4_uncorrected"}

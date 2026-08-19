@@ -57,6 +57,15 @@ TEACHER_GUARD_CANDIDATE_ONLY_RULES = {
 }
 
 
+def is_teacher_guard_candidate_only_rule(rule: Any) -> bool:
+    """判断规则是否只能审计；所有拔高到压轴规则统一禁止写回。"""
+    rule_name = str(rule or "")
+    return bool(
+        rule_name in TEACHER_GUARD_CANDIDATE_ONLY_RULES
+        or rule_name.startswith("teacher_hard_to_final_")
+    )
+
+
 def is_observable_feature_contract(features: Any) -> bool:
     """当前生产后处理只接受 V5 十七项字段。"""
     return bool(
@@ -718,12 +727,20 @@ def reaction_validation_floor_signal(
     if count_choice_options(data) < 4:
         return None
 
+    option_lines = [
+        line
+        for line in str(data.get("options", "") or "").splitlines()
+        if line.strip()
+    ]
+    has_continuous_conversion_in_one_candidate = any(
+        count_reaction_arrows(line) >= 2 for line in option_lines
+    )
     if (
         re.search(
             r"转化|给定条件|一定条件|各步反应|实现下列",
             stem,
         )
-        and count_reaction_arrows(text) >= 2
+        and has_continuous_conversion_in_one_candidate
     ):
         return "多个候选连续转化链需逐段核验反应物、条件和产物"
 
@@ -1104,8 +1121,9 @@ def postprocess_chemistry_difficulty(
     )
     teacher_guard_candidate_only = bool(
         teacher_guard_action
-        and teacher_guard_action.get("rule")
-        in TEACHER_GUARD_CANDIDATE_ONLY_RULES
+        and is_teacher_guard_candidate_only_rule(
+            teacher_guard_action.get("rule")
+        )
     )
     hard_to_final_writeback_disabled = bool(
         teacher_guard_candidate_only
