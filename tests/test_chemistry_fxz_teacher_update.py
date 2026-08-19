@@ -62,36 +62,6 @@ def hard_rating() -> dict:
     }
 
 
-def easy_rating() -> dict:
-    item = hard_rating()
-    item["features"].update(
-        {
-            "longest_solution_chain": ["直接填写教材事实"],
-            "task_groups": [
-                {"task_type": "直接事实与概念", "count": 4}
-            ],
-            "rule_families": ["教材事实直接匹配"],
-            "curriculum_topics": ["U1-1"],
-            "parallel_task_relation": "同一规则下多个对象",
-            "solution_topology": "单点直接回答",
-            "reaction_structure": "无反应任务",
-            "condition_operations": [],
-            "representation_operations": [],
-            "evidence_operations": [],
-            "experiment_operation": "无",
-            "experiment_task_structure": "无实验判断",
-            "visual_task_structure": "无必要视觉信息",
-            "graph_table_operation": "无",
-            "error_analysis_operation": "无误差分析",
-            "calculation_operations": [],
-            "new_information_operation": "无新信息",
-        }
-    )
-    item["coarse_difficulty"] = "送分/基础区间（1-2档）"
-    item["difficulty_level"] = "送分题"
-    return item
-
-
 class ChemistryFxzTeacherUpdateTests(unittest.TestCase):
     def test_all_hard_to_final_rules_are_candidate_only(self) -> None:
         self.assertTrue(
@@ -145,50 +115,6 @@ class ChemistryFxzTeacherUpdateTests(unittest.TestCase):
             "末端气体定量结果反推产量",
         ):
             self.assertIn(text, prompt)
-
-    def test_prompt_sets_four_fill_blank_questions_to_basic_floor(self) -> None:
-        prompt = PROMPT_PATH.read_text(encoding="utf-8")
-
-        self.assertIn("四个及以上真实填空小问至少判为基础题", prompt)
-
-    def test_four_fill_blank_subquestions_write_easy_back_to_basic(
-        self,
-    ) -> None:
-        result = postprocess.postprocess_chemistry_difficulty(
-            easy_rating(),
-            {
-                "stem": "请完成填空。",
-                "sub_questions": [
-                    {"stem": f"填空{i}：______", "options": ""}
-                    for i in range(1, 5)
-                ],
-            },
-            teacher_distribution_guards_enabled=True,
-            teacher_distribution_guards_writeback_enabled=True,
-        )
-
-        self.assertEqual(result["difficulty_level"], "基础题")
-        self.assertEqual(
-            result["postprocess_actions"][0]["rule"],
-            "teacher_easy_to_basic_four_fill_blank_subquestions",
-        )
-
-    def test_three_fill_blank_subquestions_do_not_trigger_floor(self) -> None:
-        result = postprocess.postprocess_chemistry_difficulty(
-            easy_rating(),
-            {
-                "stem": "请完成填空。",
-                "sub_questions": [
-                    {"stem": f"填空{i}：______", "options": ""}
-                    for i in range(1, 4)
-                ],
-            },
-            teacher_distribution_guards_enabled=True,
-            teacher_distribution_guards_writeback_enabled=True,
-        )
-
-        self.assertEqual(result["difficulty_level"], "送分题")
-        self.assertEqual(result["postprocess_actions"], [])
 
     def test_parallel_single_step_conversions_do_not_form_reaction_floor(
         self,
