@@ -724,6 +724,72 @@ class PipelineAndInputTests(unittest.TestCase):
         self.assertTrue(reviewed["auto_adjustment_eligible"])
         self.assertEqual(reviewed["adjusted_difficulty_level"], "难度4档")
 
+    def test_stage2_structural_cluster_promotes_model_switch_with_multistage_flow(self) -> None:
+        features = base_features(
+            substance_count="4-6种",
+            substance_relation="前后转化依赖",
+            reaction_count="2-3个",
+            reaction_relation="显性顺序衔接",
+            process_structure="多阶段显性流程",
+            step_count="3-5步",
+            model_explicitness="半隐含模型",
+            model_relation="模型切换",
+            reasoning_chain="多层因果",
+            representation_conversion="一次常规转换",
+            evidence_relation="证据链相互支持",
+            information_conversion="单次关系转换",
+        )
+        reviewed = core.recalculate_verification(
+            current_level="难度3档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=62.0,
+            original_features=features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [],
+                "reviewed_high_difficulty_features": [],
+                "reviewed_original_predicted_accuracy": 62.0,
+                "has_structural_revision": False,
+                "adjacent_boundary_review": {"verdict": "维持"},
+                "confidence": "高",
+                "input_sufficiency_review": {"status": "充分"},
+                "high_feature_overlap_review": [],
+            },
+        )
+        self.assertTrue(reviewed["chemistry_structural_cluster_promotion_candidate"])
+        self.assertTrue(reviewed["auto_adjustment_eligible"])
+        self.assertEqual(reviewed["adjusted_difficulty_level"], "难度4档")
+
+    def test_stage2_structural_cluster_rejects_isolated_model_switch(self) -> None:
+        features = base_features(
+            step_count="3-5步",
+            model_explicitness="半隐含模型",
+            model_relation="模型切换",
+            reasoning_chain="多层因果",
+            representation_conversion="一次常规转换",
+        )
+        reviewed = core.recalculate_verification(
+            current_level="难度3档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=62.0,
+            original_features=features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [],
+                "reviewed_high_difficulty_features": [],
+                "reviewed_original_predicted_accuracy": 62.0,
+                "has_structural_revision": False,
+                "adjacent_boundary_review": {"verdict": "维持"},
+                "confidence": "高",
+                "input_sufficiency_review": {"status": "充分"},
+                "high_feature_overlap_review": [],
+            },
+        )
+        self.assertFalse(reviewed["chemistry_structural_cluster_promotion_candidate"])
+        self.assertFalse(reviewed["auto_adjustment_eligible"])
+
     def test_stage2_representation_channel_rejects_score_above_68(self) -> None:
         features = base_features(
             step_count="3-5步",

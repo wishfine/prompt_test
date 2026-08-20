@@ -308,6 +308,93 @@ def _chemistry_58_boundary_promotion_candidate(
     return information_chain or dependent_model_chain or representation_chain
 
 
+def _structural_cluster_signals(features: dict[str, Any]) -> list[str]:
+    """返回可审计的中高档结构类别；不使用题长、选项数或普通活跃特征。"""
+    signals = [
+        (
+            "体系耦合",
+            features.get("substance_relation")
+            in {"前后转化依赖", "组成—性质—反应网络"},
+        ),
+        (
+            "反应链",
+            features.get("reaction_relation")
+            in {"前后反应强依赖", "多路径反应网络"},
+        ),
+        (
+            "多阶段流程",
+            features.get("process_structure")
+            in {"多阶段显性流程", "多阶段强依赖", "循环或回流流程"},
+        ),
+        (
+            "模型迁移",
+            features.get("model_relation") in {"模型切换", "多模型耦合"},
+        ),
+        (
+            "高层表征转换",
+            features.get("representation_conversion")
+            in {"多次同类转换", "多表征连续转换", "逆向表征转换"},
+        ),
+        (
+            "证据链",
+            features.get("evidence_relation")
+            in {"证据链相互支持", "证据冲突需排除"},
+        ),
+        (
+            "隐含边界",
+            features.get("hidden_conditions") == "多个隐含条件"
+            or features.get("critical_condition")
+            in {"需要推导过量不足边界", "隐含终点或有效区间"},
+        ),
+        (
+            "联合约束",
+            features.get("constraint_structure") == "多约束联合筛选",
+        ),
+        (
+            "复杂定量",
+            features.get("calculation_model")
+            in {"平衡常数或Ka/Kb/Ksp", "多模型定量耦合"}
+            or features.get("calculation_complexity")
+            in {"多方程联立", "参数或范围计算"},
+        ),
+        (
+            "高阶实验或路线",
+            features.get("experiment_requirement")
+            in {"控制变量或异常分析", "方案设计或误差反演"}
+            or features.get("route_design_requirement")
+            in {"合成路线设计", "分离提纯方案设计", "路线优化与可行性验证"},
+        ),
+    ]
+    return [name for name, matched in signals if matched]
+
+
+def _chemistry_structural_cluster_promotion_candidate(
+    *,
+    current_level: str,
+    original_accuracy: float,
+    features: dict[str, Any],
+) -> tuple[bool, list[str]]:
+    """用多个中等强度结构识别3→4边界，避免单字段宽泛升档。"""
+    signals = _structural_cluster_signals(features)
+    active = set(signals)
+    if current_level != "难度3档" or not 58 <= original_accuracy <= 68:
+        return False, signals
+
+    model_with_multistage = {"模型迁移", "多阶段流程"}.issubset(active)
+    complex_quantitative = "复杂定量" in active
+    model_with_coupling = {"模型迁移", "体系耦合"}.issubset(active)
+    dense_reaction_cluster = (
+        {"体系耦合", "反应链"}.issubset(active) and len(active) >= 5
+    )
+    return (
+        model_with_multistage
+        or complex_quantitative
+        or model_with_coupling
+        or dense_reaction_cluster,
+        signals,
+    )
+
+
 def _ensure_unique_strings(value: Any, field: str, *, nonempty: bool) -> list[str]:
     if not isinstance(value, list):
         raise ValueError(f"{field} 必须为列表")
@@ -893,7 +980,17 @@ def recalculate_verification(
         original_accuracy=reviewed_accuracy,
         features=corrected_features,
     )
-    if boundary_promotion_candidate and reviewed_index == current_index:
+    structural_cluster_candidate, structural_cluster_signals = (
+        _chemistry_structural_cluster_promotion_candidate(
+            current_level=current_level,
+            original_accuracy=reviewed_accuracy,
+            features=corrected_features,
+        )
+    )
+    any_boundary_promotion_candidate = (
+        boundary_promotion_candidate or structural_cluster_candidate
+    )
+    if any_boundary_promotion_candidate and reviewed_index == current_index:
         reviewed_direction = "应更难一档"
         proposed_reasonableness = "偏低"
         reviewed_target_level = "难度4档"
@@ -925,7 +1022,7 @@ def recalculate_verification(
         if isinstance(item, dict)
     )
     boundary_verdict_consistent = (
-        boundary_promotion_candidate
+        any_boundary_promotion_candidate
         or boundary_verdict == reviewed_direction
     )
     blocks_two_to_one = (
@@ -934,7 +1031,7 @@ def recalculate_verification(
     )
     auto_adjustment_eligible = (
         allow_auto_adjustment
-        and (structural_revision_supported or boundary_promotion_candidate)
+        and (structural_revision_supported or any_boundary_promotion_candidate)
         and reviewed.get("confidence") == "高"
         and reviewed_direction != "维持"
         and boundary_verdict_consistent
@@ -988,6 +1085,10 @@ def recalculate_verification(
             "chemistry_58_boundary_promotion_candidate": (
                 boundary_promotion_candidate
             ),
+            "chemistry_structural_cluster_promotion_candidate": (
+                structural_cluster_candidate
+            ),
+            "chemistry_structural_cluster_signals": structural_cluster_signals,
             "auto_downgrade_two_to_one_blocked": blocks_two_to_one,
             "boundary_verdict_consistent": boundary_verdict_consistent,
             "auto_adjustment_eligible": auto_adjustment_eligible,
