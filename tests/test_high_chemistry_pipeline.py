@@ -348,6 +348,8 @@ class PromptAssetTests(unittest.TestCase):
             "local_model_familiarity", "whole_question_burden",
             "task_completion_structure", "原始正确率的四个边界与五档区间",
             "按相邻边界距离给出连续分数",
+            "完整作答稳定性校准",
+            "完整完成本题全部必要任务的概率",
             "有效决策负担", "失分传播与整题完成",
             "不得先选取边界值、整数中点或任何示例值作为模板分数",
             "不得把各选项判断正确率相乘",
