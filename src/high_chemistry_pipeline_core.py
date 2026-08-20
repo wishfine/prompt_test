@@ -719,6 +719,17 @@ def _apply_stage1_structural_level_guards(
         })
     elif (
         level == "难度1档"
+        and features.get("calculation_model") == "常规化学计量"
+    ):
+        final_level = "难度2档"
+        actions.append({
+            "rule": "standard_stoichiometry_level_one_floor",
+            "from": level,
+            "to": final_level,
+            "evidence": ["常规化学计量"],
+        })
+    elif (
+        level == "难度1档"
         and features.get("primary_problem_structure") == "概念辨析"
         and features.get("knowledge_count") == "4个及以上"
         and features.get("substance_relation") == "相互独立"

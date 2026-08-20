@@ -424,6 +424,27 @@ class PipelineAndInputTests(unittest.TestCase):
             "multiple_required_tasks_level_one_floor",
         )
 
+    def test_standard_stoichiometry_cannot_stay_in_level_one(self) -> None:
+        output = core.enrich_stage1_rating(
+            {
+                "features": base_features(
+                    knowledge_L2=["物质的量与化学计量"],
+                    knowledge_points=["反应热", "盖斯定律"],
+                    substance_count="2-3种",
+                    substance_relation="同一反应体系",
+                    calculation_model="常规化学计量",
+                    calculation_complexity="简单计算",
+                ),
+                "reason": "一步热化学计算",
+                "predicted_accuracy": 88,
+            }
+        )
+        self.assertEqual(output["difficulty_level_step1"], "难度2档")
+        self.assertEqual(
+            output["stage1_structural_guard_actions"][0]["rule"],
+            "standard_stoichiometry_level_one_floor",
+        )
+
     def test_low_structure_independent_concept_question_is_recovered_from_level_three(self) -> None:
         output = core.enrich_stage1_rating(
             {

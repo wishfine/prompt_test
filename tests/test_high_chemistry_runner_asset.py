@@ -184,6 +184,19 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertIn("多阶段流程", stage1)
         self.assertNotIn("结构簇通道", stage1)
 
+    def test_stage1_distinguishes_representation_checks_from_single_rule_tasks(self) -> None:
+        namespace = {}
+        source = PROMPT.read_text(encoding="utf-8")
+        exec(compile(source, str(PROMPT), "exec"), namespace)
+        stage1 = namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
+        for required in (
+            "同一专题不等于单一规则任务",
+            "化学用语、电子式、离子方程式",
+            "规范书写约束",
+            "一条明确公式的直接代入",
+        ):
+            self.assertIn(required, stage1)
+
     def test_stage2_does_not_treat_program_derived_fields_as_structural_revision(self) -> None:
         namespace = {}
         source = PROMPT.read_text(encoding="utf-8")
