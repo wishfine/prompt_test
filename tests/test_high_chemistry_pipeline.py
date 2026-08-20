@@ -346,16 +346,16 @@ class PromptAssetTests(unittest.TestCase):
         text = (ROOT / "prompts" / "高中化学难度打标提示词.txt").read_text(encoding="utf-8")
         for phrase in (
             "local_model_familiarity", "whole_question_burden",
-            "task_completion_structure", "原始正确率的统一五区间",
-            "区间内分数统一规则",
+            "task_completion_structure", "原始正确率的四个边界与五档区间",
+            "按相邻边界距离给出连续分数",
             "有效决策负担", "失分传播与整题完成",
-            "至少4项支持上部", "至少3项支持下部",
-            "不得默认使用区间端点、中点或89、78、48、42等历史习惯分数",
+            "不得先选取边界值、整数中点或任何示例值作为模板分数",
             "不得把各选项判断正确率相乘",
             "不得把四项正确率机械相乘",
             "共享复杂模型",
         ):
             self.assertIn(phrase, text)
+        self.assertNotIn('"predicted_accuracy": 72.0', text)
 
     def test_prompt_defines_task_modeling_without_task_unit_schema(self):
         text = (ROOT / "prompts" / "高中化学难度打标提示词.txt").read_text(encoding="utf-8")
