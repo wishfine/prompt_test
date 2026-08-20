@@ -1020,6 +1020,32 @@ def normalize_stage1_rating(
     if not isinstance(features, dict):
         raise ValueError("第一阶段缺少 features 对象")
     log: list[dict[str, Any]] = []
+
+    # 与原方案一致：知识点、二级模块和方法的完全重复不改变题目结构，
+    # 在 schema 校验前确定性去重，避免模型重复列举导致整题失败。
+    for field in ("knowledge_L2", "knowledge_points", "chemistry_methods"):
+        values = features.get(field)
+        if not isinstance(values, list):
+            continue
+        cleaned: list[str] = []
+        for value in values:
+            if not isinstance(value, str) or not value.strip():
+                cleaned = []
+                break
+            normalized_value = value.strip()
+            if normalized_value not in cleaned:
+                cleaned.append(normalized_value)
+        if cleaned and cleaned != values:
+            features[field] = cleaned
+            log.append(
+                {
+                    "field": field,
+                    "from": copy.deepcopy(values),
+                    "to": copy.deepcopy(cleaned),
+                    "reason": "完全重复项确定性去重",
+                }
+            )
+
     shared = features.get("shared_model_across_subquestions")
     if shared in {"是", "true", "True", 1}:
         features["shared_model_across_subquestions"] = True
