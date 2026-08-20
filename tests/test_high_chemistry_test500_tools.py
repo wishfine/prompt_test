@@ -23,6 +23,18 @@ def load_module(path: Path, name: str):
 
 
 class HighChemistryTest500ToolTests(unittest.TestCase):
+    def test_evaluator_has_no_physics_module_dependency(self) -> None:
+        source = EVALUATOR_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("evaluate_high_" + "physics", source)
+        self.assertNotIn("high_" + "physics", source)
+        for function_name in (
+            "def read_by_id",
+            "def evaluate",
+            "def accuracy_scale_diagnostics",
+            "def review_diagnostics",
+        ):
+            self.assertIn(function_name, source)
+
     def test_builder_separates_question_from_reference_labels(self) -> None:
         self.assertTrue(BUILDER_PATH.exists())
         builder = load_module(BUILDER_PATH, "build_high_chemistry_test500")

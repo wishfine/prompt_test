@@ -30,8 +30,8 @@ class HighChemistryAssetTests(unittest.TestCase):
             source,
         )
         self.assertIn('os.getenv("ENABLE_STAGE2_AUTO_ADJUST", "1")', source)
-        self.assertIn("shared_runner.ENABLE_STAGE2_AUTO_ADJUST =", source)
-        self.assertIn("_shared_finalize_level", source)
+        self.assertIn("def finalize_verified_level", source)
+        self.assertNotIn("shared_" + "runner", source)
 
     def test_prompt_defines_both_stages_and_complete_schema(self) -> None:
         self.assertTrue(PROMPT.exists())
@@ -136,7 +136,7 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertNotIn("70—80", stage1)
         self.assertNotRegex(stage1, r'"predicted_accuracy"\s*:\s*\d')
 
-    def test_stage1_uses_physics_boundaries_with_sharper_85_and_58_semantics(self) -> None:
+    def test_stage1_uses_fixed_boundaries_with_sharper_85_and_58_semantics(self) -> None:
         namespace = {}
         source = PROMPT.read_text(encoding="utf-8")
         exec(compile(source, str(PROMPT), "exec"), namespace)
@@ -206,11 +206,18 @@ class HighChemistryAssetTests(unittest.TestCase):
         for field in chemistry_core.REQUIRED_FEATURE_FIELDS:
             self.assertIn(field, stage1_text)
 
-    def test_runner_reuses_operational_capabilities_without_sending_label(self) -> None:
+    def test_runner_is_independent_and_never_sends_source_label(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
-        self.assertIn("high_physics_difficulty_rating_and_verify", source)
+        self.assertNotIn("high_" + "physics", source)
+        self.assertNotIn("shared_" + "runner", source)
+        self.assertNotIn("monkeypatch", source.lower())
+        self.assertIn("import aiohttp", source)
+        self.assertIn("async def call_stage1", source)
+        self.assertIn("async def call_stage2", source)
+        self.assertIn("async def run", source)
         self.assertIn("prepare_question", source)
-        self.assertNotIn("source_difficulty_untrusted\"]", source)
+        self.assertIn('output_base["source_difficulty_untrusted"]', source)
+        self.assertIn("prepared.question", source)
 
 
 if __name__ == "__main__":

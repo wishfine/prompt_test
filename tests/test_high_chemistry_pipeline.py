@@ -466,7 +466,7 @@ class PipelineAndInputTests(unittest.TestCase):
             reviewed["feature_corrections_rejected"][0]["reason"],
         )
 
-    def test_stage2_auto_adjustment_uses_physics_evidence_guards(self) -> None:
+    def test_stage2_auto_adjustment_uses_evidence_guards(self) -> None:
         features = base_features()
         reviewed = core.recalculate_verification(
             current_level="难度1档",
