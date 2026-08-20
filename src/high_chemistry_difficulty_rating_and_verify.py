@@ -22,7 +22,7 @@ import high_physics_difficulty_rating_and_verify as shared_runner
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PIPELINE_VERSION = "high_chemistry_two_stage_v4"
+PIPELINE_VERSION = "high_chemistry_two_stage_v5"
 ENABLE_STAGE2_AUTO_ADJUST = (
     os.getenv("ENABLE_STAGE2_AUTO_ADJUST", "1").strip() == "1"
 )

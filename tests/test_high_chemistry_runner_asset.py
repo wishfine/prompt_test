@@ -22,7 +22,7 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertTrue(RUNNER.exists())
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn("high_chemistry_two_stage_v4", source)
+        self.assertIn("high_chemistry_two_stage_v5", source)
         self.assertIn("ENABLE_STAGE2_AUTO_ADJUST", source)
         self.assertIn("ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER", source)
         self.assertIn(
@@ -123,6 +123,10 @@ class HighChemistryAssetTests(unittest.TestCase):
             "共享同一物质流",
             "答案依赖",
             "模型依赖",
+            "轻微易错点不能单独把正确率压到88以下",
+            "唯一回答规则",
+            "完整作答稳定性",
+            "完整完成本题全部必要任务的概率",
         ):
             self.assertIn(required, stage1)
         self.assertIn("与上下相邻边界的距离", stage1)
@@ -168,6 +172,8 @@ class HighChemistryAssetTests(unittest.TestCase):
             "最多调整一档",
             "58—62",
             "多层因果+高层信息转换",
+            "58—68",
+            "多层因果+一次常规表征转换",
             "不得自动从难度2档降入难度1档",
             "先命中特征组合，再按高难特征数量选择乘数",
             "普通4档不得仅因乘数跌入5档",

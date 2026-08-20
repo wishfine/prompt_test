@@ -243,14 +243,15 @@ def _chemistry_58_boundary_promotion_candidate(
     original_accuracy: float,
     features: dict[str, Any],
 ) -> bool:
-    if current_level != "难度3档" or not 58 <= original_accuracy <= 62:
+    if current_level != "难度3档":
         return False
-    information_chain = (
+    near_58_boundary = 58 <= original_accuracy <= 62
+    information_chain = near_58_boundary and (
         features.get("reasoning_chain") == "多层因果"
         and features.get("information_conversion")
         in {"多源信息联合转换", "流程或图谱反推"}
     )
-    dependent_model_chain = (
+    dependent_model_chain = near_58_boundary and (
         (
             features.get("subquestion_dependency") == "后问依赖前问"
             or features.get("shared_model_across_subquestions") is True
@@ -259,7 +260,12 @@ def _chemistry_58_boundary_promotion_candidate(
         and features.get("process_structure")
         in {"多阶段强依赖", "多阶段显性流程"}
     )
-    return information_chain or dependent_model_chain
+    representation_chain = (
+        58 <= original_accuracy <= 68
+        and features.get("reasoning_chain") == "多层因果"
+        and features.get("representation_conversion") == "一次常规转换"
+    )
+    return information_chain or dependent_model_chain or representation_chain
 
 
 def _ensure_unique_strings(value: Any, field: str, *, nonempty: bool) -> list[str]:

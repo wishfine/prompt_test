@@ -562,6 +562,61 @@ class PipelineAndInputTests(unittest.TestCase):
         self.assertEqual(reviewed["reviewed_direction"], "应更难一档")
         self.assertEqual(reviewed["adjusted_difficulty_level"], "难度4档")
 
+    def test_stage2_58_boundary_representation_channel_promotes_three_to_four(self) -> None:
+        features = base_features(
+            step_count="3-5步",
+            reasoning_chain="多层因果",
+            representation_conversion="一次常规转换",
+        )
+        reviewed = core.recalculate_verification(
+            current_level="难度3档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=68.0,
+            original_features=features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [],
+                "reviewed_high_difficulty_features": [],
+                "reviewed_original_predicted_accuracy": 68.0,
+                "has_structural_revision": False,
+                "adjacent_boundary_review": {"verdict": "维持"},
+                "confidence": "高",
+                "input_sufficiency_review": {"status": "充分"},
+                "high_feature_overlap_review": [],
+            },
+        )
+        self.assertTrue(reviewed["chemistry_58_boundary_promotion_candidate"])
+        self.assertTrue(reviewed["auto_adjustment_eligible"])
+        self.assertEqual(reviewed["adjusted_difficulty_level"], "难度4档")
+
+    def test_stage2_representation_channel_rejects_score_above_68(self) -> None:
+        features = base_features(
+            step_count="3-5步",
+            reasoning_chain="多层因果",
+            representation_conversion="一次常规转换",
+        )
+        reviewed = core.recalculate_verification(
+            current_level="难度3档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=70.0,
+            original_features=features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [],
+                "reviewed_high_difficulty_features": [],
+                "reviewed_original_predicted_accuracy": 70.0,
+                "has_structural_revision": False,
+                "adjacent_boundary_review": {"verdict": "维持"},
+                "confidence": "高",
+                "input_sufficiency_review": {"status": "充分"},
+                "high_feature_overlap_review": [],
+            },
+        )
+        self.assertFalse(reviewed["chemistry_58_boundary_promotion_candidate"])
+        self.assertFalse(reviewed["auto_adjustment_eligible"])
+
     def test_stage2_never_automatically_downgrades_two_to_one(self) -> None:
         features = base_features(step_count="3-5步")
         reviewed = core.recalculate_verification(
