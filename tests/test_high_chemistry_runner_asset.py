@@ -22,9 +22,13 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertTrue(RUNNER.exists())
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn("high_chemistry_two_stage_v3", source)
+        self.assertIn("high_chemistry_two_stage_v4", source)
         self.assertIn("ENABLE_STAGE2_AUTO_ADJUST", source)
         self.assertIn("ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER", source)
+        self.assertIn(
+            'os.getenv("ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER", "1")',
+            source,
+        )
         self.assertIn('os.getenv("ENABLE_STAGE2_AUTO_ADJUST", "1")', source)
         self.assertIn("shared_runner.ENABLE_STAGE2_AUTO_ADJUST =", source)
         self.assertIn("_shared_finalize_level", source)
@@ -157,10 +161,16 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertIn("不得写入 feature_corrections", stage2)
         for required in (
             "程序接受的非派生 feature 修正",
+            "程序确认的58边界结构候选",
             "confidence=高",
             "复核后正确率确实跨越相邻边界",
             "verdict 与程序计算方向一致",
             "最多调整一档",
+            "58—62",
+            "多层因果+高层信息转换",
+            "不得自动从难度2档降入难度1档",
+            "先命中特征组合，再按高难特征数量选择乘数",
+            "普通4档不得仅因乘数跌入5档",
         ):
             self.assertIn(required, stage2)
 

@@ -112,6 +112,9 @@ class HighPhysicsTest500ToolTests(unittest.TestCase):
                 "verification": {
                     "has_structural_revision": True,
                     "review_requires_manual": False,
+                    "auto_adjustment_eligible": True,
+                    "chemistry_58_boundary_promotion_candidate": True,
+                    "auto_downgrade_two_to_one_blocked": False,
                     "multiplier_reasonableness": "合理",
                     "feature_corrections_applied": [{"field": "step_count"}],
                     "high_difficulty_features_changed": False,
@@ -125,6 +128,10 @@ class HighPhysicsTest500ToolTests(unittest.TestCase):
             report["reviewed_direction_distribution"],
             {"建议升一档": 1},
         )
+        self.assertEqual(report["auto_adjustment_eligible_count"], 1)
+        self.assertEqual(
+            report["chemistry_58_boundary_promotion_candidate_count"], 1
+        )
 
     def test_evaluator_reports_accuracy_scale_audit_diagnostics(self) -> None:
         predictions = {
@@ -132,6 +139,9 @@ class HighPhysicsTest500ToolTests(unittest.TestCase):
                 "difficulty_rating_stage1": {
                     "accuracy_anchor": "教材直接原型",
                     "original_predicted_accuracy": 94.0,
+                    "high_difficulty_multiplier_enabled": True,
+                    "multiplier_triggered": True,
+                    "multiplier_final_level_guard_applied": True,
                     "accuracy_scale_audit": {
                         "metadata_complete": True,
                         "anchor_range_consistent": True,
@@ -170,6 +180,9 @@ class HighPhysicsTest500ToolTests(unittest.TestCase):
         self.assertEqual(report["unique_original_accuracy_count"], 2)
         self.assertEqual(report["most_common_score_share"], 0.5)
         self.assertEqual(report["top_5_score_share"], 1.0)
+        self.assertEqual(report["multiplier_enabled_count"], 1)
+        self.assertEqual(report["multiplier_triggered_count"], 1)
+        self.assertEqual(report["multiplier_final_level_guard_count"], 1)
         self.assertEqual(
             report["anchor_distribution"],
             {"教材直接原型": 1, "熟悉标准模型": 1},

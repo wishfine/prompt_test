@@ -19,7 +19,7 @@ from typing import Any
 
 LEVEL_ORDER = ["难度1档", "难度2档", "难度3档", "难度4档", "难度5档"]
 LEVEL_INDEX = {value: index for index, value in enumerate(LEVEL_ORDER)}
-CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER_ENABLED = False
+CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER_ENABLED = True
 PROGRAM_DERIVED_FEATURE_FIELDS = {
     "knowledge_L1",
     "knowledge_count",
@@ -122,6 +122,13 @@ HIGH_DIFFICULTY_FEATURE_NAMES = (
     "高阶实验、合成或分离设计",
 )
 
+MULTIPLIER_TRIGGER_COMBOS = (
+    frozenset({"多反应或多阶段强耦合", "多约束联合", "高层级信息转换"}),
+    frozenset({"多模型或多平衡耦合", "多约束联合", "高层级信息转换"}),
+    frozenset({"竞争反应与副反应判断", "隐含临界或过量不足", "复杂分类讨论"}),
+    frozenset({"高阶实验、合成或分离设计", "多约束联合", "多反应或多阶段强耦合"}),
+)
+
 QUESTION_MODEL_FIELDS = (
     "parent_id", "question_id", "stem", "options", "analysis", "structure_type",
     "sub_questions", "stem_image_url", "analysis_image_url", "stem_pic_url", "analysis_pic_url",
@@ -180,6 +187,79 @@ def multiplier_for_high_count(high_count: int) -> float:
     if high_count >= 3:
         return 0.85
     return 1.0
+
+
+def _matched_multiplier_trigger_combo(names: list[str]) -> list[str]:
+    active = set(names)
+    for combo in MULTIPLIER_TRIGGER_COMBOS:
+        if combo.issubset(active):
+            return [name for name in HIGH_DIFFICULTY_FEATURE_NAMES if name in combo]
+    return []
+
+
+def _apply_chemistry_multiplier_policy(
+    *,
+    original_accuracy: float,
+    high_names: list[str],
+    multiplier_enabled: bool,
+) -> dict[str, Any]:
+    candidate = multiplier_for_high_count(len(high_names))
+    matched_combo = (
+        _matched_multiplier_trigger_combo(high_names)
+        if multiplier_enabled
+        else []
+    )
+    triggered = bool(matched_combo)
+    applied = candidate if triggered else 1.0
+    adjusted = round(original_accuracy * applied, 1)
+    raw_level = map_accuracy_to_level(original_accuracy)
+    adjusted_level = map_accuracy_to_level(adjusted)
+    active = set(high_names)
+    strong_final = (
+        original_accuracy <= 52
+        and "高阶实验、合成或分离设计" in active
+        and "多约束联合" in active
+    )
+    final_guard = (
+        raw_level == "难度4档"
+        and adjusted_level == "难度5档"
+        and not strong_final
+    )
+    if final_guard:
+        adjusted = 38.0
+    return {
+        "multiplier_candidate": candidate,
+        "multiplier_triggered": triggered,
+        "multiplier_trigger_combo": matched_combo,
+        "multiplier_applied": applied,
+        "multiplier_final_level_guard_applied": final_guard,
+        "adjusted_accuracy": adjusted,
+    }
+
+
+def _chemistry_58_boundary_promotion_candidate(
+    *,
+    current_level: str,
+    original_accuracy: float,
+    features: dict[str, Any],
+) -> bool:
+    if current_level != "难度3档" or not 58 <= original_accuracy <= 62:
+        return False
+    information_chain = (
+        features.get("reasoning_chain") == "多层因果"
+        and features.get("information_conversion")
+        in {"多源信息联合转换", "流程或图谱反推"}
+    )
+    dependent_model_chain = (
+        (
+            features.get("subquestion_dependency") == "后问依赖前问"
+            or features.get("shared_model_across_subquestions") is True
+        )
+        and features.get("model_relation") in {"模型切换", "多模型耦合"}
+        and features.get("process_structure")
+        in {"多阶段强依赖", "多阶段显性流程"}
+    )
+    return information_chain or dependent_model_chain
 
 
 def _ensure_unique_strings(value: Any, field: str, *, nonempty: bool) -> list[str]:
@@ -509,9 +589,14 @@ def enrich_stage1_rating(
         if multiplier_enabled is None
         else bool(multiplier_enabled)
     )
-    multiplier_candidate = multiplier_for_high_count(high_count)
-    multiplier = multiplier_candidate if enabled else 1.0
-    adjusted = round(raw_accuracy * multiplier, 1)
+    multiplier_policy = _apply_chemistry_multiplier_policy(
+        original_accuracy=raw_accuracy,
+        high_names=high.names,
+        multiplier_enabled=enabled,
+    )
+    multiplier_candidate = multiplier_policy["multiplier_candidate"]
+    multiplier = multiplier_policy["multiplier_applied"]
+    adjusted = multiplier_policy["adjusted_accuracy"]
     rating["original_predicted_accuracy"] = raw_accuracy
     rating["active_features"] = active
     rating["active_feature_count"] = len(active)
@@ -522,6 +607,11 @@ def enrich_stage1_rating(
     rating["high_difficulty_feature_count"] = high_count
     rating["high_difficulty_multiplier_enabled"] = enabled
     rating["multiplier_candidate"] = multiplier_candidate
+    rating["multiplier_triggered"] = multiplier_policy["multiplier_triggered"]
+    rating["multiplier_trigger_combo"] = multiplier_policy["multiplier_trigger_combo"]
+    rating["multiplier_final_level_guard_applied"] = multiplier_policy[
+        "multiplier_final_level_guard_applied"
+    ]
     rating["multiplier_applied"] = multiplier
     rating["predicted_accuracy"] = adjusted
     rating["difficulty_level_step1"] = map_accuracy_to_level(adjusted)
@@ -644,23 +734,40 @@ def recalculate_verification(
         if multiplier_enabled is None
         else bool(multiplier_enabled)
     )
-    multiplier_candidate = multiplier_for_high_count(reviewed_count)
-    multiplier = multiplier_candidate if enabled else 1.0
-    adjusted_accuracy = round(reviewed_accuracy * multiplier, 1)
+    multiplier_policy = _apply_chemistry_multiplier_policy(
+        original_accuracy=reviewed_accuracy,
+        high_names=high.names,
+        multiplier_enabled=enabled,
+    )
+    multiplier_candidate = multiplier_policy["multiplier_candidate"]
+    multiplier = multiplier_policy["multiplier_applied"]
+    adjusted_accuracy = multiplier_policy["adjusted_accuracy"]
     reviewed_level = map_accuracy_to_level(adjusted_accuracy)
     boundary = reviewed.get("adjacent_boundary_review") or {}
     boundary_verdict = boundary.get("verdict", "维持")
     current_index = LEVEL_INDEX[current_level]
     reviewed_index = LEVEL_INDEX[reviewed_level]
-    if reviewed_index == current_index:
+    boundary_promotion_candidate = _chemistry_58_boundary_promotion_candidate(
+        current_level=current_level,
+        original_accuracy=reviewed_accuracy,
+        features=corrected_features,
+    )
+    if boundary_promotion_candidate and reviewed_index == current_index:
+        reviewed_direction = "应更难一档"
+        proposed_reasonableness = "偏低"
+        reviewed_target_level = "难度4档"
+    elif reviewed_index == current_index:
         reviewed_direction = "维持"
         proposed_reasonableness = "合理"
+        reviewed_target_level = reviewed_level
     elif reviewed_index < current_index:
         reviewed_direction = "应更简单一档"
         proposed_reasonableness = "偏高"
+        reviewed_target_level = reviewed_level
     else:
         reviewed_direction = "应更难一档"
         proposed_reasonableness = "偏低"
+        reviewed_target_level = reviewed_level
     action_map = {
         "维持": "维持",
         "应更简单一档": "建议降一档",
@@ -676,21 +783,29 @@ def recalculate_verification(
         for item in reviewed.get("high_feature_overlap_review") or []
         if isinstance(item, dict)
     )
-    boundary_verdict_consistent = boundary_verdict == reviewed_direction
+    boundary_verdict_consistent = (
+        boundary_promotion_candidate
+        or boundary_verdict == reviewed_direction
+    )
+    blocks_two_to_one = (
+        current_level == "难度2档"
+        and reviewed_target_level == "难度1档"
+    )
     auto_adjustment_eligible = (
         allow_auto_adjustment
-        and structural_revision_supported
+        and (structural_revision_supported or boundary_promotion_candidate)
         and reviewed.get("confidence") == "高"
         and reviewed_direction != "维持"
         and boundary_verdict_consistent
         and input_review.get("status") != "信息不足"
         and not unresolved_overlap
+        and not blocks_two_to_one
     )
     reasonableness = (
         proposed_reasonableness if auto_adjustment_eligible else "合理"
     )
     adjusted_level = (
-        reviewed_level if auto_adjustment_eligible else current_level
+        reviewed_target_level if auto_adjustment_eligible else current_level
     )
     review_requires_manual = bool(
         reviewed_direction != "维持" and not auto_adjustment_eligible
@@ -713,6 +828,11 @@ def recalculate_verification(
             "reviewed_high_difficulty_feature_count": reviewed_count,
             "reviewed_high_difficulty_multiplier_enabled": enabled,
             "reviewed_multiplier_candidate": multiplier_candidate,
+            "reviewed_multiplier_triggered": multiplier_policy["multiplier_triggered"],
+            "reviewed_multiplier_trigger_combo": multiplier_policy["multiplier_trigger_combo"],
+            "reviewed_multiplier_final_level_guard_applied": multiplier_policy[
+                "multiplier_final_level_guard_applied"
+            ],
             "reviewed_multiplier_applied": multiplier,
             "reviewed_original_predicted_accuracy_model_raw": (
                 model_reviewed_accuracy
@@ -721,6 +841,10 @@ def recalculate_verification(
             "reviewed_predicted_accuracy": adjusted_accuracy,
             "reviewed_difficulty_level": reviewed_level,
             "reviewed_direction": reviewed_direction,
+            "chemistry_58_boundary_promotion_candidate": (
+                boundary_promotion_candidate
+            ),
+            "auto_downgrade_two_to_one_blocked": blocks_two_to_one,
             "boundary_verdict_consistent": boundary_verdict_consistent,
             "auto_adjustment_eligible": auto_adjustment_eligible,
             "review_action": (

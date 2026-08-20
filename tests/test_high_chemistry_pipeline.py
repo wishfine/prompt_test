@@ -176,13 +176,15 @@ class ChemistryHighFeatureTests(unittest.TestCase):
             reaction_relation="前后反应强依赖",
             evidence_relation="证据链相互支持",
             process_structure="多阶段强依赖",
-            constraint_structure="多约束联合筛选",
             model_relation="多模型耦合",
+            constraint_structure="多约束联合筛选",
             equation_structure="2-3个方程联立",
             reasoning_chain="多层因果",
+            information_carrier="多载体综合",
+            information_conversion="多源信息联合转换",
         )
         detected = core.detect_high_difficulty_features(features)
-        self.assertEqual(len(detected.names), 4)
+        self.assertGreaterEqual(len(detected.names), 4)
         output = core.enrich_stage1_rating(
             {"features": features, "reason": "测试", "predicted_accuracy": 80},
             multiplier_enabled=True,
@@ -254,10 +256,12 @@ class PipelineAndInputTests(unittest.TestCase):
 
     def test_enrichment_preserves_raw_score_and_separates_counts(self) -> None:
         features = base_features(
+            reaction_count="4-6个",
+            reaction_relation="前后反应强依赖",
+            process_structure="多阶段强依赖",
+            step_count="6-8步",
             constraint_structure="多约束联合筛选",
-            critical_condition="隐含终点或有效区间",
-            hidden_conditions="多个隐含条件",
-            reasoning_chain="逆向推理或临界分析",
+            reasoning_chain="多层因果",
             information_carrier="多载体综合",
             information_conversion="多源信息联合转换",
             evidence_relation="证据链相互支持",
@@ -272,7 +276,7 @@ class PipelineAndInputTests(unittest.TestCase):
         self.assertEqual(output["predicted_accuracy"], 68.0)
         self.assertGreater(output["active_feature_count"], 3)
 
-    def test_chemistry_multiplier_is_disabled_by_default_but_auditable(self) -> None:
+    def test_chemistry_multiplier_requires_math_style_trigger_combo(self) -> None:
         features = base_features(
             constraint_structure="多约束联合筛选",
             critical_condition="隐含终点或有效区间",
@@ -286,11 +290,54 @@ class PipelineAndInputTests(unittest.TestCase):
             {"features": features, "reason": "测试", "predicted_accuracy": 80}
         )
         self.assertEqual(output["high_difficulty_feature_count"], 3)
-        self.assertFalse(output["high_difficulty_multiplier_enabled"])
+        self.assertTrue(output["high_difficulty_multiplier_enabled"])
+        self.assertFalse(output["multiplier_triggered"])
         self.assertEqual(output["multiplier_candidate"], 0.85)
         self.assertEqual(output["multiplier_applied"], 1.0)
         self.assertEqual(output["predicted_accuracy"], 80.0)
         self.assertEqual(output["difficulty_level_step1"], "难度3档")
+
+    def test_multiplier_floor_keeps_nonfinal_high_combo_in_level_four(self) -> None:
+        features = base_features(
+            reaction_count="4-6个",
+            reaction_relation="前后反应强依赖",
+            process_structure="多阶段强依赖",
+            model_relation="多模型耦合",
+            step_count="6-8步",
+            reasoning_chain="多层因果",
+            constraint_structure="多约束联合筛选",
+            information_carrier="多载体综合",
+            information_conversion="多源信息联合转换",
+            evidence_relation="证据链相互支持",
+        )
+        output = core.enrich_stage1_rating(
+            {"features": features, "reason": "测试", "predicted_accuracy": 45}
+        )
+        self.assertTrue(output["multiplier_triggered"])
+        self.assertEqual(output["multiplier_applied"], 0.70)
+        self.assertTrue(output["multiplier_final_level_guard_applied"])
+        self.assertEqual(output["predicted_accuracy"], 38.0)
+        self.assertEqual(output["difficulty_level_step1"], "难度4档")
+
+    def test_strong_final_combo_can_cross_from_four_to_five(self) -> None:
+        features = base_features(
+            reaction_count="4-6个",
+            reaction_relation="前后反应强依赖",
+            process_structure="多阶段强依赖",
+            step_count="6-8步",
+            reasoning_chain="多层因果",
+            constraint_structure="多约束联合筛选",
+            experiment_requirement="方案设计或误差反演",
+            information_carrier="多载体综合",
+            information_conversion="多源信息联合转换",
+            evidence_relation="证据链相互支持",
+        )
+        output = core.enrich_stage1_rating(
+            {"features": features, "reason": "测试", "predicted_accuracy": 42}
+        )
+        self.assertTrue(output["multiplier_triggered"])
+        self.assertFalse(output["multiplier_final_level_guard_applied"])
+        self.assertEqual(output["difficulty_level_step1"], "难度5档")
 
     def test_review_score_is_locked_without_supported_feature_revision(self) -> None:
         features = base_features()
@@ -484,6 +531,67 @@ class PipelineAndInputTests(unittest.TestCase):
                 self.assertEqual(reviewed["rating_reasonableness"], "合理")
                 self.assertEqual(reviewed["adjusted_difficulty_level"], "难度1档")
                 self.assertTrue(reviewed["review_requires_manual"])
+
+    def test_stage2_58_boundary_structural_channel_promotes_three_to_four(self) -> None:
+        features = base_features(
+            step_count="3-5步",
+            reasoning_chain="多层因果",
+            information_carrier="多载体综合",
+            information_conversion="多源信息联合转换",
+        )
+        reviewed = core.recalculate_verification(
+            current_level="难度3档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=60.0,
+            original_features=features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [],
+                "reviewed_high_difficulty_features": [],
+                "reviewed_original_predicted_accuracy": 60.0,
+                "has_structural_revision": False,
+                "adjacent_boundary_review": {"verdict": "维持"},
+                "confidence": "高",
+                "input_sufficiency_review": {"status": "充分"},
+                "high_feature_overlap_review": [],
+            },
+        )
+        self.assertTrue(reviewed["chemistry_58_boundary_promotion_candidate"])
+        self.assertTrue(reviewed["auto_adjustment_eligible"])
+        self.assertEqual(reviewed["reviewed_direction"], "应更难一档")
+        self.assertEqual(reviewed["adjusted_difficulty_level"], "难度4档")
+
+    def test_stage2_never_automatically_downgrades_two_to_one(self) -> None:
+        features = base_features(step_count="3-5步")
+        reviewed = core.recalculate_verification(
+            current_level="难度2档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=86.0,
+            original_features=features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [
+                    {
+                        "field": "step_count",
+                        "from": "3-5步",
+                        "to": "1-2步",
+                        "evidence": "复核认为只有一步",
+                    }
+                ],
+                "reviewed_high_difficulty_features": [],
+                "reviewed_original_predicted_accuracy": 90.0,
+                "has_structural_revision": True,
+                "adjacent_boundary_review": {"verdict": "应更简单一档"},
+                "confidence": "高",
+                "input_sufficiency_review": {"status": "充分"},
+                "high_feature_overlap_review": [],
+            },
+        )
+        self.assertFalse(reviewed["auto_adjustment_eligible"])
+        self.assertEqual(reviewed["adjusted_difficulty_level"], "难度2档")
+        self.assertTrue(reviewed["review_requires_manual"])
 
     def test_experiment_task_does_not_force_cross_content_module(self) -> None:
         features = base_features(

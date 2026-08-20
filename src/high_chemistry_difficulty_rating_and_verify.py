@@ -7,8 +7,8 @@ feature schema、高难特征检测、乘数复算和输入清洗替换为高中
 
 第二阶段默认开启物理同款证据守卫自动改档；可显式设置
 ``ENABLE_STAGE2_AUTO_ADJUST=0`` 关闭，且任何情况下最多调整一档。
-化学高难乘数默认关闭；仅在消融实验中显式设置
-``ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER=1`` 时启用。
+化学高难乘数默认开启，并使用数学同款“先命中特征组合、再按数量乘”逻辑；
+可在消融实验中设置 ``ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER=0`` 关闭。
 """
 
 from __future__ import annotations
@@ -22,13 +22,13 @@ import high_physics_difficulty_rating_and_verify as shared_runner
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PIPELINE_VERSION = "high_chemistry_two_stage_v3"
+PIPELINE_VERSION = "high_chemistry_two_stage_v4"
 ENABLE_STAGE2_AUTO_ADJUST = (
     os.getenv("ENABLE_STAGE2_AUTO_ADJUST", "1").strip() == "1"
 )
 shared_runner.ENABLE_STAGE2_AUTO_ADJUST = ENABLE_STAGE2_AUTO_ADJUST
 ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER = (
-    os.getenv("ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER", "0").strip()
+    os.getenv("ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER", "1").strip()
     == "1"
 )
 chemistry_core.CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER_ENABLED = (

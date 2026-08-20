@@ -151,6 +151,9 @@ def review_diagnostics(
     supported_feature_correction_count = 0
     high_feature_set_changed_count = 0
     final_differs_from_step1_count = 0
+    auto_adjustment_eligible_count = 0
+    chemistry_58_boundary_promotion_candidate_count = 0
+    auto_downgrade_two_to_one_blocked_count = 0
     reviewed_direction_distribution: Counter[str] = Counter()
 
     for row in predictions.values():
@@ -182,6 +185,16 @@ def review_diagnostics(
         high_feature_set_changed_count += (
             verification.get("high_difficulty_features_changed") is True
         )
+        auto_adjustment_eligible_count += (
+            verification.get("auto_adjustment_eligible") is True
+        )
+        chemistry_58_boundary_promotion_candidate_count += (
+            verification.get("chemistry_58_boundary_promotion_candidate")
+            is True
+        )
+        auto_downgrade_two_to_one_blocked_count += (
+            verification.get("auto_downgrade_two_to_one_blocked") is True
+        )
         direction = verification.get("reviewed_direction")
         if not isinstance(direction, str) or not direction:
             direction = verification.get("review_action")
@@ -200,6 +213,13 @@ def review_diagnostics(
         ),
         "high_feature_set_changed_count": high_feature_set_changed_count,
         "final_differs_from_step1_count": final_differs_from_step1_count,
+        "auto_adjustment_eligible_count": auto_adjustment_eligible_count,
+        "chemistry_58_boundary_promotion_candidate_count": (
+            chemistry_58_boundary_promotion_candidate_count
+        ),
+        "auto_downgrade_two_to_one_blocked_count": (
+            auto_downgrade_two_to_one_blocked_count
+        ),
         "reviewed_direction_distribution": dict(
             reviewed_direction_distribution
         ),
@@ -223,6 +243,9 @@ def accuracy_scale_diagnostics(
     threshold_inconsistent = threshold_evidence_incomplete = 0
     three_state_boundary_risk = 0
     multi_experiment_high_score_conflict = 0
+    multiplier_enabled_count = 0
+    multiplier_triggered_count = 0
+    multiplier_final_level_guard_count = 0
 
     for row in predictions.values():
         stage1 = row.get("difficulty_rating_stage1")
@@ -244,6 +267,15 @@ def accuracy_scale_diagnostics(
             score_dist[float(stage1["original_predicted_accuracy"])] += 1
         except (KeyError, TypeError, ValueError):
             pass
+        multiplier_enabled_count += (
+            stage1.get("high_difficulty_multiplier_enabled") is True
+        )
+        multiplier_triggered_count += (
+            stage1.get("multiplier_triggered") is True
+        )
+        multiplier_final_level_guard_count += (
+            stage1.get("multiplier_final_level_guard_applied") is True
+        )
         audit = stage1.get("accuracy_scale_audit")
         if not isinstance(audit, dict):
             continue
@@ -327,6 +359,11 @@ def accuracy_scale_diagnostics(
         "top_5_score_share": (
             round(top_5_count / score_count, 4)
             if score_count else None
+        ),
+        "multiplier_enabled_count": multiplier_enabled_count,
+        "multiplier_triggered_count": multiplier_triggered_count,
+        "multiplier_final_level_guard_count": (
+            multiplier_final_level_guard_count
         ),
         "anchor_distribution": dict(anchor_dist),
         "local_model_familiarity_distribution": dict(familiarity_dist),
