@@ -33,6 +33,7 @@ def base_features(**overrides):
         "process_structure": "单阶段",
         "primary_problem_structure": "概念辨析",
         "step_count": "1-2步",
+        "required_task_breadth": "单一规则任务",
         "subquestion_dependency": "无多问",
         "shared_model_across_subquestions": False,
         "model_explicitness": "模型完全显性",
@@ -85,6 +86,12 @@ class AccuracyAndSchemaTests(unittest.TestCase):
         features = base_features()
         features.pop("critical_condition")
         with self.assertRaisesRegex(ValueError, "critical_condition"):
+            core.validate_feature_schema(features)
+
+    def test_feature_schema_requires_task_breadth(self) -> None:
+        features = base_features()
+        features.pop("required_task_breadth")
+        with self.assertRaisesRegex(ValueError, "required_task_breadth"):
             core.validate_feature_schema(features)
 
     def test_feature_schema_rejects_inconsistent_taxonomy(self) -> None:
@@ -396,6 +403,25 @@ class PipelineAndInputTests(unittest.TestCase):
         self.assertEqual(
             output["stage1_structural_guard_actions"][0]["rule"],
             "independent_multi_concept_level_one_floor",
+        )
+
+    def test_multiple_required_tasks_cannot_stay_in_level_one(self) -> None:
+        output = core.enrich_stage1_rating(
+            {
+                "features": base_features(
+                    knowledge_points=["离子共存", "离子颜色"],
+                    substance_count="2-3种",
+                    substance_relation="相互独立",
+                    required_task_breadth="2-3个异质必要任务",
+                ),
+                "reason": "两个不可合并的基础判断",
+                "predicted_accuracy": 88,
+            }
+        )
+        self.assertEqual(output["difficulty_level_step1"], "难度2档")
+        self.assertEqual(
+            output["stage1_structural_guard_actions"][0]["rule"],
+            "multiple_required_tasks_level_one_floor",
         )
 
     def test_low_structure_independent_concept_question_is_recovered_from_level_three(self) -> None:
@@ -789,6 +815,44 @@ class PipelineAndInputTests(unittest.TestCase):
         )
         self.assertFalse(reviewed["chemistry_structural_cluster_promotion_candidate"])
         self.assertFalse(reviewed["auto_adjustment_eligible"])
+
+    def test_supported_feature_revision_may_change_multiplier_without_blocking_auto_adjustment(self) -> None:
+        features = base_features(
+            reaction_count="4-6个",
+            reaction_relation="前后反应强依赖",
+            model_relation="模型切换",
+            process_structure="单阶段",
+            step_count="3-5步",
+            reasoning_chain="多层因果",
+            representation_conversion="一次常规转换",
+        )
+        reviewed = core.recalculate_verification(
+            current_level="难度3档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=62.0,
+            original_features=features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [{
+                    "field": "process_structure",
+                    "from": "单阶段",
+                    "to": "多阶段强依赖",
+                    "evidence": "后续反应必须以上一阶段中间体为条件",
+                }],
+                "reviewed_high_difficulty_features": [],
+                "reviewed_original_predicted_accuracy": 62.0,
+                "has_structural_revision": True,
+                "adjacent_boundary_review": {"verdict": "应更难一档"},
+                "confidence": "高",
+                "input_sufficiency_review": {"status": "充分"},
+                "high_feature_overlap_review": [],
+            },
+        )
+        self.assertTrue(reviewed["has_structural_revision"])
+        self.assertTrue(reviewed["auto_adjustment_eligible"])
+        self.assertEqual(reviewed["multiplier_reasonableness"], "合理")
+        self.assertEqual(reviewed["adjusted_difficulty_level"], "难度4档")
 
     def test_stage2_representation_channel_rejects_score_above_68(self) -> None:
         features = base_features(

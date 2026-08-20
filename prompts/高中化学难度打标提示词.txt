@@ -27,6 +27,16 @@ predicted_accuracy 表示目标考生完成整道题所有评分任务的预测�
 3. 多小问可以不直接复用前问答案，但仍共享同一复杂的物质—反应—装置—参数网络。不得用“答案不复用”推出“不共享模型”。
 4. 解析中的机械计算、重复代入、抄写方程式、逐项阅读不单独算新步骤。
 
+### 必要任务广度
+
+除 step_count 外，必须独立判断 required_task_breadth，用于如实记录整题需要完成多少个不可合并的必要任务：
+- 单一规则任务：所有作答只需同一个教材规则或同一个显性模型；四个选项只是同一规则的平行替换时仍填此项。
+- 2-3个异质必要任务：整题需要完成2—3个使用不同教材规则、不同信息来源或不同输出形式的必要判断/计算/操作。
+- 4个及以上异质必要任务：整题需要完成4个及以上不可合并的必要任务，例如不同反应规律、不同实验评价、不同定量关系或不同结构判断。
+- 多问递进任务链：多个小问或阶段以前一结论、同一中间体、同一状态网络或共同参数为后续必要输入，形成完整作答链。
+
+不要把“选择题有四个选项”机械填写为4个任务；只有各选项确实使用不同的必要规则时才可填高。反过来，也不能因为每项只有一步就忽略多项不同必要任务的整题完成负担。
+
 ### 答案依赖与模型依赖
 
 - 答案依赖：后一问必须直接使用前一问的数值、物质或结论，对应 subquestion_dependency="后问依赖前问"。
@@ -150,6 +160,7 @@ competing_reaction：无 / 常规主反应判断 / 竞争反应需要辨析 / �
 process_structure：单阶段 / 两阶段显性流程 / 多阶段显性流程 / 多阶段强依赖 / 循环或回流流程
 primary_problem_structure：概念辨析 / 直接计算 / 无机推断 / 有机推断 / 反应原理综合 / 实验探究 / 工业流程 / 有机合成 / 复合题
 step_count：1-2步 / 3-5步 / 6-8步 / 9-12步 / 12步以上
+required_task_breadth：单一规则任务 / 2-3个异质必要任务 / 4个及以上异质必要任务 / 多问递进任务链
 subquestion_dependency：无多问 / 相互独立 / 后问依赖前问
 shared_model_across_subquestions：true / false
 model_explicitness：模型完全显性 / 半隐含模型 / 隐含模型 / 需要自主建模
@@ -240,6 +251,7 @@ reaction_relation 只描述化学反应节点之间的关系；process_structure
 - experiment_requirement="无" 且 route_design_requirement="无" 时，reason 不得声称存在实验或路线设计。
 - classification_discussion="无" 时，reason 不得声称需要复杂分类。
 - subquestion_dependency="无多问" 时，shared_model_across_subquestions 必须为 false。
+- required_task_breadth="单一规则任务" 时，reason 不得声称存在多个不可合并的必要判断、多个异质输出或递进链；required_task_breadth="多问递进任务链" 时，subquestion_dependency 或 shared_model_across_subquestions 必须体现实际依赖。
 - 各选项或小问若相互独立，不得把 reaction_relation、evidence_relation 或 model_relation 填成强耦合值。
 - features 必须优先反映题目事实，不得为了让 predicted_accuracy 看起来合理而反向修改。
 
@@ -268,7 +280,7 @@ VERIFICATION_PROMPT_PREFIX = r"""
 
 复核顺序必须为：
 1. 独立还原整题作答链和真正难度来源；
-2. 检查 features 是否误填或遗漏，特别检查物质关系、反应关系、竞争/副反应、证据关系、临界和路线设计；
+2. 检查 features 是否误填或遗漏，特别检查必要任务广度、物质关系、反应关系、竞争/副反应、证据关系、临界和路线设计；
 3. 检查高难特征是否误触发，以及多状态、临界、分类或竞争反应是否来自同一决策节点而被重复计数；
 4. 检查原始预测正确率是否符合 88 / 85 / 58 / 38 边界语义；
 5. 先检查 high_difficulty_multiplier_enabled：若为 false，实际乘数必须保持1.00，只审计候选乘数；若为 true，必须先命中特征组合，再按高难特征数量选择乘数：3个乘0.85、4个及以上乘0.70。普通4档不得仅因乘数跌入5档，只有高阶设计、多约束和低原始正确率共同构成强压轴组合，或路线反推、结构筛选与自主路线设计构成完整依赖有机全链时，才允许跨入5档；

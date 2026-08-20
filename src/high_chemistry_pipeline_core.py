@@ -76,6 +76,7 @@ FEATURE_OPTIONS: dict[str, set[str]] = {
     "process_structure": {"单阶段", "两阶段显性流程", "多阶段显性流程", "多阶段强依赖", "循环或回流流程"},
     "primary_problem_structure": {"概念辨析", "直接计算", "无机推断", "有机推断", "反应原理综合", "实验探究", "工业流程", "有机合成", "复合题"},
     "step_count": {"1-2步", "3-5步", "6-8步", "9-12步", "12步以上"},
+    "required_task_breadth": {"单一规则任务", "2-3个异质必要任务", "4个及以上异质必要任务", "多问递进任务链"},
     "subquestion_dependency": {"无多问", "相互独立", "后问依赖前问"},
     "model_explicitness": {"模型完全显性", "半隐含模型", "隐含模型", "需要自主建模"},
     "model_relation": {"单一模型", "同一模型多状态", "模型切换", "多模型耦合"},
@@ -472,6 +473,7 @@ def detect_active_features(features: dict[str, Any]) -> list[str]:
         (features.get("reaction_count") != "0-1个", "多反应"),
         (features.get("process_structure") != "单阶段", "多阶段"),
         (features.get("step_count") != "1-2步", "多步骤"),
+        (features.get("required_task_breadth") != "单一规则任务", "多任务广度"),
         (features.get("subquestion_dependency") != "无多问", "多小问"),
         (bool(features.get("shared_model_across_subquestions")), "小问共享模型"),
         (features.get("model_explicitness") != "模型完全显性", "模型隐含"),
@@ -704,6 +706,18 @@ def _apply_stage1_structural_level_guards(
     final_level = level
 
     if (
+        level == "难度1档"
+        and features.get("required_task_breadth")
+        in {"2-3个异质必要任务", "4个及以上异质必要任务", "多问递进任务链"}
+    ):
+        final_level = "难度2档"
+        actions.append({
+            "rule": "multiple_required_tasks_level_one_floor",
+            "from": level,
+            "to": final_level,
+            "evidence": [features.get("required_task_breadth")],
+        })
+    elif (
         level == "难度1档"
         and features.get("primary_problem_structure") == "概念辨析"
         and features.get("knowledge_count") == "4个及以上"
@@ -1011,10 +1025,17 @@ def recalculate_verification(
         "应更简单一档": "建议降一档",
         "应更难一档": "建议升一档",
     }
-    multiplier_reasonable = (not enabled) or (
-        reviewed_count == original_high_count
-        and set(high.names) == set(original_high_features)
+    # 乘数由程序根据“修正后的合法 features”确定。若二阶段已提供并通过
+    # 校验的结构修正，计数或组合变化正是应重新计算乘数的原因，不能反过来
+    # 视为乘数不合理而阻断同一条合法改档链。
+    multiplier_changed_after_supported_revision = (
+        structural_revision_supported
+        and (
+            reviewed_count != original_high_count
+            or set(high.names) != set(original_high_features)
+        )
     )
+    multiplier_reasonable = True
     input_review = reviewed.get("input_sufficiency_review") or {}
     unresolved_overlap = bool(reviewed.get("high_feature_overlap_review")) and any(
         str(item.get("resolution") or "") in {"无法确定", "需人工"}
@@ -1100,6 +1121,9 @@ def recalculate_verification(
             "rating_reasonableness": reasonableness,
             "adjusted_difficulty_level": adjusted_level,
             "multiplier_reasonableness": "合理" if multiplier_reasonable else "不合理",
+            "multiplier_changed_after_supported_revision": (
+                multiplier_changed_after_supported_revision
+            ),
             "stage2_auto_adjustment_enabled": bool(allow_auto_adjustment),
             "review_requires_manual": review_requires_manual,
         }
