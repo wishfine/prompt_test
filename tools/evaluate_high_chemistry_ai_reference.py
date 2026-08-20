@@ -122,45 +122,33 @@ def evaluate(labels: dict[str, dict[str, Any]], predictions: dict[str, dict[str,
 
 
 def accuracy_scale_diagnostics(predictions: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    familiarity: Counter[str] = Counter()
-    burden: Counter[str] = Counter()
-    task_structure: Counter[str] = Counter()
     score_dist: Counter[float] = Counter()
-    records_with_stage1 = threshold_inconsistent = low_structure_conflict = 0
-    high_burden_conflict = three_state_risk = multi_reaction_risk = 0
+    multiplier_dist: Counter[float] = Counter()
+    high_feature_count_dist: Counter[int] = Counter()
+    records_with_stage1 = 0
     for row in predictions.values():
         stage1 = row.get("difficulty_rating") or row.get("difficulty_rating_stage1")
         if not isinstance(stage1, dict):
             continue
         records_with_stage1 += 1
-        for field, counter in (("local_model_familiarity", familiarity), ("whole_question_burden", burden), ("task_completion_structure", task_structure)):
-            value = stage1.get(field)
-            if isinstance(value, str) and value:
-                counter[value] += 1
         try:
             score_dist[float(stage1["original_predicted_accuracy"])] += 1
         except (KeyError, TypeError, ValueError):
             pass
-        audit = stage1.get("accuracy_scale_audit")
-        if not isinstance(audit, dict):
-            continue
-        threshold_inconsistent += audit.get("threshold_review_consistent") is False
-        low_structure_conflict += audit.get("low_structure_score_conflict") is True
-        high_burden_conflict += audit.get("high_burden_score_conflict") is True
-        three_state_risk += audit.get("three_state_boundary_review_risk") is True
-        multi_reaction_risk += audit.get("multi_reaction_boundary_review_risk") is True
+        try:
+            multiplier_dist[float(stage1["multiplier_applied"])] += 1
+        except (KeyError, TypeError, ValueError):
+            pass
+        try:
+            high_feature_count_dist[int(stage1["effective_high_difficulty_feature_count"])] += 1
+        except (KeyError, TypeError, ValueError):
+            pass
     return {
         "records_with_stage1": records_with_stage1,
-        "threshold_review_inconsistent_count": threshold_inconsistent,
-        "low_structure_score_conflict_count": low_structure_conflict,
-        "high_burden_score_conflict_count": high_burden_conflict,
-        "three_state_boundary_review_risk_count": three_state_risk,
-        "multi_reaction_boundary_review_risk_count": multi_reaction_risk,
         "unique_original_accuracy_count": len(score_dist),
         "top_original_accuracy_values": [{"score": score, "count": count} for score, count in score_dist.most_common(15)],
-        "local_model_familiarity_distribution": dict(familiarity),
-        "whole_question_burden_distribution": dict(burden),
-        "task_completion_structure_distribution": dict(task_structure),
+        "multiplier_distribution": dict(multiplier_dist),
+        "effective_high_difficulty_feature_count_distribution": dict(high_feature_count_dist),
     }
 
 

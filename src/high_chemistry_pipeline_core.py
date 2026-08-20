@@ -126,12 +126,6 @@ HIGH_DIFFICULTY_FEATURE_NAMES = (
     "高阶实验合成或分离方案设计",
 )
 
-LOCAL_MODEL_FAMILIARITY_OPTIONS = {"教材直接结论", "熟悉标准模型", "深层课内模型", "陌生迁移"}
-WHOLE_QUESTION_BURDEN_OPTIONS = {"低", "中", "较高", "高", "极高"}
-TASK_COMPLETION_STRUCTURE_OPTIONS = {
-    "单一评分任务", "多个同质独立任务", "多个异质独立任务",
-    "多个前后依赖任务", "多阶段连续失分任务",
-}
 UNTRUSTED_LABEL_FIELDS = {
     "difficulty", "percent_correct", "answered_count", "teacher_label",
     "teacher_difficulty", "label", "难度",
@@ -197,20 +191,10 @@ def build_stage1_output_schema() -> dict[str, Any]:
                 "additionalProperties": False,
             },
             "reason": {"type": "string"},
-            "local_model_familiarity": {
-                "type": "string", "enum": sorted(LOCAL_MODEL_FAMILIARITY_OPTIONS),
-            },
-            "whole_question_burden": {
-                "type": "string", "enum": sorted(WHOLE_QUESTION_BURDEN_OPTIONS),
-            },
-            "task_completion_structure": {
-                "type": "string", "enum": sorted(TASK_COMPLETION_STRUCTURE_OPTIONS),
-            },
             "predicted_accuracy": {"type": "number"},
         },
         "required": [
-            "features", "reason", "local_model_familiarity",
-            "whole_question_burden", "task_completion_structure", "predicted_accuracy",
+            "features", "reason", "predicted_accuracy",
         ],
         "additionalProperties": False,
     }
@@ -578,99 +562,9 @@ def detect_active_features(features: dict[str, Any]) -> list[str]:
     return active
 
 
-def _validate_stage1_metadata(rating: dict[str, Any]) -> None:
-    if rating.get("local_model_familiarity") not in LOCAL_MODEL_FAMILIARITY_OPTIONS:
-        raise ValueError("local_model_familiarity 非法")
-    if rating.get("whole_question_burden") not in WHOLE_QUESTION_BURDEN_OPTIONS:
-        raise ValueError("whole_question_burden 非法")
-    if rating.get("task_completion_structure") not in TASK_COMPLETION_STRUCTURE_OPTIONS:
-        raise ValueError("task_completion_structure 非法")
+def _validate_stage1_rating(rating: dict[str, Any]) -> None:
     if not str(rating.get("reason", "")).strip():
         raise ValueError("reason 不得为空")
-
-def _accuracy_scale_audit(
-    *, rating: dict[str, Any], features: dict[str, Any], base_accuracy: float
-) -> dict[str, Any]:
-    """软审计化学正确率标尺，只输出冲突信号，不擅自修改原始分数。"""
-    familiarity = rating["local_model_familiarity"]
-    burden = rating["whole_question_burden"]
-    task_structure = rating["task_completion_structure"]
-    low_structure = (
-        features.get("step_count") == "1-2步"
-        and features.get("model_explicitness") == "模型完全显性"
-        and features.get("reasoning_chain") in {"直接判断", "简单因果"}
-        and features.get("hidden_conditions") == "无"
-        and features.get("critical_condition") == "无临界"
-        and features.get("classification_discussion") == "无"
-        and features.get("reaction_relation") in {"无反应关系", "单一直接反应"}
-        and features.get("calculation_complexity") in {"无需计算", "简单代数"}
-    )
-    high_burden_structure = (
-        features.get("step_count") in {"9-12步", "12步以上"}
-        or (
-            features.get("reaction_count") == "4个及以上"
-            and features.get("state_count") == "3个及以上"
-            and (
-                features.get("subquestion_dependency") == "后问依赖前问"
-                or features.get("shared_model_across_subquestions") is True
-                or features.get("process_state_relation") in {"前后状态强依赖", "连续变化伴随平衡或边界"}
-            )
-        )
-        or (
-            features.get("step_count") in {"6-8步", "9-12步", "12步以上"}
-            and features.get("constraint_structure") == "多约束联合筛选"
-            and (
-                features.get("experiment_requirement") == "方案设计或可行性评价"
-                or features.get("synthesis_route") == "自主设计或路线评价"
-                or features.get("separation_purification") == "自主设计或方案评价"
-            )
-        )
-    )
-    complex_signals = sum((
-        features.get("step_count") in {"6-8步", "9-12步", "12步以上"},
-        features.get("reaction_relation") in {"多阶段强依赖反应链", "竞争或副反应", "条件改变导致方向或产物变化"},
-        features.get("model_relation") in {"模型切换", "多模型或多平衡耦合"},
-        features.get("constraint_structure") == "多约束联合筛选",
-        features.get("equation_structure") in {"2-3个方程联立", "4个以上方程或不等式组"},
-        features.get("hidden_conditions") in {"单个隐含条件", "多个隐含条件"},
-        features.get("subquestion_dependency") == "后问依赖前问",
-        features.get("shared_model_across_subquestions") is True,
-    ))
-    three_state_risk = (
-        features.get("state_count") == "3个及以上"
-        and features.get("process_state_relation") in {"显性顺序衔接", "前后状态强依赖", "连续变化伴随平衡或边界"}
-        and base_accuracy >= 58
-    )
-    multi_reaction_risk = (
-        features.get("reaction_count") == "4个及以上"
-        and features.get("reaction_relation") in {"多阶段强依赖反应链", "竞争或副反应", "条件改变导致方向或产物变化"}
-        and base_accuracy >= 58
-    )
-    experiment_high_score_conflict = (
-        features.get("context_type") == "实验探究"
-        and task_structure == "多个异质独立任务"
-        and features.get("step_count") in {"3-5步", "6-8步", "9-12步", "12步以上"}
-        and features.get("experiment_requirement") != "无"
-        and base_accuracy >= 88
-    )
-    industrial_flow_high_score_conflict = (
-        features.get("context_type") == "工业流程"
-        and features.get("information_carrier") in {"工艺流程图", "多载体综合"}
-        and features.get("step_count") in {"6-8步", "9-12步", "12步以上"}
-        and base_accuracy >= 58
-    )
-    return {
-        "metadata_version": "high_chemistry_v3_unified_five_level",
-        "metadata_complete": True,
-        "low_structure_score_conflict": low_structure and base_accuracy < 85 and task_structure in {"单一评分任务", "多个同质独立任务"},
-        "high_burden_score_conflict": high_burden_structure and base_accuracy >= 58,
-        "three_state_boundary_review_risk": three_state_risk,
-        "multi_reaction_boundary_review_risk": multi_reaction_risk,
-        "multi_experiment_high_score_conflict": experiment_high_score_conflict,
-        "industrial_flow_high_score_conflict": industrial_flow_high_score_conflict,
-        "standard_model_score_inflation_risk": familiarity in {"教材直接结论", "熟悉标准模型"} and (high_burden_structure or complex_signals >= 3) and base_accuracy >= 58,
-        "burden_label_score_conflict": (burden in {"高", "极高"} and base_accuracy >= 58) or (burden == "低" and base_accuracy < 85),
-    }
 
 
 def enrich_stage1_rating(
@@ -698,7 +592,7 @@ def enrich_stage1_rating(
         raise ValueError("predicted_accuracy 必须为数值") from exc
     if not 0 <= original_accuracy <= 100:
         raise ValueError("predicted_accuracy 必须位于 0 到 100")
-    _validate_stage1_metadata(rating)
+    _validate_stage1_rating(rating)
 
     active_features = detect_active_features(features)
     detection = detect_high_difficulty_features(features)
@@ -709,9 +603,6 @@ def enrich_stage1_rating(
     multiplier = multiplier_for_high_count(effective_high_count)
     adjusted_accuracy = round(original_accuracy * multiplier, 1)
     rating["original_predicted_accuracy"] = round(original_accuracy, 1)
-    rating["accuracy_scale_audit"] = _accuracy_scale_audit(
-        rating=rating, features=features, base_accuracy=original_accuracy
-    )
     rating["active_features"] = active_features
     rating["active_feature_count"] = len(active_features)
     rating["high_difficulty_features"] = detection.names

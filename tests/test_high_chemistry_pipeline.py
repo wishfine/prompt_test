@@ -65,9 +65,6 @@ def stage1_rating(features=None, accuracy=90.0):
     return {
         "features": copy.deepcopy(features or base_features()),
         "reason": "教材直接概念辨析，只有一个评分任务。",
-        "local_model_familiarity": "教材直接结论",
-        "whole_question_burden": "低",
-        "task_completion_structure": "单一评分任务",
         "predicted_accuracy": accuracy,
     }
 
@@ -184,6 +181,7 @@ class Stage1Tests(unittest.TestCase):
     def test_strict_output_schema_uses_canonical_enums(self):
         schema = core.build_stage1_output_schema()
         self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(set(schema["required"]), {"features", "reason", "predicted_accuracy"})
         features = schema["properties"]["features"]
         self.assertFalse(features["additionalProperties"])
         self.assertEqual(set(features["required"]), set(core.REQUIRED_FEATURE_FIELDS))
@@ -225,25 +223,6 @@ class Stage1Tests(unittest.TestCase):
         self.assertEqual(enriched["multiplier_applied"], 1.0)
         self.assertEqual(enriched["predicted_accuracy"], 80)
         self.assertEqual(enriched["difficulty_level"], "难度3档")
-
-    def test_low_structure_score_conflict_is_audited_not_overwritten(self):
-        enriched = core.enrich_stage1_rating(stage1_rating(accuracy=70))
-        self.assertEqual(enriched["original_predicted_accuracy"], 70)
-        self.assertTrue(enriched["accuracy_scale_audit"]["low_structure_score_conflict"])
-
-    def test_three_state_and_multi_reaction_boundary_risks_are_audited(self):
-        features = base_features(
-            step_count="6-8步",
-            reaction_count="4个及以上",
-            reaction_relation="多阶段强依赖反应链",
-            state_count="3个及以上",
-            process_state_relation="前后状态强依赖",
-            reasoning_chain="多层因果",
-        )
-        enriched = core.enrich_stage1_rating(stage1_rating(features, 60))
-        audit = enriched["accuracy_scale_audit"]
-        self.assertTrue(audit["three_state_boundary_review_risk"])
-        self.assertTrue(audit["multi_reaction_boundary_review_risk"])
 
 
 class InputPreparationTests(unittest.TestCase):
@@ -345,20 +324,11 @@ class PromptAssetTests(unittest.TestCase):
     def test_prompt_requires_interval_positioning_and_option_detail(self):
         text = (ROOT / "prompts" / "高中化学难度打标提示词.txt").read_text(encoding="utf-8")
         for phrase in (
-            "local_model_familiarity", "whole_question_burden",
-            "task_completion_structure", "原始正确率的四个边界与五档区间",
+            "基于可观察 features 的原始正确率判定", "四个边界与五个原始正确率区间",
             "按相邻边界距离给出连续分数",
-            "完整作答稳定性校准",
-            "完整完成本题全部必要任务的概率",
-            "核心拔高任务",
-            "取得整题答案不可省略",
-            "且至少两个任务相互依赖",
-            "核心拔高任务数为0",
-            "存在1个核心拔高任务",
-            "核心拔高任务数为2个及以上",
-            "原始正确率低于38时，必须分别指出两个核心拔高任务",
-            "整体拔高证据",
-            "若难点表现为整体拔高证据",
+            "完整完成全部必要任务的概率",
+            "拔高结构证据",
+            "至少两个第四档拔高结构证据形成相互依赖的高阶阶段",
             "关键错误传播",
             "核心判定：课内常规综合",
             "主要难度来自理解题意并正确衔接这些常规步骤",
@@ -373,6 +343,10 @@ class PromptAssetTests(unittest.TestCase):
             "共享复杂模型",
         ):
             self.assertIn(phrase, text)
+        for phrase in (
+            "local_model_familiarity", "whole_question_burden", "task_completion_structure",
+        ):
+            self.assertNotIn(phrase, text)
         self.assertNotIn('"predicted_accuracy": 72.0', text)
 
     def test_prompt_defines_task_modeling_without_task_unit_schema(self):
@@ -388,7 +362,7 @@ class RunnerAssetTests(unittest.TestCase):
 
     def test_runner_compiles(self):
         compile(self.source, str(self.path), "exec")
-        self.assertIn('"high_chemistry_single_stage_v3_deduplicated_features"', self.source)
+        self.assertIn('"high_chemistry_single_stage_v4_feature_direct_score"', self.source)
         self.assertIn('"type": "json_schema"', self.source)
         self.assertIn('"strict": True', self.source)
         self.assertIn("build_stage1_output_schema", self.source)
