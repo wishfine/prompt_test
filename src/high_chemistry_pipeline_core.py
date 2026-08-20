@@ -197,11 +197,35 @@ def _matched_multiplier_trigger_combo(names: list[str]) -> list[str]:
     return []
 
 
+def _is_full_dependent_organic_route(features: dict[str, Any]) -> bool:
+    """识别“结构反推—中间体—路线设计”不可拆开的有机全链。
+
+    路线图上的箭头显性，不等于各问的求解依赖弱。这里仅接受后问确实
+    依赖前问、共享中间体、需要流程反推并完成新路线设计的严格组合；普通
+    官能团识别或已知路线补空不会进入该通道。
+    """
+    return (
+        features.get("primary_problem_structure") in {"有机合成", "有机推断"}
+        and features.get("step_count") in {"6-8步", "9-12步", "12步以上"}
+        and features.get("subquestion_dependency") == "后问依赖前问"
+        and features.get("shared_model_across_subquestions") is True
+        and features.get("substance_relation") == "前后转化依赖"
+        and features.get("reaction_count") in {"4-6个", "7个及以上"}
+        and features.get("process_structure")
+        in {"多阶段显性流程", "多阶段强依赖"}
+        and features.get("information_conversion") == "流程或图谱反推"
+        and features.get("evidence_relation") == "证据链相互支持"
+        and features.get("route_design_requirement")
+        in {"合成路线设计", "路线优化与可行性验证"}
+    )
+
+
 def _apply_chemistry_multiplier_policy(
     *,
     original_accuracy: float,
     high_names: list[str],
     multiplier_enabled: bool,
+    full_dependent_organic_route: bool = False,
 ) -> dict[str, Any]:
     candidate = multiplier_for_high_count(len(high_names))
     matched_combo = (
@@ -217,8 +241,13 @@ def _apply_chemistry_multiplier_policy(
     active = set(high_names)
     strong_final = (
         original_accuracy <= 52
-        and "高阶实验、合成或分离设计" in active
-        and "多约束联合" in active
+        and (
+            (
+                "高阶实验、合成或分离设计" in active
+                and "多约束联合" in active
+            )
+            or full_dependent_organic_route
+        )
     )
     final_guard = (
         raw_level == "难度4档"
@@ -260,10 +289,21 @@ def _chemistry_58_boundary_promotion_candidate(
         and features.get("process_structure")
         in {"多阶段强依赖", "多阶段显性流程"}
     )
+    representation_chain_evidence = (
+        (
+            features.get("substance_relation") == "同一反应体系"
+            and features.get("reaction_count") in {"2-3个", "4-6个", "7个及以上"}
+        )
+        or features.get("calculation_model")
+        in {"平衡常数或Ka/Kb/Ksp", "多模型定量耦合"}
+        or features.get("information_conversion")
+        in {"多源信息联合转换", "流程或图谱反推"}
+    )
     representation_chain = (
         58 <= original_accuracy <= 68
         and features.get("reasoning_chain") == "多层因果"
         and features.get("representation_conversion") == "一次常规转换"
+        and representation_chain_evidence
     )
     return information_chain or dependent_model_chain or representation_chain
 
@@ -379,6 +419,7 @@ def detect_high_difficulty_features(features: dict[str, Any]) -> HighDifficultyD
     """仅计算结构性高难类别，并对同一决策节点的重叠信号做确定性抑制。"""
     evidence_by_name: dict[str, dict[str, Any]] = {}
     suppressed: list[dict[str, Any]] = []
+    full_dependent_organic_route = _is_full_dependent_organic_route(features)
 
     multi_substance = (
         features.get("substance_count") in {"4-6种", "7种及以上"}
@@ -396,16 +437,32 @@ def detect_high_difficulty_features(features: dict[str, Any]) -> HighDifficultyD
         evidence_by_name["多物质强耦合"] = _evidence("多物质强耦合", fields, features, "substance_network")
 
     multi_reaction = (
-        features.get("reaction_relation") in {"前后反应强依赖", "多路径反应网络"}
-        and features.get("process_structure") in {"多阶段强依赖", "循环或回流流程"}
-        and (
-            features.get("reaction_count") in {"4-6个", "7个及以上"}
-            or features.get("step_count") in {"6-8步", "9-12步", "12步以上"}
+        (
+            features.get("reaction_relation") in {"前后反应强依赖", "多路径反应网络"}
+            and features.get("process_structure") in {"多阶段强依赖", "循环或回流流程"}
+            and (
+                features.get("reaction_count") in {"4-6个", "7个及以上"}
+                or features.get("step_count") in {"6-8步", "9-12步", "12步以上"}
+            )
         )
+        or full_dependent_organic_route
     )
     if multi_reaction:
         fields = ["reaction_count", "reaction_relation", "process_structure"]
-        evidence_by_name["多反应或多阶段强耦合"] = _evidence("多反应或多阶段强耦合", fields, features, "reaction_process_network")
+        node = "reaction_process_network"
+        if full_dependent_organic_route:
+            fields = [
+                "subquestion_dependency",
+                "shared_model_across_subquestions",
+                "substance_relation",
+                "reaction_count",
+                "process_structure",
+                "information_conversion",
+                "evidence_relation",
+                "route_design_requirement",
+            ]
+            node = "dependent_organic_route_chain"
+        evidence_by_name["多反应或多阶段强耦合"] = _evidence("多反应或多阶段强耦合", fields, features, node)
 
     competition_high = (
         features.get("competing_reaction") in {"竞争反应需要辨析", "副反应影响结论", "多反应竞争并需筛选"}
@@ -524,7 +581,12 @@ def detect_high_difficulty_features(features: dict[str, Any]) -> HighDifficultyD
         evidence_by_name["高阶实验、合成或分离设计"] = _evidence("高阶实验、合成或分离设计", fields, features, "advanced_design")
 
     # 若“高层信息转换”仅是同一实验/路线设计中的证据处理，不重复计数。
-    if design_high and information_high and features.get("information_carrier") in {"实验装置", "工艺流程图"}:
+    if (
+        design_high
+        and information_high
+        and features.get("information_carrier") in {"实验装置", "工艺流程图"}
+        and not full_dependent_organic_route
+    ):
         evidence_by_name.pop("高层级信息转换", None)
         suppressed.append({"suppressed": "高层级信息转换", "kept": "高阶实验、合成或分离设计", "reason": "信息转换只是同一设计节点的内部证据处理"})
 
@@ -541,6 +603,65 @@ def detect_high_difficulty_features(features: dict[str, Any]) -> HighDifficultyD
         possible_overlap_groups=overlaps,
         suppressed_overlaps=suppressed,
     )
+
+
+def _apply_stage1_structural_level_guards(
+    *,
+    level: str,
+    original_accuracy: float,
+    features: dict[str, Any],
+    high_names: list[str],
+) -> tuple[str, list[dict[str, Any]]]:
+    """回收已验证的相邻档位标尺偏差；每题至多调整一档。"""
+    actions: list[dict[str, Any]] = []
+    final_level = level
+
+    if (
+        level == "难度1档"
+        and features.get("primary_problem_structure") == "概念辨析"
+        and features.get("knowledge_count") == "4个及以上"
+        and features.get("substance_relation") == "相互独立"
+    ):
+        final_level = "难度2档"
+        actions.append({
+            "rule": "independent_multi_concept_level_one_floor",
+            "from": level,
+            "to": final_level,
+            "evidence": ["概念辨析", "4个及以上独立知识点", "相互独立"],
+        })
+    elif (
+        level == "难度3档"
+        and 80 <= original_accuracy <= 83
+        and features.get("primary_problem_structure") == "概念辨析"
+        and features.get("step_count") == "1-2步"
+        and features.get("substance_relation") == "相互独立"
+        and features.get("process_structure") == "单阶段"
+        and features.get("representation_conversion") == "无转换"
+        and not high_names
+    ):
+        final_level = "难度2档"
+        actions.append({
+            "rule": "low_structure_independent_concept_recovery",
+            "from": level,
+            "to": final_level,
+            "evidence": ["1-2步", "相互独立", "无转换", "无高难结构"],
+        })
+    elif (
+        level == "难度2档"
+        and 85 <= original_accuracy < 88
+        and features.get("step_count") == "3-5步"
+        and features.get("substance_count") == "2-3种"
+        and features.get("substance_relation") == "同一反应体系"
+        and features.get("calculation_model") == "常规化学计量"
+    ):
+        final_level = "难度3档"
+        actions.append({
+            "rule": "standard_stoichiometry_chain_level_two_floor",
+            "from": level,
+            "to": final_level,
+            "evidence": ["3-5步", "同一反应体系", "常规化学计量"],
+        })
+    return final_level, actions
 
 
 def enrich_stage1_rating(
@@ -599,6 +720,7 @@ def enrich_stage1_rating(
         original_accuracy=raw_accuracy,
         high_names=high.names,
         multiplier_enabled=enabled,
+        full_dependent_organic_route=_is_full_dependent_organic_route(features),
     )
     multiplier_candidate = multiplier_policy["multiplier_candidate"]
     multiplier = multiplier_policy["multiplier_applied"]
@@ -620,7 +742,17 @@ def enrich_stage1_rating(
     ]
     rating["multiplier_applied"] = multiplier
     rating["predicted_accuracy"] = adjusted
-    rating["difficulty_level_step1"] = map_accuracy_to_level(adjusted)
+    raw_step1_level = map_accuracy_to_level(adjusted)
+    guarded_level, guard_actions = _apply_stage1_structural_level_guards(
+        level=raw_step1_level,
+        original_accuracy=raw_accuracy,
+        features=features,
+        high_names=high.names,
+    )
+    rating["difficulty_level_step1_before_structural_guards"] = raw_step1_level
+    rating["stage1_structural_guard_actions"] = guard_actions
+    rating["difficulty_level_step1"] = guarded_level
+    rating["full_dependent_organic_route_detected"] = _is_full_dependent_organic_route(features)
     return rating
 
 
@@ -744,6 +876,9 @@ def recalculate_verification(
         original_accuracy=reviewed_accuracy,
         high_names=high.names,
         multiplier_enabled=enabled,
+        full_dependent_organic_route=_is_full_dependent_organic_route(
+            corrected_features
+        ),
     )
     multiplier_candidate = multiplier_policy["multiplier_candidate"]
     multiplier = multiplier_policy["multiplier_applied"]
@@ -832,6 +967,9 @@ def recalculate_verification(
             "reviewed_high_difficulty_feature_evidence": high.evidence,
             "reviewed_suppressed_high_feature_overlaps": high.suppressed_overlaps,
             "reviewed_high_difficulty_feature_count": reviewed_count,
+            "reviewed_full_dependent_organic_route_detected": (
+                _is_full_dependent_organic_route(corrected_features)
+            ),
             "reviewed_high_difficulty_multiplier_enabled": enabled,
             "reviewed_multiplier_candidate": multiplier_candidate,
             "reviewed_multiplier_triggered": multiplier_policy["multiplier_triggered"],

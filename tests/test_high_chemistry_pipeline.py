@@ -233,6 +233,47 @@ class ChemistryHighFeatureTests(unittest.TestCase):
         )
         self.assertNotIn("多反应或多阶段强耦合", detected.names)
 
+    def test_full_dependent_organic_route_keeps_information_and_chain_as_distinct_high_features(self) -> None:
+        """路线反推与下游设计共享中间体时，不能因图中箭头显性而压成普通4档。"""
+        features = base_features(
+            knowledge_L1=["有机化学"],
+            knowledge_L2=["有机合成与推断"],
+            knowledge_points=["中间体结构反推", "同分异构体筛选", "合成路线设计", "官能团转化"],
+            substance_count="4-6种",
+            substance_relation="前后转化依赖",
+            reaction_count="4-6个",
+            reaction_relation="显性顺序衔接",
+            process_structure="多阶段显性流程",
+            primary_problem_structure="有机合成",
+            step_count="6-8步",
+            subquestion_dependency="后问依赖前问",
+            shared_model_across_subquestions=True,
+            model_explicitness="半隐含模型",
+            model_relation="同一模型多状态",
+            reasoning_chain="多层因果",
+            representation_conversion="多次同类转换",
+            evidence_relation="证据链相互支持",
+            hidden_conditions="单个隐含条件",
+            constraint_structure="多约束联合筛选",
+            information_carrier="工艺流程图",
+            information_conversion="流程或图谱反推",
+            route_design_requirement="合成路线设计",
+            context_type="有机合成",
+            context_load="需要信息转换",
+        )
+        detected = core.detect_high_difficulty_features(features)
+        self.assertIn("多反应或多阶段强耦合", detected.names)
+        self.assertIn("高层级信息转换", detected.names)
+        self.assertIn("高阶实验、合成或分离设计", detected.names)
+
+        output = core.enrich_stage1_rating(
+            {"features": features, "reason": "测试", "predicted_accuracy": 42},
+            multiplier_enabled=True,
+        )
+        self.assertTrue(output["multiplier_triggered"])
+        self.assertEqual(output["difficulty_level_step1"], "难度5档")
+        self.assertFalse(output["multiplier_final_level_guard_applied"])
+
     def test_quantitative_multi_model_dependency_is_a_high_feature(self) -> None:
         detected = core.detect_high_difficulty_features(
             base_features(
@@ -338,6 +379,68 @@ class PipelineAndInputTests(unittest.TestCase):
         self.assertTrue(output["multiplier_triggered"])
         self.assertFalse(output["multiplier_final_level_guard_applied"])
         self.assertEqual(output["difficulty_level_step1"], "难度5档")
+
+    def test_independent_multi_concept_question_cannot_stay_in_level_one(self) -> None:
+        output = core.enrich_stage1_rating(
+            {
+                "features": base_features(
+                    knowledge_points=["物质分类", "电解质", "胶体", "氧化物"],
+                    substance_count="4-6种",
+                    substance_relation="相互独立",
+                ),
+                "reason": "四个独立基础判断",
+                "predicted_accuracy": 88,
+            }
+        )
+        self.assertEqual(output["difficulty_level_step1"], "难度2档")
+        self.assertEqual(
+            output["stage1_structural_guard_actions"][0]["rule"],
+            "independent_multi_concept_level_one_floor",
+        )
+
+    def test_low_structure_independent_concept_question_is_recovered_from_level_three(self) -> None:
+        output = core.enrich_stage1_rating(
+            {
+                "features": base_features(
+                    knowledge_points=["物质分类", "电解质"],
+                    substance_count="2-3种",
+                    substance_relation="相互独立",
+                    reasoning_chain="简单因果",
+                    constraint_structure="单一约束",
+                ),
+                "reason": "多个独立基础判断",
+                "predicted_accuracy": 82,
+            }
+        )
+        self.assertEqual(output["difficulty_level_step1"], "难度2档")
+        self.assertEqual(
+            output["stage1_structural_guard_actions"][0]["rule"],
+            "low_structure_independent_concept_recovery",
+        )
+
+    def test_standard_stoichiometry_chain_cannot_stay_in_level_two(self) -> None:
+        output = core.enrich_stage1_rating(
+            {
+                "features": base_features(
+                    knowledge_L2=["物质的量与化学计量"],
+                    knowledge_points=["物质的量", "化学方程式", "质量关系"],
+                    substance_count="2-3种",
+                    substance_relation="同一反应体系",
+                    reaction_count="2-3个",
+                    step_count="3-5步",
+                    reasoning_chain="简单因果",
+                    calculation_model="常规化学计量",
+                    calculation_complexity="简单计算",
+                ),
+                "reason": "同一反应体系的连续计量",
+                "predicted_accuracy": 86,
+            }
+        )
+        self.assertEqual(output["difficulty_level_step1"], "难度3档")
+        self.assertEqual(
+            output["stage1_structural_guard_actions"][0]["rule"],
+            "standard_stoichiometry_chain_level_two_floor",
+        )
 
     def test_review_score_is_locked_without_supported_feature_revision(self) -> None:
         features = base_features()
@@ -562,7 +665,7 @@ class PipelineAndInputTests(unittest.TestCase):
         self.assertEqual(reviewed["reviewed_direction"], "应更难一档")
         self.assertEqual(reviewed["adjusted_difficulty_level"], "难度4档")
 
-    def test_stage2_58_boundary_representation_channel_promotes_three_to_four(self) -> None:
+    def test_stage2_58_boundary_representation_channel_requires_decisive_structure(self) -> None:
         features = base_features(
             step_count="3-5步",
             reasoning_chain="多层因果",
@@ -579,6 +682,37 @@ class PipelineAndInputTests(unittest.TestCase):
                 "feature_corrections": [],
                 "reviewed_high_difficulty_features": [],
                 "reviewed_original_predicted_accuracy": 68.0,
+                "has_structural_revision": False,
+                "adjacent_boundary_review": {"verdict": "维持"},
+                "confidence": "高",
+                "input_sufficiency_review": {"status": "充分"},
+                "high_feature_overlap_review": [],
+            },
+        )
+        self.assertFalse(reviewed["chemistry_58_boundary_promotion_candidate"])
+        self.assertFalse(reviewed["auto_adjustment_eligible"])
+        self.assertEqual(reviewed["adjusted_difficulty_level"], "难度3档")
+
+    def test_stage2_58_boundary_representation_channel_accepts_reaction_chain(self) -> None:
+        features = base_features(
+            substance_count="2-3种",
+            substance_relation="同一反应体系",
+            reaction_count="2-3个",
+            step_count="3-5步",
+            reasoning_chain="多层因果",
+            representation_conversion="一次常规转换",
+        )
+        reviewed = core.recalculate_verification(
+            current_level="难度3档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=65.0,
+            original_features=features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [],
+                "reviewed_high_difficulty_features": [],
+                "reviewed_original_predicted_accuracy": 65.0,
                 "has_structural_revision": False,
                 "adjacent_boundary_review": {"verdict": "维持"},
                 "confidence": "高",

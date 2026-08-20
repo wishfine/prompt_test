@@ -153,6 +153,28 @@ class HighChemistryAssetTests(unittest.TestCase):
         ):
             self.assertIn(required, stage1)
 
+    def test_stage1_calibrates_independent_tasks_and_dependent_organic_routes(self) -> None:
+        namespace = {}
+        source = PROMPT.read_text(encoding="utf-8")
+        exec(compile(source, str(PROMPT), "exec"), namespace)
+        stage1 = namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
+        for required in (
+            "四个或更多相互独立的教材规则",
+            "不应给出88及以上",
+            "同一反应体系中的3—5个有效化学决策",
+            "路线图箭头显性不等于作答依赖弱",
+            "路线反推、限制性结构筛选与自主路线设计",
+        ):
+            self.assertIn(required, stage1)
+
+    def test_stage2_requires_decisive_evidence_for_representation_boundary_channel(self) -> None:
+        namespace = {}
+        source = PROMPT.read_text(encoding="utf-8")
+        exec(compile(source, str(PROMPT), "exec"), namespace)
+        stage2 = namespace["VERIFICATION_PROMPT_PREFIX"]
+        self.assertIn("一次常规表征转换不能单独触发", stage2)
+        self.assertIn("同一反应体系中的多个反应节点", stage2)
+
     def test_stage2_does_not_treat_program_derived_fields_as_structural_revision(self) -> None:
         namespace = {}
         source = PROMPT.read_text(encoding="utf-8")
