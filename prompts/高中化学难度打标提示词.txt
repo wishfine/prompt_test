@@ -353,9 +353,7 @@ VERIFICATION_PROMPT_PREFIX = r"""你是高中化学难度评级的第二阶段�
 - 一般易错、常规运算繁琐只能局部微调正确率。
 - 若修正 feature，to 必须严格取自第一阶段对应字段的合法枚举；不得在 feature_corrections 中修改档位、乘数或正确率字段。
 - knowledge_L1、knowledge_count、knowledge_scope 由程序确定性派生，只可在分析中指出，不得写入 feature_corrections，也不得据此修改 reviewed_original_predicted_accuracy。
-- 自动改档必须具有程序接受的非派生 feature 修正，或命中程序确认的58边界结构候选；同时要求confidence=高、复核后结构确实支持跨越相邻边界。普通修正要求复核后正确率确实跨越相邻边界，且adjacent_boundary_review.verdict 与程序计算方向一致。满足时最多调整一档；跨两档、方向冲突、信息不足或证据不足时维持原档并转人工复核。
-- 58边界专项复核：第一阶段为难度3档且原始正确率位于58—62时，若仍存在“多层因果+高层信息转换”，或“任务依赖+复杂模型+多阶段流程”，应按拔高结构重新检查3→4；程序会在第二阶段修正后的features上再次验证该组合。
-- 58边界表征复核：第一阶段为难度3档且原始正确率位于58—68时，若同时存在“多层因果+一次常规表征转换”，还必须有同一反应体系中的多个反应节点、平衡/多模型定量耦合，或高层级信息转换之一，才应重新检查3→4。一次常规表征转换不能单独触发；单纯出现表征转换或普通直接判断不得触发。
+- 自动改档必须具有程序接受的非派生 feature 修正；程序根据修正后的 features 重新派生 structural level constraint。只有结构约束后的档位相对第一阶段确实跨越一个相邻档位、confidence=高、输入充分且 adjacent_boundary_review.verdict 与该结构方向一致时，才允许自动调整一档。连续正确率是否跨越数值边界不是自动改档的必要条件。满足时最多调整一档；跨两档、方向冲突、信息不足或证据不足时维持原档并转人工复核。
 - 不得自动从难度2档降入难度1档；即使认为更简单，也只能维持2档并转人工复核。
 - 你只提供复核证据和 reviewed_original_predicted_accuracy。程序会依据修正后 features 重算高难特征、乘数、正确率和档位。
 - 输入信息不足时必须降低信心并说明缺失项，不得臆测图谱或装置信息。
@@ -369,40 +367,7 @@ VERIFICATION_PROMPT_PREFIX = r"""你是高中化学难度评级的第二阶段�
 
 
 VERIFICATION_PROMPT_SUFFIX = r"""
-请严格输出：
-{
-  "difficulty_source": "用1-3句说明真正难度来源，不得只重复题型名称",
-  "feature_corrections": [
-    {
-      "field": "reaction_relation",
-      "from": "多路径反应网络",
-      "to": "显性顺序衔接",
-      "evidence": "解析中只有单一显性路线，无反应分支筛选"
-    }
-  ],
-  "missed_features": ["无"],
-  "reviewed_high_difficulty_features": ["多约束联合"],
-  "high_feature_overlap_review": [
-    {
-      "features": ["竞争反应与副反应判断", "隐含临界或过量不足"],
-      "resolution": "同一节点，应合并计数",
-      "reason": "二者均来自同一过量条件下的反应分支筛选"
-    }
-  ],
-  "has_structural_revision": true,
-  "adjacent_boundary_review": {
-    "boundaries_checked": ["85边界", "58边界"],
-    "verdict": "维持",
-    "decisive_evidence": ["作答链包含3—5个前后关联决策，不能达到85及以上", "模型与关系均属常规综合，尚不具备进入58以下的两类联合高负担结构"]
-  },
-  "reviewed_original_predicted_accuracy": null,
-  "confidence": "高",
-  "input_sufficiency_review": {
-    "status": "充分",
-    "missing_information": ["无"]
-  },
-  "analysis": "详细说明 feature、高难触发/去重、原始正确率和相邻档位边界的复核过程。"
-}
+请严格按照系统提供的 JSON Schema 规范输出完整合法 JSON，所有字段均必填，不得有多余字段。
 
 枚举限制：
 - reviewed_high_difficulty_features 每项只能从以下选择：多物质强耦合、多反应或多阶段强耦合、竞争反应与副反应判断、多约束联合、隐含临界或过量不足、复杂分类讨论、多模型或多平衡耦合、复杂定量、参数或范围、高层级信息转换、跨模块深度综合、高阶实验、合成或分离设计。

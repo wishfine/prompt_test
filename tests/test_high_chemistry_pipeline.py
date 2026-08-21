@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""高中化学两阶段难度 Pipeline 的核心行为测试（V14 解耦分数与结构档位约束）。"""
+"""高中化学两阶段难度 Pipeline 的核心行为测试（V14 精炼：连续分数与结构档位解耦 + 严格4档门槛 + 跨两档守卫）。"""
 
 from __future__ import annotations
 
@@ -196,25 +196,74 @@ class StructuralLevelConstraintTests(unittest.TestCase):
         constraint = core.derive_structural_level_constraint(features, [])
         self.assertEqual(constraint["difficulty_floor"], "难度3档")
 
-    def test_model_switch_and_multistage_flow_sets_floor_to_level_four(self) -> None:
+    def test_ordinary_process_flow_does_not_force_floor_four(self) -> None:
+        """3-5步、显性流程、模型切换、前后转化、简单因果、无复杂计算 -> 不应被强制4档。"""
         features = base_features(
-            model_relation="模型切换",
-            process_structure="多阶段显性流程",
             step_count="3-5步",
+            process_structure="多阶段显性流程",
+            model_relation="模型切换",
+            substance_relation="前后转化依赖",
+            reasoning_chain="简单因果",
+            calculation_model="常规化学计量",
+        )
+        high = core.detect_high_difficulty_features(features)
+        constraint = core.derive_structural_level_constraint(features, high.names)
+        self.assertEqual(constraint["difficulty_floor"], "难度3档")
+        # 验证 70 分（3档）在该结构下不会被硬推到 4 档，而是保持 3 档
+        res = core.enrich_stage1_rating({"features": features, "reason": "测试", "predicted_accuracy": 70.0})
+        self.assertEqual(res["difficulty_level_step1"], "难度3档")
+
+    def test_strong_multistage_flow_path_a_sets_floor_to_level_four(self) -> None:
+        """路径 A: 6-8步+模型切换+多阶段强依赖 -> floor=4。"""
+        features = base_features(
+            step_count="6-8步",
+            process_structure="多阶段强依赖",
+            model_relation="模型切换",
             substance_relation="前后转化依赖",
         )
-        constraint = core.derive_structural_level_constraint(features, [])
+        high = core.detect_high_difficulty_features(features)
+        constraint = core.derive_structural_level_constraint(features, high.names)
         self.assertEqual(constraint["difficulty_floor"], "难度4档")
 
-    def test_complex_quantitative_sets_floor_to_level_four(self) -> None:
+    def test_coupled_system_with_extra_burden_path_b_sets_floor_to_level_four(self) -> None:
+        """路径 B: 模型切换+体系依赖+多源信息联合转换 -> floor=4。"""
         features = base_features(
-            calculation_model="平衡常数或Ka/Kb/Ksp",
-            equation_structure="2-3个方程联立",
-            calculation_complexity="多步计算",
             step_count="3-5步",
+            model_relation="模型切换",
+            substance_relation="前后转化依赖",
+            information_conversion="多源信息联合转换",
         )
-        constraint = core.derive_structural_level_constraint(features, [])
+        high = core.detect_high_difficulty_features(features)
+        constraint = core.derive_structural_level_constraint(features, high.names)
         self.assertEqual(constraint["difficulty_floor"], "难度4档")
+
+    def test_complex_quantitative_floor_four_strictly_tracks_high_names(self) -> None:
+        # Case 1: 常规计算无高难 -> floor 3
+        regular_calc = base_features(
+            step_count="3-5步",
+            calculation_model="平衡常数或Ka/Kb/Ksp",
+            calculation_complexity="多步计算",
+            parameter_operation="无参数",
+            substance_relation="同一反应体系",
+        )
+        high1 = core.detect_high_difficulty_features(regular_calc)
+        self.assertNotIn("复杂定量、参数或范围", high1.names)
+        c1 = core.derive_structural_level_constraint(regular_calc, high1.names)
+        self.assertEqual(c1["difficulty_floor"], "难度3档")
+
+        # Case 2: 严格命中高难复杂定量 -> floor 4
+        strict_complex = base_features(
+            step_count="3-5步",
+            calculation_model="平衡常数或Ka/Kb/Ksp",
+            calculation_complexity="多方程联立",
+            equation_structure="2-3个方程联立",
+            parameter_operation="双参数",
+            substance_relation="同一反应体系",
+        )
+        high2 = core.detect_high_difficulty_features(strict_complex)
+        self.assertIn("复杂定量、参数或范围", high2.names)
+        c2 = core.derive_structural_level_constraint(strict_complex, high2.names)
+        self.assertEqual(c2["difficulty_floor"], "难度4档")
 
     def test_regular_comprehensive_sets_ceiling_to_level_three(self) -> None:
         features = base_features(
@@ -290,6 +339,25 @@ class StructuralLevelConstraintTests(unittest.TestCase):
         self.assertEqual(res57["difficulty_level_from_score"], "难度4档")
         self.assertEqual(res57["difficulty_level_step1"], "难度3档")
         self.assertTrue(res57["structural_constraint_applied"])
+
+    def test_two_level_structural_disagreement_guard_moves_at_most_one_level(self) -> None:
+        """若 score_level 为 2 档，但结构 floor 为 4 档，Stage1 最多移动到 3 档，并标记 severe disagreement。"""
+        features = base_features(
+            step_count="6-8步",
+            process_structure="多阶段强依赖",
+            model_relation="模型切换",
+            substance_relation="前后转化依赖",
+        )
+        output = core.enrich_stage1_rating({
+            "features": features,
+            "reason": "测试",
+            "predicted_accuracy": 86.0,  # score level: 难度2档
+        })
+        self.assertEqual(output["difficulty_level_from_score"], "难度2档")
+        self.assertEqual(output["structural_level_constraint"]["difficulty_floor"], "难度4档")
+        self.assertEqual(output["difficulty_level_step1"], "难度3档")  # 移动一档到3档，而不是直跳4档
+        self.assertTrue(output["structural_severe_disagreement"])
+        self.assertTrue(output["needs_manual_review"])
 
     def test_stage2_without_feature_corrections_maintains_stage1_level_even_with_subjective_score_change(self) -> None:
         features = base_features(step_count="3-5步")

@@ -167,13 +167,13 @@ class HighChemistryAssetTests(unittest.TestCase):
         ):
             self.assertIn(required, stage1)
 
-    def test_stage2_requires_decisive_evidence_for_representation_boundary_channel(self) -> None:
+    def test_stage2_requires_structural_level_constraint_and_feature_evidence(self) -> None:
         namespace = {}
         source = PROMPT.read_text(encoding="utf-8")
         exec(compile(source, str(PROMPT), "exec"), namespace)
         stage2 = namespace["VERIFICATION_PROMPT_PREFIX"]
-        self.assertIn("一次常规表征转换不能单独触发", stage2)
-        self.assertIn("同一反应体系中的多个反应节点", stage2)
+        self.assertIn("重新派生 structural level constraint", stage2)
+        self.assertIn("连续正确率是否跨越数值边界不是自动改档的必要条件", stage2)
 
     def test_stage1_defines_structural_clusters_without_postprocess_disclosure(self) -> None:
         namespace = {}
@@ -223,15 +223,11 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertIn("不得写入 feature_corrections", stage2)
         for required in (
             "程序接受的非派生 feature 修正",
-            "程序确认的58边界结构候选",
+            "重新派生 structural level constraint",
             "confidence=高",
-            "复核后正确率确实跨越相邻边界",
-            "verdict 与程序计算方向一致",
+            "adjacent_boundary_review.verdict 与该结构方向一致",
             "最多调整一档",
-            "58—62",
-            "多层因果+高层信息转换",
-            "58—68",
-            "多层因果+一次常规表征转换",
+            "连续正确率是否跨越数值边界不是自动改档的必要条件",
             "不得自动从难度2档降入难度1档",
             "先命中特征组合，再按高难特征数量选择乘数",
             "普通4档不得仅因乘数跌入5档",
