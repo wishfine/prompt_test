@@ -184,6 +184,27 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertIn("多阶段流程", stage1)
         self.assertNotIn("结构簇通道", stage1)
 
+    def test_stage1_has_unidirectional_freeze_flow_and_stage2_has_no_numeric_score_anchor(self) -> None:
+        namespace = {}
+        source = PROMPT.read_text(encoding="utf-8")
+        exec(compile(source, str(PROMPT), "exec"), namespace)
+        stage1 = namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
+        stage2_suffix = namespace["VERIFICATION_PROMPT_SUFFIX"]
+        for required in (
+            "最长连续依赖链",
+            "最短的充分常规路径",
+            "冻结任务结构",
+            "冻结 features",
+            "不得因后续估分修改",
+        ):
+            self.assertIn(required, stage1)
+        self.assertNotIn('"reviewed_original_predicted_accuracy": 72.0', stage2_suffix)
+
+    def test_runner_requests_strict_stage1_json_schema(self) -> None:
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("build_stage1_output_schema", source)
+        self.assertIn('"text": {"format": build_stage1_output_schema()}', source)
+
     def test_stage1_distinguishes_representation_checks_from_single_rule_tasks(self) -> None:
         namespace = {}
         source = PROMPT.read_text(encoding="utf-8")
