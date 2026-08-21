@@ -200,6 +200,29 @@ def review_diagnostics(
             direction = verification.get("review_action")
         if isinstance(direction, str) and direction:
             reviewed_direction_distribution[direction] += 1
+
+    stage2_raw_count = sum(
+        v.get("verification", {}).get("stage2_correction_raw_count", 0)
+        for v in predictions.values()
+        if isinstance(v.get("verification"), dict)
+    )
+    stage2_accepted_count = sum(
+        v.get("verification", {}).get("stage2_correction_accepted_count", 0)
+        for v in predictions.values()
+        if isinstance(v.get("verification"), dict)
+    )
+    stage2_rejected_count = sum(
+        v.get("verification", {}).get("stage2_correction_rejected_count", 0)
+        for v in predictions.values()
+        if isinstance(v.get("verification"), dict)
+    )
+    stage2_rejection_reasons: Counter[str] = Counter()
+    for v in predictions.values():
+        if isinstance(v.get("verification"), dict):
+            stage2_rejection_reasons.update(
+                v.get("verification", {}).get("stage2_correction_rejected_by_reason", {})
+            )
+
     return {
         "records_with_verification": records_with_verification,
         "structural_revision_count": structural_revision_count,
@@ -211,6 +234,15 @@ def review_diagnostics(
         "supported_feature_correction_count": (
             supported_feature_correction_count
         ),
+        "stage2_correction_raw_count": stage2_raw_count,
+        "stage2_correction_accepted_count": stage2_accepted_count,
+        "stage2_correction_rejected_count": stage2_rejected_count,
+        "stage2_correction_accept_rate": (
+            round(stage2_accepted_count / stage2_raw_count, 4)
+            if stage2_raw_count > 0
+            else 1.0
+        ),
+        "stage2_rejection_reasons": dict(stage2_rejection_reasons),
         "high_feature_set_changed_count": high_feature_set_changed_count,
         "final_differs_from_step1_count": final_differs_from_step1_count,
         "auto_adjustment_eligible_count": auto_adjustment_eligible_count,

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import re
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
@@ -181,15 +182,113 @@ def build_stage1_output_schema() -> dict[str, Any]:
     }
 
 
+STAGE2_CORRECTABLE_FEATURE_FIELDS = (
+    "knowledge_L2",
+    "substance_count",
+    "substance_relation",
+    "reaction_count",
+    "reaction_relation",
+    "competing_reaction",
+    "process_structure",
+    "primary_problem_structure",
+    "step_count",
+    "required_task_breadth",
+    "subquestion_dependency",
+    "shared_model_across_subquestions",
+    "model_explicitness",
+    "model_relation",
+    "reasoning_chain",
+    "representation_conversion",
+    "evidence_relation",
+    "hidden_conditions",
+    "critical_condition",
+    "classification_discussion",
+    "constraint_structure",
+    "chemistry_methods",
+    "calculation_model",
+    "equation_structure",
+    "calculation_complexity",
+    "parameter_operation",
+    "information_carrier",
+    "information_conversion",
+    "experiment_requirement",
+    "route_design_requirement",
+    "context_type",
+    "context_load",
+    "error_risk",
+)
+
+
 def build_stage2_output_schema() -> dict[str, Any]:
-    """约束第二阶段固定枚举，减少复核输出的格式和字段漂移。"""
-    scalar_or_string_array = {
-        "anyOf": [
-            {"type": "string"},
-            {"type": "boolean"},
-            {"type": "array", "items": {"type": "string"}},
-        ]
-    }
+    """约束第二阶段固定枚举与合法可修正字段，杜绝格式与派生字段漂移。"""
+    correction_variants: list[dict[str, Any]] = []
+
+    for field, options in sorted(FEATURE_OPTIONS.items()):
+        if field in STAGE2_CORRECTABLE_FEATURE_FIELDS:
+            sorted_opts = sorted(options)
+            correction_variants.append({
+                "type": "object",
+                "properties": {
+                    "field": {"type": "string", "enum": [field]},
+                    "from": {"type": "string", "enum": sorted_opts},
+                    "to": {"type": "string", "enum": sorted_opts},
+                    "evidence": {"type": "string"},
+                },
+                "required": ["field", "from", "to", "evidence"],
+                "additionalProperties": False,
+            })
+
+    # shared_model_across_subquestions (boolean)
+    correction_variants.append({
+        "type": "object",
+        "properties": {
+            "field": {"type": "string", "enum": ["shared_model_across_subquestions"]},
+            "from": {"type": "boolean"},
+            "to": {"type": "boolean"},
+            "evidence": {"type": "string"},
+        },
+        "required": ["field", "from", "to", "evidence"],
+        "additionalProperties": False,
+    })
+
+    # knowledge_L2 (array of enums)
+    correction_variants.append({
+        "type": "object",
+        "properties": {
+            "field": {"type": "string", "enum": ["knowledge_L2"]},
+            "from": {
+                "type": "array",
+                "items": {"type": "string", "enum": sorted(KNOWLEDGE_L2)},
+            },
+            "to": {
+                "type": "array",
+                "items": {"type": "string", "enum": sorted(KNOWLEDGE_L2)},
+            },
+            "evidence": {"type": "string"},
+        },
+        "required": ["field", "from", "to", "evidence"],
+        "additionalProperties": False,
+    })
+
+    # chemistry_methods (array of enums)
+    correction_variants.append({
+        "type": "object",
+        "properties": {
+            "field": {"type": "string", "enum": ["chemistry_methods"]},
+            "from": {
+                "type": "array",
+                "items": {"type": "string", "enum": sorted(CHEMISTRY_METHODS)},
+            },
+            "to": {
+                "type": "array",
+                "items": {"type": "string", "enum": sorted(CHEMISTRY_METHODS)},
+            },
+            "evidence": {"type": "string"},
+        },
+        "required": ["field", "from", "to", "evidence"],
+        "additionalProperties": False,
+    })
+
     return {
         "type": "object",
         "properties": {
@@ -197,15 +296,7 @@ def build_stage2_output_schema() -> dict[str, Any]:
             "feature_corrections": {
                 "type": "array",
                 "items": {
-                    "type": "object",
-                    "properties": {
-                        "field": {"type": "string"},
-                        "from": scalar_or_string_array,
-                        "to": scalar_or_string_array,
-                        "evidence": {"type": "string"},
-                    },
-                    "required": ["field", "from", "to", "evidence"],
-                    "additionalProperties": False,
+                    "anyOf": correction_variants,
                 },
             },
             "missed_features": {"type": "array", "items": {"type": "string"}},
@@ -257,11 +348,17 @@ def build_stage2_output_schema() -> dict[str, Any]:
             "analysis": {"type": "string"},
         },
         "required": [
-            "difficulty_source", "feature_corrections", "missed_features",
-            "reviewed_high_difficulty_features", "high_feature_overlap_review",
-            "has_structural_revision", "adjacent_boundary_review",
-            "reviewed_original_predicted_accuracy", "confidence",
-            "input_sufficiency_review", "analysis",
+            "difficulty_source",
+            "feature_corrections",
+            "missed_features",
+            "reviewed_high_difficulty_features",
+            "high_feature_overlap_review",
+            "has_structural_revision",
+            "adjacent_boundary_review",
+            "reviewed_original_predicted_accuracy",
+            "confidence",
+            "input_sufficiency_review",
+            "analysis",
         ],
         "additionalProperties": False,
     }
@@ -1203,29 +1300,42 @@ def recalculate_verification(
     corrected_features = copy.deepcopy(original_features)
     applied: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    for correction in reviewed.get("feature_corrections") or []:
+    raw_corrections = reviewed.get("feature_corrections") or []
+    rejection_categories: Counter[str] = Counter()
+    for correction in raw_corrections:
         field = correction.get("field")
         source = correction.get("from")
         target = correction.get("to")
-        if field not in REQUIRED_FEATURE_FIELDS:
-            rejected.append({**copy.deepcopy(correction), "reason": "非 feature 字段"})
-            continue
         if field in PROGRAM_DERIVED_FEATURE_FIELDS:
+            rejection_categories["derived_field"] += 1
             rejected.append({
                 **copy.deepcopy(correction),
                 "reason": "程序派生字段不得授权结构改分",
+                "rejection_category": "derived_field",
+            })
+            continue
+        if field not in STAGE2_CORRECTABLE_FEATURE_FIELDS:
+            rejection_categories["illegal_field"] += 1
+            rejected.append({
+                **copy.deepcopy(correction),
+                "reason": f"字段 {field!r} 不属于 Stage2 可修正特征字段",
+                "rejection_category": "illegal_field",
             })
             continue
         if source != corrected_features.get(field):
+            rejection_categories["from_mismatch"] += 1
             rejected.append({
                 **copy.deepcopy(correction),
                 "reason": "from 与当前已核验 feature 值不一致",
+                "rejection_category": "from_mismatch",
             })
             continue
         if target == source:
+            rejection_categories["same_from_to"] += 1
             rejected.append({
                 **copy.deepcopy(correction),
                 "reason": "to 与 from 相同，不构成结构修正",
+                "rejection_category": "same_from_to",
             })
             continue
         candidate = copy.deepcopy(corrected_features)
@@ -1233,7 +1343,12 @@ def recalculate_verification(
         try:
             validate_feature_schema(candidate)
         except ValueError as exc:
-            rejected.append({**copy.deepcopy(correction), "reason": str(exc)})
+            rejection_categories["illegal_enum"] += 1
+            rejected.append({
+                **copy.deepcopy(correction),
+                "reason": str(exc),
+                "rejection_category": "illegal_enum",
+            })
             continue
         corrected_features = candidate
         applied.append(copy.deepcopy(correction))
@@ -1358,6 +1473,15 @@ def recalculate_verification(
             "has_structural_revision": structural_revision_supported,
             "feature_corrections_applied": applied,
             "feature_corrections_rejected": rejected,
+            "stage2_correction_raw_count": len(raw_corrections),
+            "stage2_correction_accepted_count": len(applied),
+            "stage2_correction_rejected_count": len(rejected),
+            "stage2_correction_accept_rate": (
+                round(len(applied) / len(raw_corrections), 4)
+                if raw_corrections
+                else 1.0
+            ),
+            "stage2_correction_rejected_by_reason": dict(rejection_categories),
             "reviewed_features": corrected_features,
             "reviewed_high_difficulty_features_model": copy.deepcopy(
                 reviewed.get("reviewed_high_difficulty_features") or []

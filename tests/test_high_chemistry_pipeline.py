@@ -79,6 +79,25 @@ class AccuracyAndSchemaTests(unittest.TestCase):
         stage2 = core.build_stage2_output_schema()
         self.assertIn("reviewed_original_predicted_accuracy", stage2["required"])
         self.assertFalse(stage2["additionalProperties"])
+        
+        # Stage 2 correctable fields check
+        self.assertNotIn("knowledge_L1", core.STAGE2_CORRECTABLE_FEATURE_FIELDS)
+        self.assertNotIn("knowledge_count", core.STAGE2_CORRECTABLE_FEATURE_FIELDS)
+        self.assertNotIn("knowledge_scope", core.STAGE2_CORRECTABLE_FEATURE_FIELDS)
+        self.assertNotIn("knowledge_points", core.STAGE2_CORRECTABLE_FEATURE_FIELDS)
+        self.assertEqual(
+            set(core.STAGE2_CORRECTABLE_FEATURE_FIELDS),
+            set(core.REQUIRED_FEATURE_FIELDS) - core.PROGRAM_DERIVED_FEATURE_FIELDS - {"knowledge_points"},
+        )
+
+        # Stage 2 corrections anyOf variants check
+        corrections_schema = stage2["properties"]["feature_corrections"]["items"]
+        self.assertIn("anyOf", corrections_schema)
+        variant_fields = {
+            variant["properties"]["field"]["enum"][0]
+            for variant in corrections_schema["anyOf"]
+        }
+        self.assertEqual(variant_fields, set(core.STAGE2_CORRECTABLE_FEATURE_FIELDS))
 
     def test_continuous_accuracy_boundaries_are_fixed(self) -> None:
         cases = [
