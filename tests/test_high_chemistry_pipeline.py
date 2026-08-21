@@ -151,6 +151,7 @@ class StructuralLevelConstraintTests(unittest.TestCase):
         constraint = core.derive_structural_level_constraint(features, [])
         self.assertEqual(constraint["difficulty_floor"], "难度1档")
         self.assertEqual(constraint["difficulty_ceiling"], "难度1档")
+        self.assertEqual(constraint["rule_ids"], ["direct_prototype_exact_1"])
         self.assertFalse(constraint["constraint_conflict"])
 
     def test_multiple_tasks_sets_floor_to_at_least_level_two(self) -> None:
@@ -226,9 +227,9 @@ class StructuralLevelConstraintTests(unittest.TestCase):
         self.assertEqual(constraint["difficulty_floor"], "难度4档")
 
     def test_coupled_system_with_extra_burden_path_b_sets_floor_to_level_four(self) -> None:
-        """路径 B: 模型切换+体系依赖+多源信息联合转换 -> floor=4。"""
+        """路径 B: 6-8步+模型切换+体系依赖+多源信息联合转换 -> floor=4。"""
         features = base_features(
-            step_count="3-5步",
+            step_count="6-8步",
             model_relation="模型切换",
             substance_relation="前后转化依赖",
             information_conversion="多源信息联合转换",
@@ -236,6 +237,20 @@ class StructuralLevelConstraintTests(unittest.TestCase):
         high = core.detect_high_difficulty_features(features)
         constraint = core.derive_structural_level_constraint(features, high.names)
         self.assertEqual(constraint["difficulty_floor"], "难度4档")
+
+    def test_coupled_system_with_only_reaction_chain_does_not_force_floor_four(self) -> None:
+        """3-5步+模型切换+前后转化依赖+前后反应强依赖 -> 不应被强制4档，保持floor 3。"""
+        features = base_features(
+            step_count="3-5步",
+            model_relation="模型切换",
+            substance_relation="前后转化依赖",
+            reaction_relation="前后反应强依赖",
+            reaction_count="2-3个",
+            reasoning_chain="简单因果",
+        )
+        high = core.detect_high_difficulty_features(features)
+        constraint = core.derive_structural_level_constraint(features, high.names)
+        self.assertEqual(constraint["difficulty_floor"], "难度3档")
 
     def test_complex_quantitative_floor_four_strictly_tracks_high_names(self) -> None:
         # Case 1: 常规计算无高难 -> floor 3

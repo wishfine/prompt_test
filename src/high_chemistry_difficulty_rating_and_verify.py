@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
-"""高中化学独立两阶段难度评级 Pipeline。
+"""高中化学独立两阶段难度评级 Pipeline（V14：连续分数与冻结结构约束解耦）。
 
 流程：
-  1. 模型提取结构化 features，并给出乘数前原始正确率；
-  2. 程序检测高难特征，按数量应用 1.00 / 0.85 / 0.70 乘数；
-  3. 程序按连续正确率区间映射第一步五档；
-  4. 第二次模型调用复核 features、正确率、高难触发、重复计数、乘数和档位；
-  5. 程序依据“合理/偏高/偏低”最多调整一档，并标记人工复核项。
+  1. 模型提取结构化 features，并给出连续原始预测正确率；
+  2. 程序冻结 features，检测高难特征并应用乘数，得到 score_level；
+  3. 程序由冻结 features 派生 StructuralLevelConstraint (floor/ceiling)；
+  4. 程序应用结构上下限约束确定 Step 1 档位（严格限制跨档，杜绝微小分数噪声跨档）；
+  5. 第二阶段独立模型作为结构审计器，复核 features 与高难特征；
+  6. 仅在有合法 feature 修正时程序重算结构约束，最多调整一档，并标记人工复核项。
 
 支持 OpenAI-compatible Responses API、第一阶段前缀缓存、并发、重试、
 JSONL 断点续跑、题干/解析图片输入及 token 统计。不会向模型发送原始
@@ -934,6 +935,18 @@ async def process_question(
                 key: usage1[key] + usage2[key]
                 for key in ("input_tokens", "output_tokens", "total_tokens")
             }
+            unresolved_stage1_severe = (
+                stage1.get("structural_severe_disagreement") is True
+                and not (
+                    verification.get("has_structural_revision") is True
+                    and verification.get("reviewed_structural_severe_disagreement") is False
+                )
+            )
+            needs_manual_review = (
+                unresolved_stage1_severe
+                or final.needs_manual_review
+                or verification.get("review_requires_manual") is True
+            )
             result = {
                 **output_base,
                 "pipeline_version": PIPELINE_VERSION,
@@ -957,12 +970,14 @@ async def process_question(
                     f"二阶段建议改档但未满足结构证据守卫·维持"
                     f"{final.final_level}·转人工复核"
                     if verification.get("review_requires_manual") is True
-                    else final.adjustment_desc
+                    else (
+                        f"第一阶段存在两档严重结构分歧·维持"
+                        f"{final.final_level}·转人工复核"
+                        if unresolved_stage1_severe
+                        else final.adjustment_desc
+                    )
                 ),
-                "needs_manual_review": (
-                    final.needs_manual_review
-                    or verification.get("review_requires_manual") is True
-                ),
+                "needs_manual_review": needs_manual_review,
                 "api_stage1_time_seconds": round(elapsed1, 2),
                 "api_stage2_time_seconds": round(elapsed2, 2),
                 "api_stage1_usage": usage1,

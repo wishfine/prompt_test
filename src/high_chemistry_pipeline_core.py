@@ -746,10 +746,14 @@ def derive_structural_level_constraint(
         and not high_names
     )
     if direct_prototype:
-        floor = "难度1档"
-        ceiling = "难度1档"
-        rule_ids.append("direct_prototype_exact_1")
-        evidence.append("纯单知识点单步直接套用原型")
+        return {
+            "difficulty_floor": "难度1档",
+            "difficulty_ceiling": "难度1档",
+            "rule_ids": ["direct_prototype_exact_1"],
+            "evidence": ["纯单知识点单步直接套用原型"],
+            "confidence": "高",
+            "constraint_conflict": False,
+        }
 
     # floor 2: 明确不是最基础 1 档
     if features.get("required_task_breadth") in {
@@ -855,17 +859,21 @@ def derive_structural_level_constraint(
         and features.get("process_structure") in {"多阶段强依赖", "循环或回流流程"}
     )
 
-    # 3. 路径 B: 模型迁移 + 体系耦合 + 另一个独立高负担信号
+    # 3. 路径 B: 6-8步及以上 + 模型迁移 + 体系耦合 + 另一个独立高负担信号
     has_additional_high_burden = (
         bool(set(high_names) - {"多模型或多平衡耦合"})
         or features.get("information_conversion") in {"多源信息联合转换", "流程或图谱反推"}
         or features.get("constraint_structure") == "多约束联合筛选"
-        or features.get("reaction_relation") == "前后反应强依赖"
         or features.get("experiment_requirement") in {"控制变量或异常分析", "方案设计或误差反演"}
-        or features.get("route_design_requirement") in {"合成路线设计", "分离提纯方案设计", "路线优化与可行性验证"}
+        or features.get("route_design_requirement") in {
+            "合成路线设计",
+            "分离提纯方案设计",
+            "路线优化与可行性验证",
+        }
     )
     model_migration_system_coupling_strong = (
-        features.get("model_relation") in {"模型切换", "多模型耦合"}
+        features.get("step_count") in {"6-8步", "9-12步", "12步以上"}
+        and features.get("model_relation") in {"模型切换", "多模型耦合"}
         and features.get("substance_relation") in {"前后转化依赖", "组成—性质—反应网络"}
         and has_additional_high_burden
     )
@@ -882,7 +890,7 @@ def derive_structural_level_constraint(
         if model_migration_multistage_strong:
             evidence.append("长步数(6-8步+)+模型迁移+多阶段强依赖")
         if model_migration_system_coupling_strong:
-            evidence.append("模型迁移+体系耦合+高层信息/约束/实验负担")
+            evidence.append("长步数(6-8步+)+模型迁移+体系耦合+高层信息/约束/实验负担")
 
     # ceiling 3: 普通常规综合
     regular_comprehensive = (
@@ -1330,6 +1338,7 @@ def recalculate_verification(
                 model_reviewed_accuracy
             ),
             "reviewed_structural_level_constraint": reviewed_constraint,
+            "reviewed_structural_severe_disagreement": severe_disagreement,
             "reviewed_original_predicted_accuracy": reviewed_accuracy,
             "reviewed_predicted_accuracy": adjusted_accuracy,
             "reviewed_difficulty_level": reviewed_level,
