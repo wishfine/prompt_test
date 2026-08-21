@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""高中化学两阶段难度 Pipeline 的纯函数核心（V14：连续分数与结构档位解耦）。
+"""高中化学两阶段难度 Pipeline 的纯函数核心（V21：连续分数与结构修正解耦）。
 
 本模块不依赖网络请求，集中处理：
 1. 化学 feature schema 校验与派生字段确定性填充；
@@ -801,7 +801,7 @@ def derive_structural_level_constraint(
     parallel_basic_bundle = (
         features.get("required_task_breadth") in {"2-3个异质必要任务", "4个及以上异质必要任务"}
         and features.get("substance_relation") in {"单一物质", "相互独立"}
-        and features.get("reaction_relation") == "无反应链"
+        and features.get("reaction_relation") in {"无反应链", "并列独立"}
         and features.get("process_structure") == "单阶段"
         and features.get("subquestion_dependency") != "后问依赖前问"
         and not features.get("shared_model_across_subquestions", False)
@@ -822,7 +822,7 @@ def derive_structural_level_constraint(
     if parallel_basic_bundle:
         ceiling = min_level(ceiling, "难度2档")
         rule_ids.append("parallel_basic_bundle_ceiling_2")
-        evidence.append("并列基础多任务(单阶段/无反应链/模型显性/直接套用)")
+        evidence.append("并列基础多任务(单阶段/无反应链或并列独立/模型显性/直接套用)")
 
     # floor 3: 真实关联依赖链 (standard_chain, 收紧真实依赖)
     has_real_dependency = (
@@ -880,7 +880,7 @@ def derive_structural_level_constraint(
     )
 
     # 4. 短链高密度综合路径 C: 3-5步及以上 + 至少2个独立强负担轴共同作用
-    axis_model_ident = features.get("model_explicitness") in {"半隐含模型", "隐含模型"}
+    axis_model_ident = features.get("model_explicitness") in {"半隐含模型", "隐含模型", "需要自主建模"}
     axis_reasoning = features.get("reasoning_chain") in {"多层因果", "逆向推理或临界分析"}
     axis_model_relation = features.get("model_relation") in {"模型切换", "多模型耦合"}
     axis_quant = (
@@ -1252,7 +1252,7 @@ def recalculate_verification(
         corrected_features, high.names
     )
 
-    # V14 规则：无合法结构修正时，reviewed_accuracy 必须严格保持第一阶段原始值
+    # 连续分数与结构修正解耦规则：无合法结构修正时，reviewed_accuracy 必须严格保持第一阶段原始值
     reviewed_accuracy = (
         model_reviewed_accuracy
         if structural_revision_supported
