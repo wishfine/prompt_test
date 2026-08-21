@@ -312,6 +312,119 @@ class ChemistryHighFeatureTests(unittest.TestCase):
 
 @unittest.skipIf(core is None, "高中化学核心模块尚未实现")
 class PipelineAndInputTests(unittest.TestCase):
+    def test_accuracy_calibration_bands_separate_direct_task_and_standard_chain(self) -> None:
+        direct = core.derive_accuracy_calibration_band(
+            base_features(
+                required_task_breadth="单一规则任务",
+                step_count="1-2步",
+                model_explicitness="模型完全显性",
+                reasoning_chain="直接套用",
+            ),
+            [],
+        )
+        self.assertEqual((direct["minimum"], direct["maximum"]), (88.0, 100.0))
+
+        basic = core.derive_accuracy_calibration_band(
+            base_features(
+                required_task_breadth="2-3个异质必要任务",
+                step_count="1-2步",
+                model_explicitness="模型完全显性",
+                reasoning_chain="简单因果",
+            ),
+            [],
+        )
+        self.assertEqual((basic["minimum"], basic["maximum"]), (85.0, 87.0))
+
+        standard = core.derive_accuracy_calibration_band(
+            base_features(
+                required_task_breadth="2-3个异质必要任务",
+                substance_relation="同一反应体系",
+                reaction_count="2-3个",
+                step_count="3-5步",
+                reasoning_chain="简单因果",
+                calculation_model="常规化学计量",
+                calculation_complexity="简单计算",
+            ),
+            [],
+        )
+        self.assertEqual((standard["minimum"], standard["maximum"]), (65.0, 74.0))
+
+    def test_stage1_score_is_projected_only_when_outside_calibration_band(self) -> None:
+        output = core.enrich_stage1_rating(
+            {
+                "features": base_features(
+                    required_task_breadth="2-3个异质必要任务",
+                    step_count="1-2步",
+                    model_explicitness="模型完全显性",
+                    reasoning_chain="简单因果",
+                ),
+                "reason": "两个异质基础任务",
+                "predicted_accuracy": 92,
+            }
+        )
+        self.assertEqual(output["model_predicted_accuracy_raw"], 92.0)
+        self.assertEqual(output["original_predicted_accuracy"], 87.0)
+        self.assertEqual(
+            output["score_calibration_actions"][0]["rule"],
+            "calibration_band_ceiling",
+        )
+
+    def test_stage2_accepts_only_band_backed_score_calibration(self) -> None:
+        features = base_features(
+            required_task_breadth="2-3个异质必要任务",
+            step_count="1-2步",
+            model_explicitness="模型完全显性",
+            reasoning_chain="简单因果",
+        )
+        reviewed = core.recalculate_verification(
+            current_level="难度2档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=92.0,
+            original_features=features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [],
+                "reviewed_high_difficulty_features": [],
+                "reviewed_original_predicted_accuracy": 86.0,
+                "has_structural_revision": False,
+                "adjacent_boundary_review": {"verdict": "维持"},
+                "confidence": "高",
+                "input_sufficiency_review": {"status": "充分"},
+                "high_feature_overlap_review": [],
+            },
+        )
+        self.assertTrue(reviewed["score_calibration_supported"])
+        self.assertEqual(reviewed["reviewed_original_predicted_accuracy"], 86.0)
+
+    def test_stage2_rejects_score_change_already_inside_calibration_band(self) -> None:
+        features = base_features(
+            required_task_breadth="2-3个异质必要任务",
+            step_count="1-2步",
+            model_explicitness="模型完全显性",
+            reasoning_chain="简单因果",
+        )
+        reviewed = core.recalculate_verification(
+            current_level="难度2档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=86.0,
+            original_features=features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [],
+                "reviewed_high_difficulty_features": [],
+                "reviewed_original_predicted_accuracy": 85.0,
+                "has_structural_revision": False,
+                "adjacent_boundary_review": {"verdict": "维持"},
+                "confidence": "高",
+                "input_sufficiency_review": {"status": "充分"},
+                "high_feature_overlap_review": [],
+            },
+        )
+        self.assertFalse(reviewed["score_calibration_supported"])
+        self.assertEqual(reviewed["reviewed_original_predicted_accuracy"], 86.0)
+
     def test_direct_prototype_score_is_normalized_before_level_mapping(self) -> None:
         output = core.enrich_stage1_rating(
             {
@@ -465,8 +578,8 @@ class PipelineAndInputTests(unittest.TestCase):
         )
         self.assertEqual(output["difficulty_level_step1"], "难度2档")
         self.assertEqual(
-            output["stage1_structural_guard_actions"][0]["rule"],
-            "multiple_required_tasks_level_one_floor",
+            output["score_calibration_actions"][0]["rule"],
+            "calibration_band_ceiling",
         )
 
     def test_standard_stoichiometry_cannot_stay_in_level_one(self) -> None:

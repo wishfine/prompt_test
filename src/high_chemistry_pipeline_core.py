@@ -901,15 +901,13 @@ def _apply_stage1_structural_level_guards(
     return final_level, actions
 
 
-def _normalize_raw_accuracy_for_direct_prototype(
-    *,
-    model_accuracy: float,
+def derive_accuracy_calibration_band(
     features: dict[str, Any],
-) -> tuple[float, list[dict[str, Any]]]:
-    """仅修复事实层完全一致时的异常低分，保留模型原始分供审计。"""
+    high_names: list[str],
+) -> dict[str, Any]:
+    """以冻结结构导出原始正确率校准带，而不是按题型自由估分。"""
     direct_prototype = (
-        80 <= model_accuracy <= 84
-        and features.get("primary_problem_structure") == "概念辨析"
+        features.get("primary_problem_structure") == "概念辨析"
         and features.get("knowledge_count") == "1个"
         and features.get("knowledge_scope") == "单知识点"
         and features.get("substance_count") == "1种"
@@ -926,14 +924,68 @@ def _normalize_raw_accuracy_for_direct_prototype(
         and features.get("experiment_requirement") == "无"
         and features.get("calculation_model") == "无定量计算"
     )
-    if not direct_prototype:
-        return model_accuracy, []
-    return 88.0, [{
-        "rule": "direct_prototype_score_floor",
-        "from": model_accuracy,
-        "to": 88.0,
-        "evidence": ["单一规则任务", "最长链1-2步", "完全显性", "无计算和信息转换"],
-    }]
+    if direct_prototype:
+        return {"minimum": 88.0, "maximum": 100.0, "band": "direct_prototype"}
+
+    basic_multi_task = (
+        features.get("required_task_breadth") == "2-3个异质必要任务"
+        and features.get("step_count") == "1-2步"
+        and features.get("model_explicitness") == "模型完全显性"
+        and features.get("reasoning_chain") in {"直接套用", "简单因果"}
+        and not high_names
+    )
+    if basic_multi_task:
+        return {"minimum": 85.0, "maximum": 87.0, "band": "basic_multi_task"}
+
+    standard_chain = (
+        features.get("required_task_breadth")
+        in {"2-3个异质必要任务", "多问递进任务链"}
+        and features.get("step_count") == "3-5步"
+        and features.get("substance_relation") == "同一反应体系"
+        and features.get("reaction_count") in {"2-3个", "4-6个", "7个及以上"}
+        and features.get("reasoning_chain") in {"简单因果", "多层因果"}
+        and (
+            features.get("calculation_model") == "常规化学计量"
+            or features.get("information_conversion") != "无信息转换"
+            or features.get("experiment_requirement") != "无"
+        )
+        and not high_names
+    )
+    if standard_chain:
+        return {"minimum": 65.0, "maximum": 74.0, "band": "standard_chain"}
+
+    return {"minimum": 0.0, "maximum": 100.0, "band": "unconstrained"}
+
+
+def _normalize_raw_accuracy_for_calibration_band(
+    *,
+    model_accuracy: float,
+    features: dict[str, Any],
+    high_names: list[str],
+) -> tuple[float, dict[str, Any], list[dict[str, Any]]]:
+    """仅将落在程序化校准带外的模型分投影到最近边界。"""
+    band = derive_accuracy_calibration_band(features, high_names)
+    minimum, maximum = band["minimum"], band["maximum"]
+    if model_accuracy < minimum:
+        rule = (
+            "direct_prototype_score_floor"
+            if band["band"] == "direct_prototype"
+            else "calibration_band_floor"
+        )
+        return minimum, band, [{
+            "rule": rule,
+            "from": model_accuracy,
+            "to": minimum,
+            "band": band["band"],
+        }]
+    if model_accuracy > maximum:
+        return maximum, band, [{
+            "rule": "calibration_band_ceiling",
+            "from": model_accuracy,
+            "to": maximum,
+            "band": band["band"],
+        }]
+    return model_accuracy, band, []
 
 
 def enrich_stage1_rating(
@@ -981,13 +1033,14 @@ def enrich_stage1_rating(
         features["knowledge_scope"] = "单知识点"
 
     model_raw_accuracy = raw_accuracy
-    raw_accuracy, score_normalization_actions = (
-        _normalize_raw_accuracy_for_direct_prototype(
+    high = detect_high_difficulty_features(features)
+    raw_accuracy, calibration_band, score_normalization_actions = (
+        _normalize_raw_accuracy_for_calibration_band(
             model_accuracy=model_raw_accuracy,
             features=features,
+            high_names=high.names,
         )
     )
-    high = detect_high_difficulty_features(features)
     active = detect_active_features(features)
     high_count = len(high.names)
     enabled = (
@@ -1005,7 +1058,9 @@ def enrich_stage1_rating(
     multiplier = multiplier_policy["multiplier_applied"]
     adjusted = multiplier_policy["adjusted_accuracy"]
     rating["model_predicted_accuracy_raw"] = model_raw_accuracy
+    rating["accuracy_calibration_band"] = calibration_band
     rating["score_normalization_actions"] = score_normalization_actions
+    rating["score_calibration_actions"] = copy.deepcopy(score_normalization_actions)
     rating["original_predicted_accuracy"] = raw_accuracy
     rating["active_features"] = active
     rating["active_feature_count"] = len(active)
@@ -1142,9 +1197,24 @@ def recalculate_verification(
     model_reviewed_accuracy = min(100.0, max(0.0, model_reviewed_accuracy))
     high = detect_high_difficulty_features(corrected_features)
     structural_revision_supported = bool(applied)
+    calibration_band = derive_accuracy_calibration_band(
+        corrected_features, high.names
+    )
+    score_outside_band = (
+        float(original_accuracy) < calibration_band["minimum"]
+        or float(original_accuracy) > calibration_band["maximum"]
+    )
+    score_calibration_supported = (
+        not structural_revision_supported
+        and reviewed.get("confidence") == "高"
+        and score_outside_band
+        and calibration_band["minimum"]
+        <= model_reviewed_accuracy
+        <= calibration_band["maximum"]
+    )
     reviewed_accuracy = (
         model_reviewed_accuracy
-        if structural_revision_supported
+        if structural_revision_supported or score_calibration_supported
         else float(original_accuracy)
     )
     reviewed_count = len(high.names)
@@ -1279,6 +1349,8 @@ def recalculate_verification(
             "reviewed_original_predicted_accuracy_model_raw": (
                 model_reviewed_accuracy
             ),
+            "score_calibration_band": calibration_band,
+            "score_calibration_supported": score_calibration_supported,
             "reviewed_original_predicted_accuracy": reviewed_accuracy,
             "reviewed_predicted_accuracy": adjusted_accuracy,
             "reviewed_difficulty_level": reviewed_level,
