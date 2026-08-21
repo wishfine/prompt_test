@@ -78,9 +78,9 @@ DEFAULT_PROMPT = ROOT / "prompts" / "高中化学难度打标提示词.txt"
 DEFAULT_OUTPUT = ROOT / "outputs" / "model_runs" / "high_chemistry_two_stage.jsonl"
 DEFAULT_ERRORS = ROOT / "outputs" / "model_runs" / "high_chemistry_two_stage_errors.jsonl"
 DEFAULT_CACHE = ROOT / "outputs" / "cache" / "high_chemistry_stage1_prefix_cache.json"
-PIPELINE_VERSION = "high_chemistry_two_stage_v21_1_1"
-PROMPT_VERSION = "high_chemistry_prompt_v21_1_1"
-STRUCTURAL_CONSTRAINT_VERSION = "structural_constraint_v21"
+PIPELINE_VERSION = "high_chemistry_two_stage_v22_candidate_1"
+PROMPT_VERSION = "high_chemistry_prompt_v22_candidate_1"
+STRUCTURAL_CONSTRAINT_VERSION = "structural_constraint_v22_candidate_1"
 PROMPT_SHA256 = ""
 CORE_SHA256 = hashlib.sha256(
     (ROOT / "src" / "high_chemistry_pipeline_core.py").read_bytes()
@@ -645,6 +645,15 @@ def build_stage2_fallback_result(
     reviewed_high_count = int(
         stage1.get("high_difficulty_feature_count") or 0
     )
+    usage2 = (
+        stage2_error.usage
+        if isinstance(stage2_error, Stage2CallError) and stage2_error.usage
+        else {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        }
+    )
     res: dict[str, Any] = {
         **copy.deepcopy(output_base),
         "pipeline_version": PIPELINE_VERSION,
@@ -677,12 +686,11 @@ def build_stage2_fallback_result(
         ),
         "api_stage2_time_seconds": None,
         "api_stage1_usage": copy.deepcopy(usage),
-        "api_stage2_usage": {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "total_tokens": 0,
+        "api_stage2_usage": copy.deepcopy(usage2),
+        "api_total_usage": {
+            k: int(usage.get(k, 0)) + int(usage2.get(k, 0))
+            for k in ("input_tokens", "output_tokens", "total_tokens")
         },
-        "api_total_usage": copy.deepcopy(usage),
     }
     if isinstance(stage2_error, Stage2CallError):
         res["stage2_http_status"] = stage2_error.http_status
@@ -857,6 +865,22 @@ async def call_stage2(
                 current_usage = _usage(body)
                 for key in total_usage:
                     total_usage[key] += current_usage[key]
+                incomplete_details = copy.deepcopy(body.get("incomplete_details"))
+                response_status = body.get("status")
+                if response_status == "incomplete":
+                    last_call_error = Stage2CallError(
+                        f"第二阶段响应 incomplete: {incomplete_details}",
+                        http_status=200,
+                        usage=copy.deepcopy(total_usage),
+                        incomplete_details=incomplete_details,
+                        validation_error="response_status_incomplete",
+                    )
+                    last_error = str(last_call_error)
+                    if attempt < retries - 1:
+                        await asyncio.sleep(2**attempt + random.random())
+                        continue
+                    raise last_call_error
+
                 output_text = _extract_output_text(body)
                 output_len = len(output_text)
                 output_tail = output_text[-300:] if output_text else ""
@@ -869,6 +893,7 @@ async def call_stage2(
                         output_text_length=output_len,
                         output_text_tail=output_tail,
                         usage=copy.deepcopy(total_usage),
+                        incomplete_details=incomplete_details,
                         validation_error=str(parse_exc),
                     )
                     last_error = str(last_call_error)
@@ -888,6 +913,7 @@ async def call_stage2(
                         output_text_tail=output_tail,
                         parsed_keys=parsed_keys,
                         usage=copy.deepcopy(total_usage),
+                        incomplete_details=incomplete_details,
                         validation_error=str(val_exc),
                     )
                     last_error = str(last_call_error)

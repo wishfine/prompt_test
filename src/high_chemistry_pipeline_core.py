@@ -854,7 +854,7 @@ def derive_structural_level_constraint(
         rule_ids.append("basic_explicit_application_ceiling_2")
         evidence.append("1-2步显性基础应用，无高难无强依赖")
 
-    # ceiling 2: 严格并列基础多任务 (parallel_basic_bundle_strict)
+    # ceiling 2: 严格并列基础多任务 (parallel_basic_bundle_strict，不含 error_risk 伪硬门槛)
     parallel_basic_bundle_strict = (
         features.get("required_task_breadth") in {"2-3个异质必要任务", "4个及以上异质必要任务"}
         and features.get("substance_relation") in {"单一物质", "相互独立"}
@@ -878,7 +878,6 @@ def derive_structural_level_constraint(
         and features.get("classification_discussion") == "无"
         and features.get("representation_conversion") in {"无转换", "一次常规转换"}
         and features.get("context_load") in {"纯包装", "简单规律映射"}
-        and features.get("error_risk") in {"无明显易错点", "轻微易错点"}
         and not high_names
     )
     if parallel_basic_bundle_strict:
@@ -886,46 +885,68 @@ def derive_structural_level_constraint(
         rule_ids.append("parallel_basic_bundle_strict_ceiling_2")
         evidence.append("严格并列基础多任务(单阶段/无反应链或并列独立/模型显性/直接套用/无隐含与干扰)")
 
-    # 中等认知负担轴 (Moderate Burden Axes for Level 3 Protection)
-    moderate_model_ident = (features.get("model_explicitness") == "半隐含模型")
-    moderate_representation = (
-        features.get("representation_conversion") in {"多次同类转换", "多表征连续转换", "逆向表征转换"}
+    # 5 大独立中等认知负担组 (Grouped Moderate Burdens for Level 3 Protection，杜绝单节点重复计数)
+    moderate_model_condition = (
+        features.get("model_explicitness") == "半隐含模型"
+        or features.get("hidden_conditions") == "单个隐含条件"
     )
-    moderate_information = (features.get("information_conversion") == "单次关系转换")
-    moderate_evidence = (features.get("evidence_relation") == "证据链相互支持")
-    moderate_hidden = (features.get("hidden_conditions") == "单个隐含条件")
-    moderate_classification = (features.get("classification_discussion") == "2类讨论")
-    moderate_quant = (
-        features.get("calculation_model") in {"多步化学计量", "浓度或气体综合", "平衡常数或Ka/Kb/Ksp"}
+    moderate_information_group = (
+        features.get("representation_conversion") in {
+            "多次同类转换",
+            "多表征连续转换",
+            "逆向表征转换",
+        }
+        or features.get("information_conversion") == "单次关系转换"
+        or features.get("evidence_relation") == "证据链相互支持"
+        or features.get("context_load") == "需要信息转换"
+    )
+    moderate_classification = (
+        features.get("classification_discussion") == "2类讨论"
+    )
+    moderate_quantitative = (
+        features.get("calculation_model") in {
+            "多步化学计量",
+            "浓度或气体综合",
+            "平衡常数或Ka/Kb/Ksp",
+        }
         and features.get("calculation_complexity") == "多步计算"
     )
-    moderate_experiment = (features.get("experiment_requirement") == "数据归纳")
-    moderate_context = (features.get("context_load") == "需要信息转换")
-    moderate_axis_count = sum([
-        moderate_model_ident,
-        moderate_representation,
-        moderate_information,
-        moderate_evidence,
-        moderate_hidden,
+    moderate_experimental = (
+        features.get("experiment_requirement") == "数据归纳"
+    )
+    moderate_group_count = sum([
+        moderate_model_condition,
+        moderate_information_group,
         moderate_classification,
-        moderate_quant,
-        moderate_experiment,
-        moderate_context,
+        moderate_quantitative,
+        moderate_experimental,
     ])
 
     # floor 3: 标准常规综合题正向保护 (standard_comprehensive_floor_3)
     standard_comprehensive_floor_3 = (
         not high_names
+        and not basic_explicit_app
         and not parallel_basic_bundle_strict
         and (
-            (features.get("step_count") in {"3-5步", "6-8步", "9-12步", "12步以上"} and moderate_axis_count >= 1)
-            or (features.get("step_count") == "1-2步" and moderate_axis_count >= 2)
+            (
+                features.get("step_count") in {
+                    "3-5步",
+                    "6-8步",
+                    "9-12步",
+                    "12步以上",
+                }
+                and moderate_group_count >= 1
+            )
+            or (
+                features.get("step_count") == "1-2步"
+                and moderate_group_count >= 2
+            )
         )
     )
     if standard_comprehensive_floor_3:
         floor = max_level(floor, "难度3档")
         rule_ids.append("standard_comprehensive_floor_3")
-        evidence.append(f"标准常规综合题正向保护(中等负担轴数={moderate_axis_count})")
+        evidence.append(f"标准常规综合题正向保护(独立中等负担组数={moderate_group_count})")
 
     # floor 3: 真实关联依赖链 (standard_chain, 收紧真实依赖)
     has_real_dependency = (
@@ -1321,6 +1342,7 @@ def recalculate_verification(
                 "rejection_category": "duplicate_field_correction",
             })
             continue
+        seen_fields.add(str(field))
         if field in PROGRAM_DERIVED_FEATURE_FIELDS:
             rejection_categories["derived_field"] += 1
             rejected.append({
@@ -1365,7 +1387,6 @@ def recalculate_verification(
                 "rejection_category": "schema_validation_failure",
             })
             continue
-        seen_fields.add(str(field))
         corrected_features = candidate
         applied.append(copy.deepcopy(correction))
 
