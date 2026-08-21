@@ -80,14 +80,18 @@ class AccuracyAndSchemaTests(unittest.TestCase):
         self.assertIn("reviewed_original_predicted_accuracy", stage2["required"])
         self.assertFalse(stage2["additionalProperties"])
         
-        # Stage 2 correctable fields check
+        # Stage 2 correctable fields check (taxonomy fields excluded)
         self.assertNotIn("knowledge_L1", core.STAGE2_CORRECTABLE_FEATURE_FIELDS)
+        self.assertNotIn("knowledge_L2", core.STAGE2_CORRECTABLE_FEATURE_FIELDS)
         self.assertNotIn("knowledge_count", core.STAGE2_CORRECTABLE_FEATURE_FIELDS)
         self.assertNotIn("knowledge_scope", core.STAGE2_CORRECTABLE_FEATURE_FIELDS)
         self.assertNotIn("knowledge_points", core.STAGE2_CORRECTABLE_FEATURE_FIELDS)
+        self.assertNotIn("chemistry_methods", core.STAGE2_CORRECTABLE_FEATURE_FIELDS)
         self.assertEqual(
             set(core.STAGE2_CORRECTABLE_FEATURE_FIELDS),
-            set(core.REQUIRED_FEATURE_FIELDS) - core.PROGRAM_DERIVED_FEATURE_FIELDS - {"knowledge_points"},
+            set(core.REQUIRED_FEATURE_FIELDS)
+            - core.PROGRAM_DERIVED_FEATURE_FIELDS
+            - {"knowledge_points", "knowledge_L2", "chemistry_methods"},
         )
 
         # Stage 2 corrections anyOf variants check
@@ -206,7 +210,7 @@ class StructuralLevelConstraintTests(unittest.TestCase):
         )
         constraint = core.derive_structural_level_constraint(features, [])
         self.assertEqual(constraint["difficulty_ceiling"], "难度2档")
-        self.assertIn("parallel_basic_bundle_ceiling_2", constraint["rule_ids"])
+        self.assertIn("parallel_basic_bundle_strict_ceiling_2", constraint["rule_ids"])
 
     def test_standard_chain_sets_floor_to_level_three(self) -> None:
         features = base_features(
@@ -296,7 +300,7 @@ class StructuralLevelConstraintTests(unittest.TestCase):
         self.assertEqual(constraint["difficulty_floor"], "难度2档")
 
     def test_complex_quantitative_floor_four_strictly_tracks_high_names(self) -> None:
-        # Case 1: 常规计算无高难 -> floor 2 (不强制4档)
+        # Case 1: 常规多步计算无高难 -> floor 3 (不强制4档，标准常规综合)
         regular_calc = base_features(
             step_count="3-5步",
             calculation_model="平衡常数或Ka/Kb/Ksp",
@@ -310,7 +314,7 @@ class StructuralLevelConstraintTests(unittest.TestCase):
         high1 = core.detect_high_difficulty_features(regular_calc)
         self.assertNotIn("复杂定量、参数或范围", high1.names)
         c1 = core.derive_structural_level_constraint(regular_calc, high1.names)
-        self.assertEqual(c1["difficulty_floor"], "难度2档")
+        self.assertEqual(c1["difficulty_floor"], "难度3档")
 
         # Case 2: 严格命中高难复杂定量 -> floor 4
         strict_complex = base_features(

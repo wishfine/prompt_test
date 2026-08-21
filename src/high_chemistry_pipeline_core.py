@@ -183,7 +183,6 @@ def build_stage1_output_schema() -> dict[str, Any]:
 
 
 STAGE2_CORRECTABLE_FEATURE_FIELDS = (
-    "knowledge_L2",
     "substance_count",
     "substance_relation",
     "reaction_count",
@@ -204,7 +203,6 @@ STAGE2_CORRECTABLE_FEATURE_FIELDS = (
     "critical_condition",
     "classification_discussion",
     "constraint_structure",
-    "chemistry_methods",
     "calculation_model",
     "equation_structure",
     "calculation_complexity",
@@ -245,44 +243,6 @@ def build_stage2_output_schema() -> dict[str, Any]:
             "field": {"type": "string", "enum": ["shared_model_across_subquestions"]},
             "from": {"type": "boolean"},
             "to": {"type": "boolean"},
-            "evidence": {"type": "string"},
-        },
-        "required": ["field", "from", "to", "evidence"],
-        "additionalProperties": False,
-    })
-
-    # knowledge_L2 (array of enums)
-    correction_variants.append({
-        "type": "object",
-        "properties": {
-            "field": {"type": "string", "enum": ["knowledge_L2"]},
-            "from": {
-                "type": "array",
-                "items": {"type": "string", "enum": sorted(KNOWLEDGE_L2)},
-            },
-            "to": {
-                "type": "array",
-                "items": {"type": "string", "enum": sorted(KNOWLEDGE_L2)},
-            },
-            "evidence": {"type": "string"},
-        },
-        "required": ["field", "from", "to", "evidence"],
-        "additionalProperties": False,
-    })
-
-    # chemistry_methods (array of enums)
-    correction_variants.append({
-        "type": "object",
-        "properties": {
-            "field": {"type": "string", "enum": ["chemistry_methods"]},
-            "from": {
-                "type": "array",
-                "items": {"type": "string", "enum": sorted(CHEMISTRY_METHODS)},
-            },
-            "to": {
-                "type": "array",
-                "items": {"type": "string", "enum": sorted(CHEMISTRY_METHODS)},
-            },
             "evidence": {"type": "string"},
         },
         "required": ["field", "from", "to", "evidence"],
@@ -894,8 +854,8 @@ def derive_structural_level_constraint(
         rule_ids.append("basic_explicit_application_ceiling_2")
         evidence.append("1-2步显性基础应用，无高难无强依赖")
 
-    # ceiling 2: 并列基础多任务 (parallel_basic_bundle)
-    parallel_basic_bundle = (
+    # ceiling 2: 严格并列基础多任务 (parallel_basic_bundle_strict)
+    parallel_basic_bundle_strict = (
         features.get("required_task_breadth") in {"2-3个异质必要任务", "4个及以上异质必要任务"}
         and features.get("substance_relation") in {"单一物质", "相互独立"}
         and features.get("reaction_relation") in {"无反应链", "并列独立"}
@@ -914,12 +874,58 @@ def derive_structural_level_constraint(
         and features.get("calculation_complexity") in {"直接判断", "简单计算"}
         and features.get("experiment_requirement") in {"无", "基础操作或读数", "直接现象解释"}
         and features.get("route_design_requirement") in {"无", "已知路线补全"}
+        and features.get("competing_reaction") == "无"
+        and features.get("classification_discussion") == "无"
+        and features.get("representation_conversion") in {"无转换", "一次常规转换"}
+        and features.get("context_load") in {"纯包装", "简单规律映射"}
+        and features.get("error_risk") in {"无明显易错点", "轻微易错点"}
         and not high_names
     )
-    if parallel_basic_bundle:
+    if parallel_basic_bundle_strict:
         ceiling = min_level(ceiling, "难度2档")
-        rule_ids.append("parallel_basic_bundle_ceiling_2")
-        evidence.append("并列基础多任务(单阶段/无反应链或并列独立/模型显性/直接套用)")
+        rule_ids.append("parallel_basic_bundle_strict_ceiling_2")
+        evidence.append("严格并列基础多任务(单阶段/无反应链或并列独立/模型显性/直接套用/无隐含与干扰)")
+
+    # 中等认知负担轴 (Moderate Burden Axes for Level 3 Protection)
+    moderate_model_ident = (features.get("model_explicitness") == "半隐含模型")
+    moderate_representation = (
+        features.get("representation_conversion") in {"多次同类转换", "多表征连续转换", "逆向表征转换"}
+    )
+    moderate_information = (features.get("information_conversion") == "单次关系转换")
+    moderate_evidence = (features.get("evidence_relation") == "证据链相互支持")
+    moderate_hidden = (features.get("hidden_conditions") == "单个隐含条件")
+    moderate_classification = (features.get("classification_discussion") == "2类讨论")
+    moderate_quant = (
+        features.get("calculation_model") in {"多步化学计量", "浓度或气体综合", "平衡常数或Ka/Kb/Ksp"}
+        and features.get("calculation_complexity") == "多步计算"
+    )
+    moderate_experiment = (features.get("experiment_requirement") == "数据归纳")
+    moderate_context = (features.get("context_load") == "需要信息转换")
+    moderate_axis_count = sum([
+        moderate_model_ident,
+        moderate_representation,
+        moderate_information,
+        moderate_evidence,
+        moderate_hidden,
+        moderate_classification,
+        moderate_quant,
+        moderate_experiment,
+        moderate_context,
+    ])
+
+    # floor 3: 标准常规综合题正向保护 (standard_comprehensive_floor_3)
+    standard_comprehensive_floor_3 = (
+        not high_names
+        and not parallel_basic_bundle_strict
+        and (
+            (features.get("step_count") in {"3-5步", "6-8步", "9-12步", "12步以上"} and moderate_axis_count >= 1)
+            or (features.get("step_count") == "1-2步" and moderate_axis_count >= 2)
+        )
+    )
+    if standard_comprehensive_floor_3:
+        floor = max_level(floor, "难度3档")
+        rule_ids.append("standard_comprehensive_floor_3")
+        evidence.append(f"标准常规综合题正向保护(中等负担轴数={moderate_axis_count})")
 
     # floor 3: 真实关联依赖链 (standard_chain, 收紧真实依赖)
     has_real_dependency = (
@@ -1302,10 +1308,19 @@ def recalculate_verification(
     rejected: list[dict[str, Any]] = []
     raw_corrections = reviewed.get("feature_corrections") or []
     rejection_categories: Counter[str] = Counter()
+    seen_fields: set[str] = set()
     for correction in raw_corrections:
         field = correction.get("field")
         source = correction.get("from")
         target = correction.get("to")
+        if field in seen_fields:
+            rejection_categories["duplicate_field_correction"] += 1
+            rejected.append({
+                **copy.deepcopy(correction),
+                "reason": f"字段 {field!r} 出现多次修正，仅接受首次修正",
+                "rejection_category": "duplicate_field_correction",
+            })
+            continue
         if field in PROGRAM_DERIVED_FEATURE_FIELDS:
             rejection_categories["derived_field"] += 1
             rejected.append({
@@ -1343,13 +1358,14 @@ def recalculate_verification(
         try:
             validate_feature_schema(candidate)
         except ValueError as exc:
-            rejection_categories["illegal_enum"] += 1
+            rejection_categories["schema_validation_failure"] += 1
             rejected.append({
                 **copy.deepcopy(correction),
                 "reason": str(exc),
-                "rejection_category": "illegal_enum",
+                "rejection_category": "schema_validation_failure",
             })
             continue
+        seen_fields.add(str(field))
         corrected_features = candidate
         applied.append(copy.deepcopy(correction))
 

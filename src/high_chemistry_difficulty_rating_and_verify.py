@@ -78,8 +78,8 @@ DEFAULT_PROMPT = ROOT / "prompts" / "高中化学难度打标提示词.txt"
 DEFAULT_OUTPUT = ROOT / "outputs" / "model_runs" / "high_chemistry_two_stage.jsonl"
 DEFAULT_ERRORS = ROOT / "outputs" / "model_runs" / "high_chemistry_two_stage_errors.jsonl"
 DEFAULT_CACHE = ROOT / "outputs" / "cache" / "high_chemistry_stage1_prefix_cache.json"
-PIPELINE_VERSION = "high_chemistry_two_stage_v21_1"
-PROMPT_VERSION = "high_chemistry_prompt_v21_1"
+PIPELINE_VERSION = "high_chemistry_two_stage_v21_1_1"
+PROMPT_VERSION = "high_chemistry_prompt_v21_1_1"
 STRUCTURAL_CONSTRAINT_VERSION = "structural_constraint_v21"
 PROMPT_SHA256 = ""
 CORE_SHA256 = hashlib.sha256(
@@ -558,6 +558,31 @@ def finalize_verified_level(
     return result
 
 
+class Stage2CallError(RuntimeError):
+    """第二阶段调用或校验异常，携带完整 debug 诊断信息。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        http_status: int | None = None,
+        output_text_length: int | None = None,
+        output_text_tail: str | None = None,
+        parsed_keys: list[str] | None = None,
+        usage: dict[str, int] | None = None,
+        incomplete_details: Any | None = None,
+        validation_error: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+        self.output_text_length = output_text_length
+        self.output_text_tail = output_text_tail
+        self.parsed_keys = parsed_keys
+        self.usage = usage
+        self.incomplete_details = incomplete_details
+        self.validation_error = validation_error
+
+
 def build_pipeline_error(
     *,
     output_base: dict[str, Any],
@@ -566,14 +591,30 @@ def build_pipeline_error(
     stage1_usage: dict[str, int] | None = None,
     stage1_elapsed: float | None = None,
 ) -> dict[str, Any]:
-    """构造可续跑的错误记录；第二阶段失败时保留已付费的第一阶段结果。"""
+    """构造可续跑的错误记录；第二阶段失败时保留已付费的第一阶段结果及完整元数据。"""
     record = {
         **copy.deepcopy(output_base),
         "pipeline_version": PIPELINE_VERSION,
+        "prompt_version": PROMPT_VERSION,
+        "structural_constraint_version": STRUCTURAL_CONSTRAINT_VERSION,
+        "prompt_sha256": PROMPT_SHA256,
+        "core_sha256": CORE_SHA256,
         "model_name": MODEL_NAME,
+        "high_difficulty_multiplier_enabled": (
+            ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER
+        ),
         "failed_stage": "stage2" if stage1 is not None else "stage1",
         "rating_error": str(error),
     }
+    if isinstance(error, Stage2CallError):
+        record["stage2_http_status"] = error.http_status
+        record["stage2_output_text_length"] = error.output_text_length
+        record["stage2_output_text_tail"] = error.output_text_tail
+        record["stage2_parsed_keys"] = error.parsed_keys
+        record["stage2_usage"] = error.usage
+        record["stage2_incomplete_details"] = error.incomplete_details
+        record["stage2_validation_error"] = error.validation_error
+
     if stage1 is not None:
         record["difficulty_rating_stage1"] = stage1
         record["difficulty_level_step1"] = stage1.get(
@@ -594,7 +635,7 @@ def build_stage2_fallback_result(
     stage1_usage: dict[str, int] | None,
     stage1_elapsed: float | None,
 ) -> dict[str, Any]:
-    """第二阶段失败时保留第一阶段档位，并显式转人工复核。"""
+    """第二阶段失败时保留第一阶段档位，并显式转人工复核，携带完整 debug 诊断信息与版本元数据。"""
     level = stage1["difficulty_level_step1"]
     usage = stage1_usage or {
         "input_tokens": 0,
@@ -604,11 +645,18 @@ def build_stage2_fallback_result(
     reviewed_high_count = int(
         stage1.get("high_difficulty_feature_count") or 0
     )
-    return {
+    res: dict[str, Any] = {
         **copy.deepcopy(output_base),
         "pipeline_version": PIPELINE_VERSION,
+        "prompt_version": PROMPT_VERSION,
+        "structural_constraint_version": STRUCTURAL_CONSTRAINT_VERSION,
+        "prompt_sha256": PROMPT_SHA256,
+        "core_sha256": CORE_SHA256,
         "model_name": MODEL_NAME,
         "temperature": TEMPERATURE,
+        "high_difficulty_multiplier_enabled": (
+            ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER
+        ),
         "stage2_auto_adjustment_enabled": ENABLE_STAGE2_AUTO_ADJUST,
         "difficulty_rating_stage1": copy.deepcopy(stage1),
         "difficulty_level_step1": level,
@@ -634,10 +682,17 @@ def build_stage2_fallback_result(
             "output_tokens": 0,
             "total_tokens": 0,
         },
-        # 第二阶段失败响应的实际计费量通常不可得；这里只保存可核实的
-        # 第一阶段 usage，避免伪造第二阶段 token。
         "api_total_usage": copy.deepcopy(usage),
     }
+    if isinstance(stage2_error, Stage2CallError):
+        res["stage2_http_status"] = stage2_error.http_status
+        res["stage2_output_text_length"] = stage2_error.output_text_length
+        res["stage2_output_text_tail"] = stage2_error.output_text_tail
+        res["stage2_parsed_keys"] = stage2_error.parsed_keys
+        res["stage2_usage"] = stage2_error.usage
+        res["stage2_incomplete_details"] = stage2_error.incomplete_details
+        res["stage2_validation_error"] = stage2_error.validation_error
+    return res
 
 
 async def call_stage1(
@@ -772,6 +827,7 @@ async def call_stage2(
     )
     started = time.time()
     total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    last_call_error: Stage2CallError | None = None
     last_error = ""
     for attempt in range(retries):
         payload: dict[str, Any] = {
@@ -801,8 +857,45 @@ async def call_stage2(
                 current_usage = _usage(body)
                 for key in total_usage:
                     total_usage[key] += current_usage[key]
-                parsed = _parse_json_object(_extract_output_text(body))
-                validated = validate_verification(parsed)
+                output_text = _extract_output_text(body)
+                output_len = len(output_text)
+                output_tail = output_text[-300:] if output_text else ""
+                try:
+                    parsed = _parse_json_object(output_text)
+                except Exception as parse_exc:
+                    last_call_error = Stage2CallError(
+                        f"第二阶段响应 JSON 解析失败：{parse_exc}",
+                        http_status=200,
+                        output_text_length=output_len,
+                        output_text_tail=output_tail,
+                        usage=copy.deepcopy(total_usage),
+                        validation_error=str(parse_exc),
+                    )
+                    last_error = str(last_call_error)
+                    if attempt < retries - 1:
+                        await asyncio.sleep(2**attempt + random.random())
+                        continue
+                    raise last_call_error
+
+                parsed_keys = list(parsed.keys()) if isinstance(parsed, dict) else []
+                try:
+                    validated = validate_verification(parsed)
+                except Exception as val_exc:
+                    last_call_error = Stage2CallError(
+                        f"第二阶段校验失败：{val_exc}",
+                        http_status=200,
+                        output_text_length=output_len,
+                        output_text_tail=output_tail,
+                        parsed_keys=parsed_keys,
+                        usage=copy.deepcopy(total_usage),
+                        validation_error=str(val_exc),
+                    )
+                    last_error = str(last_call_error)
+                    if attempt < retries - 1:
+                        await asyncio.sleep(2**attempt + random.random())
+                        continue
+                    raise last_call_error
+
                 return (
                     recalculate_verification(
                         current_level=stage1["difficulty_level_step1"],
@@ -822,14 +915,25 @@ async def call_stage2(
                     total_usage,
                     time.time() - started,
                 )
-            last_error = f"HTTP {status}: {error_text[:400]}"
+            last_call_error = Stage2CallError(
+                f"HTTP {status}: {error_text[:400]}",
+                http_status=status,
+                validation_error=error_text[:400],
+            )
+            last_error = str(last_call_error)
             if status != 429 and status < 500:
                 break
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+            last_call_error = Stage2CallError(
+                str(exc),
+                validation_error=str(exc),
+            )
             last_error = str(exc)
         if attempt < retries - 1:
             await asyncio.sleep(2**attempt + random.random())
-    raise RuntimeError(f"第二阶段请求失败：{last_error}")
+    if last_call_error is not None:
+        raise last_call_error
+    raise Stage2CallError(f"第二阶段请求失败：{last_error}")
 
 
 async def append_jsonl(path: Path, value: dict[str, Any]) -> None:
