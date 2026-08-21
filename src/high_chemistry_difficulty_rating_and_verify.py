@@ -76,9 +76,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT = ROOT / "data" / "high-chemistry-sample25k.jsonl"
 DEFAULT_PROMPT = ROOT / "prompts" / "高中化学难度打标提示词.txt"
 DEFAULT_OUTPUT = ROOT / "outputs" / "model_runs" / "high_chemistry_two_stage.jsonl"
-PIPELINE_VERSION = "high_chemistry_two_stage_v6"
-PROMPT_VERSION = "high_chemistry_prompt_v14"
-STRUCTURAL_CONSTRAINT_VERSION = "structural_constraint_v1"
+DEFAULT_ERRORS = ROOT / "outputs" / "model_runs" / "high_chemistry_two_stage_errors.jsonl"
+DEFAULT_CACHE = ROOT / "outputs" / "cache" / "high_chemistry_stage1_prefix_cache.json"
+PIPELINE_VERSION = "high_chemistry_two_stage_v20"
+PROMPT_VERSION = "high_chemistry_prompt_v20"
+STRUCTURAL_CONSTRAINT_VERSION = "structural_constraint_v20"
 PROMPT_SHA256 = ""
 CORE_SHA256 = hashlib.sha256(
     (ROOT / "src" / "high_chemistry_pipeline_core.py").read_bytes()

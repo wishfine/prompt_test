@@ -18,11 +18,11 @@ import high_chemistry_pipeline_core as chemistry_core  # noqa: E402
 
 
 class HighChemistryAssetTests(unittest.TestCase):
-    def test_runner_exists_and_compiles(self) -> None:
+    def test_runner_exists_and_compiles_and_parses_args(self) -> None:
         self.assertTrue(RUNNER.exists())
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn("high_chemistry_two_stage_v6", source)
+        self.assertIn("high_chemistry_two_stage_v20", source)
         self.assertIn("ENABLE_STAGE2_AUTO_ADJUST", source)
         self.assertIn("ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER", source)
         self.assertIn(
@@ -32,6 +32,17 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertIn('os.getenv("ENABLE_STAGE2_AUTO_ADJUST", "1")', source)
         self.assertIn("def finalize_verified_level", source)
         self.assertNotIn("shared_" + "runner", source)
+
+        # 验证 build_parser 能够正常构建并解析默认参数
+        namespace = {"__file__": str(RUNNER)}
+        exec(compile(source, str(RUNNER), "exec"), namespace)
+        parser = namespace["build_parser"]()
+        args = parser.parse_args([])
+        self.assertTrue(args.input)
+        self.assertTrue(args.output)
+        self.assertTrue(args.errors)
+        self.assertTrue(args.prompt)
+        self.assertTrue(args.cache_file)
 
     def test_prompt_defines_both_stages_and_complete_schema(self) -> None:
         self.assertTrue(PROMPT.exists())
