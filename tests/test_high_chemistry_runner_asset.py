@@ -197,6 +197,20 @@ class HighChemistryAssetTests(unittest.TestCase):
         ):
             self.assertIn(required, stage1)
 
+    def test_stage1_uses_0820_task_first_execution_order(self) -> None:
+        namespace = {}
+        source = PROMPT.read_text(encoding="utf-8")
+        exec(compile(source, str(PROMPT), "exec"), namespace)
+        stage1 = namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
+        for required in (
+            "### 执行顺序",
+            "还原完整作答任务",
+            "字段真实性与一致性检查",
+            "不得先凭题型印象",
+            "最长连续依赖链",
+        ):
+            self.assertIn(required, stage1)
+
     def test_stage2_does_not_treat_program_derived_fields_as_structural_revision(self) -> None:
         namespace = {}
         source = PROMPT.read_text(encoding="utf-8")
@@ -262,6 +276,12 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertIn("prepare_question", source)
         self.assertIn('output_base["source_difficulty_untrusted"]', source)
         self.assertIn("prepared.question", source)
+
+    def test_runner_uses_strict_schemas_for_both_stages(self) -> None:
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("build_stage1_output_schema", source)
+        self.assertIn("build_stage2_output_schema", source)
+        self.assertGreaterEqual(source.count('"type": "json_schema"'), 2)
 
 
 if __name__ == "__main__":

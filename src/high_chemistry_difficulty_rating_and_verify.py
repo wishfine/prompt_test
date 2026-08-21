@@ -43,6 +43,8 @@ from high_chemistry_pipeline_core import (
     FinalizationResult,
     HIGH_DIFFICULTY_FEATURE_NAMES,
     REQUIRED_FEATURE_FIELDS,
+    build_stage1_output_schema,
+    build_stage2_output_schema,
     enrich_stage1_rating,
     finalize_level as _chemistry_finalize_level,
     normalize_stage1_rating,
@@ -673,6 +675,14 @@ async def call_stage1(
             ],
             "thinking": {"type": "disabled"},
             "max_output_tokens": 4000,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "high_chemistry_stage1_rating",
+                    "strict": True,
+                    "schema": build_stage1_output_schema(),
+                }
+            },
         }
         if use_cache:
             payload["previous_response_id"] = cache_id
@@ -765,6 +775,14 @@ async def call_stage2(
             ],
             "thinking": {"type": "disabled"},
             "max_output_tokens": 2500,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "high_chemistry_stage2_verification",
+                    "strict": True,
+                    "schema": build_stage2_output_schema(),
+                }
+            },
         }
         if TEMPERATURE is not None:
             payload["temperature"] = TEMPERATURE

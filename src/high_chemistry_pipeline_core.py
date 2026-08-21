@@ -123,6 +123,131 @@ HIGH_DIFFICULTY_FEATURE_NAMES = (
     "高阶实验、合成或分离设计",
 )
 
+def build_stage1_output_schema() -> dict[str, Any]:
+    """由当前唯一枚举生成第一阶段严格输出 Schema。"""
+    feature_properties: dict[str, Any] = {
+        "knowledge_L1": {
+            "type": "array",
+            "items": {"type": "string", "enum": sorted(KNOWLEDGE_L1)},
+        },
+        "knowledge_L2": {
+            "type": "array",
+            "items": {"type": "string", "enum": sorted(KNOWLEDGE_L2)},
+        },
+        "knowledge_points": {"type": "array", "items": {"type": "string"}},
+        "shared_model_across_subquestions": {"type": "boolean"},
+        "chemistry_methods": {
+            "type": "array",
+            "items": {"type": "string", "enum": sorted(CHEMISTRY_METHODS)},
+        },
+    }
+    feature_properties.update({
+        field: {"type": "string", "enum": sorted(options)}
+        for field, options in FEATURE_OPTIONS.items()
+    })
+    return {
+        "type": "object",
+        "properties": {
+            "features": {
+                "type": "object",
+                "properties": feature_properties,
+                "required": list(REQUIRED_FEATURE_FIELDS),
+                "additionalProperties": False,
+            },
+            "reason": {"type": "string"},
+            "predicted_accuracy": {"type": "number"},
+        },
+        "required": ["features", "reason", "predicted_accuracy"],
+        "additionalProperties": False,
+    }
+
+
+def build_stage2_output_schema() -> dict[str, Any]:
+    """约束第二阶段固定枚举，减少复核输出的格式和字段漂移。"""
+    scalar_or_string_array = {
+        "anyOf": [
+            {"type": "string"},
+            {"type": "boolean"},
+            {"type": "array", "items": {"type": "string"}},
+        ]
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "difficulty_source": {"type": "string"},
+            "feature_corrections": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "field": {"type": "string"},
+                        "from": scalar_or_string_array,
+                        "to": scalar_or_string_array,
+                        "evidence": {"type": "string"},
+                    },
+                    "required": ["field", "from", "to", "evidence"],
+                    "additionalProperties": False,
+                },
+            },
+            "missed_features": {"type": "array", "items": {"type": "string"}},
+            "reviewed_high_difficulty_features": {
+                "type": "array",
+                "items": {"type": "string", "enum": list(HIGH_DIFFICULTY_FEATURE_NAMES)},
+            },
+            "high_feature_overlap_review": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "features": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": list(HIGH_DIFFICULTY_FEATURE_NAMES)},
+                        },
+                        "resolution": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["features", "resolution", "reason"],
+                    "additionalProperties": False,
+                },
+            },
+            "has_structural_revision": {"type": "boolean"},
+            "adjacent_boundary_review": {
+                "type": "object",
+                "properties": {
+                    "boundaries_checked": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["88边界", "85边界", "58边界", "38边界"]},
+                    },
+                    "verdict": {"type": "string", "enum": ["维持", "应更简单一档", "应更难一档"]},
+                    "decisive_evidence": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["boundaries_checked", "verdict", "decisive_evidence"],
+                "additionalProperties": False,
+            },
+            "reviewed_original_predicted_accuracy": {"type": "number"},
+            "confidence": {"type": "string", "enum": ["高", "中", "低"]},
+            "input_sufficiency_review": {
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "enum": ["充分", "部分缺失", "信息不足"]},
+                    "missing_information": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["status", "missing_information"],
+                "additionalProperties": False,
+            },
+            "analysis": {"type": "string"},
+        },
+        "required": [
+            "difficulty_source", "feature_corrections", "missed_features",
+            "reviewed_high_difficulty_features", "high_feature_overlap_review",
+            "has_structural_revision", "adjacent_boundary_review",
+            "reviewed_original_predicted_accuracy", "confidence",
+            "input_sufficiency_review", "analysis",
+        ],
+        "additionalProperties": False,
+    }
+
+
 MULTIPLIER_TRIGGER_COMBOS = (
     frozenset({"多反应或多阶段强耦合", "多约束联合", "高层级信息转换"}),
     frozenset({"多模型或多平衡耦合", "多约束联合", "高层级信息转换"}),
