@@ -162,53 +162,6 @@ class FinalizationResult:
     auto_adjustment_applied: bool
 
 
-def build_stage1_output_schema() -> dict[str, Any]:
-    """从当前唯一枚举生成第一阶段严格 JSON Schema。"""
-    feature_properties: dict[str, Any] = {
-        "knowledge_L1": {
-            "type": "array",
-            "items": {"type": "string", "enum": sorted(KNOWLEDGE_L1)},
-        },
-        "knowledge_L2": {
-            "type": "array",
-            "items": {"type": "string", "enum": sorted(KNOWLEDGE_L2)},
-        },
-        "knowledge_points": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "shared_model_across_subquestions": {"type": "boolean"},
-        "chemistry_methods": {
-            "type": "array",
-            "items": {"type": "string", "enum": sorted(CHEMISTRY_METHODS)},
-        },
-    }
-    feature_properties.update({
-        field: {"type": "string", "enum": sorted(options)}
-        for field, options in FEATURE_OPTIONS.items()
-    })
-    return {
-        "type": "json_schema",
-        "name": "high_chemistry_stage1_rating",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "features": {
-                    "type": "object",
-                    "properties": feature_properties,
-                    "required": list(REQUIRED_FEATURE_FIELDS),
-                    "additionalProperties": False,
-                },
-                "reason": {"type": "string"},
-                "predicted_accuracy": {"type": "number"},
-            },
-            "required": ["features", "reason", "predicted_accuracy"],
-            "additionalProperties": False,
-        },
-    }
-
-
 def map_accuracy_to_level(predicted_accuracy: Any) -> str:
     try:
         value = float(predicted_accuracy)

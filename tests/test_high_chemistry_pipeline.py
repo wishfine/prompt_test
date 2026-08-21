@@ -64,19 +64,6 @@ def base_features(**overrides):
 
 @unittest.skipIf(core is None, "高中化学核心模块尚未实现")
 class AccuracyAndSchemaTests(unittest.TestCase):
-    def test_stage1_json_schema_matches_current_feature_contract(self) -> None:
-        schema = core.build_stage1_output_schema()
-        self.assertTrue(schema["strict"])
-        self.assertEqual(
-            set(schema["schema"]["required"]),
-            {"features", "reason", "predicted_accuracy"},
-        )
-        feature_schema = schema["schema"]["properties"]["features"]
-        self.assertEqual(
-            set(feature_schema["required"]), set(core.REQUIRED_FEATURE_FIELDS)
-        )
-        self.assertFalse(feature_schema["additionalProperties"])
-
     def test_continuous_accuracy_boundaries_are_fixed(self) -> None:
         cases = [
             (88, "难度1档"),
