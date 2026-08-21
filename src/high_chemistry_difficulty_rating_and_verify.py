@@ -75,9 +75,13 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT = ROOT / "data" / "high-chemistry-sample25k.jsonl"
 DEFAULT_PROMPT = ROOT / "prompts" / "高中化学难度打标提示词.txt"
 DEFAULT_OUTPUT = ROOT / "outputs" / "model_runs" / "high_chemistry_two_stage.jsonl"
-DEFAULT_ERRORS = ROOT / "outputs" / "model_runs" / "high_chemistry_two_stage_errors.jsonl"
-DEFAULT_CACHE = ROOT / "outputs" / "cache" / "high_chemistry_stage1_prefix_cache.json"
-PIPELINE_VERSION = "high_chemistry_two_stage_v5"
+PIPELINE_VERSION = "high_chemistry_two_stage_v6"
+PROMPT_VERSION = "high_chemistry_prompt_v14"
+STRUCTURAL_CONSTRAINT_VERSION = "structural_constraint_v1"
+PROMPT_SHA256 = ""
+CORE_SHA256 = hashlib.sha256(
+    (ROOT / "src" / "high_chemistry_pipeline_core.py").read_bytes()
+).hexdigest()
 SUBJECT_DISPLAY_NAME = "高中化学"
 PROGRESS_DESCRIPTION = "High Chemistry Pipeline"
 
@@ -176,6 +180,8 @@ def load_prompt_config(path: str | Path) -> None:
         str(namespace[required[1]]),
         str(namespace[required[2]]),
     )
+    global PROMPT_SHA256
+    PROMPT_SHA256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
     FEATURE_EXTRACTION_PROMPT_PREFIX = str(namespace[required[0]])
     FEATURE_EXTRACTION_PROMPT_SUFFIX = str(namespace[required[1]])
     VERIFICATION_PROMPT_PREFIX = str(namespace[required[2]])
@@ -931,8 +937,13 @@ async def process_question(
             result = {
                 **output_base,
                 "pipeline_version": PIPELINE_VERSION,
+                "prompt_version": PROMPT_VERSION,
+                "structural_constraint_version": STRUCTURAL_CONSTRAINT_VERSION,
+                "prompt_sha256": PROMPT_SHA256,
+                "core_sha256": CORE_SHA256,
                 "model_name": MODEL_NAME,
                 "temperature": TEMPERATURE,
+                "high_difficulty_multiplier_enabled": ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER,
                 "stage2_auto_adjustment_enabled": (
                     ENABLE_STAGE2_AUTO_ADJUST
                 ),

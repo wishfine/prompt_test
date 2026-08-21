@@ -14,11 +14,29 @@ from __future__ import annotations
 import copy
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypedDict
 
 
 LEVEL_ORDER = ["难度1档", "难度2档", "难度3档", "难度4档", "难度5档"]
 LEVEL_INDEX = {value: index for index, value in enumerate(LEVEL_ORDER)}
+INDEX_LEVEL = {index: value for index, value in enumerate(LEVEL_ORDER)}
+
+
+class StructuralLevelConstraint(TypedDict):
+    difficulty_floor: str
+    difficulty_ceiling: str
+    rule_ids: list[str]
+    evidence: list[str]
+    confidence: str
+    constraint_conflict: bool
+
+
+def min_level(a: str, b: str) -> str:
+    return INDEX_LEVEL[min(LEVEL_INDEX[a], LEVEL_INDEX[b])]
+
+
+def max_level(a: str, b: str) -> str:
+    return INDEX_LEVEL[max(LEVEL_INDEX[a], LEVEL_INDEX[b])]
 CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER_ENABLED = True
 PROGRAM_DERIVED_FEATURE_FIELDS = {
     "knowledge_L1",
@@ -819,6 +837,248 @@ def detect_high_difficulty_features(features: dict[str, Any]) -> HighDifficultyD
     )
 
 
+def derive_structural_level_constraint(
+    features: dict[str, Any],
+    high_names: list[str],
+) -> StructuralLevelConstraint:
+    """由冻结的化学结构特征确定性派生难度上下限约束。
+
+    签名严禁传入 predicted_accuracy / original_accuracy，杜绝用分数决定结构。
+    """
+    floor = "难度1档"
+    ceiling = "难度5档"
+    rule_ids: list[str] = []
+    evidence: list[str] = []
+
+    # -------------------------------------------------------------
+    # 1 ↔ 2 档结构约束
+    # -------------------------------------------------------------
+    direct_prototype = (
+        features.get("primary_problem_structure") == "概念辨析"
+        and features.get("knowledge_count") == "1个"
+        and features.get("knowledge_scope") == "单知识点"
+        and features.get("substance_count") == "1种"
+        and features.get("substance_relation") == "单一物质"
+        and features.get("reaction_count") == "0-1个"
+        and features.get("reaction_relation") == "无反应链"
+        and features.get("process_structure") == "单阶段"
+        and features.get("step_count") == "1-2步"
+        and features.get("required_task_breadth") == "单一规则任务"
+        and features.get("model_explicitness") == "模型完全显性"
+        and features.get("model_relation") == "单一模型"
+        and features.get("reasoning_chain") == "直接套用"
+        and features.get("representation_conversion") == "无转换"
+        and features.get("information_conversion") == "无信息转换"
+        and features.get("experiment_requirement") == "无"
+        and features.get("calculation_model") == "无定量计算"
+        and not high_names
+    )
+    if direct_prototype:
+        floor = "难度1档"
+        ceiling = "难度1档"
+        rule_ids.append("direct_prototype_exact_1")
+        evidence.append("纯单知识点单步直接套用原型")
+
+    # floor 2: 明确不是最基础 1 档
+    if features.get("required_task_breadth") in {
+        "2-3个异质必要任务",
+        "4个及以上异质必要任务",
+        "多问递进任务链",
+    }:
+        floor = max_level(floor, "难度2档")
+        rule_ids.append("multiple_required_tasks_floor_2")
+        evidence.append(f"多必要任务广度({features.get('required_task_breadth')})")
+
+    if features.get("calculation_model") in {
+        "常规化学计量",
+        "多步化学计量",
+        "平衡常数或Ka/Kb/Ksp",
+        "多模型定量耦合",
+    }:
+        floor = max_level(floor, "难度2档")
+        rule_ids.append("calculation_model_floor_2")
+        evidence.append(f"定量计算模型({features.get('calculation_model')})")
+
+    if (
+        features.get("primary_problem_structure") == "概念辨析"
+        and features.get("knowledge_count") == "4个及以上"
+        and features.get("substance_relation") == "相互独立"
+    ):
+        floor = max_level(floor, "难度2档")
+        rule_ids.append("independent_multi_concept_floor_2")
+        evidence.append("4个及以上独立概念辨析")
+
+    # -------------------------------------------------------------
+    # 2 ↔ 3 档结构约束
+    # -------------------------------------------------------------
+    # ceiling 2: 明确基础显性应用 (basic_explicit_application)
+    basic_explicit_app = (
+        features.get("step_count") == "1-2步"
+        and features.get("model_explicitness") == "模型完全显性"
+        and features.get("reasoning_chain") in {"直接套用", "简单因果"}
+        and features.get("subquestion_dependency") != "后问依赖前问"
+        and not features.get("shared_model_across_subquestions", False)
+        and features.get("model_relation") in {"单一模型", "同一模型多状态"}
+        and features.get("information_conversion") in {"无信息转换", "直接读取", "单次关系转换"}
+        and features.get("evidence_relation") in {"直接给定", "单证据对应", "多证据独立"}
+        and features.get("critical_condition") in {"无临界", "显性给出临界"}
+        and features.get("classification_discussion") == "无"
+        and features.get("constraint_structure") in {"无约束", "单一约束", "多约束相互独立"}
+        and features.get("calculation_model") in {"无定量计算", "常规化学计量"}
+        and features.get("calculation_complexity") in {"直接判断", "简单计算"}
+        and features.get("experiment_requirement") in {"无", "基础操作或读数", "直接现象解释"}
+        and features.get("route_design_requirement") in {"无", "已知路线补全"}
+        and features.get("required_task_breadth") != "4个及以上异质必要任务"
+        and not high_names
+    )
+    if basic_explicit_app:
+        ceiling = min_level(ceiling, "难度2档")
+        rule_ids.append("basic_explicit_application_ceiling_2")
+        evidence.append("1-2步显性基础应用，无高难无强依赖")
+
+    # floor 3: 明确常规综合
+    standard_chain = (
+        features.get("step_count") in {"3-5步", "6-8步", "9-12步", "12步以上"}
+        and features.get("substance_relation") in {"同一反应体系", "前后转化依赖", "组成—性质—反应网络"}
+        and (
+            features.get("reaction_count") in {"2-3个", "4-6个", "7个及以上"}
+            or features.get("calculation_model") in {"常规化学计量", "多步化学计量", "平衡常数或Ka/Kb/Ksp", "多模型定量耦合"}
+            or features.get("information_conversion") not in {"无信息转换", "直接读取"}
+            or features.get("experiment_requirement") not in {"无", "基础操作或读数"}
+            or features.get("reasoning_chain") in {"多层因果", "逆向推理或临界分析"}
+        )
+    )
+    if standard_chain:
+        floor = max_level(floor, "难度3档")
+        rule_ids.append("standard_chain_floor_3")
+        evidence.append("3-5步以上关联决策链/同一反应体系")
+
+    broad_task_burden = (
+        features.get("required_task_breadth") == "4个及以上异质必要任务"
+        and (
+            features.get("critical_condition") in {"需要推导过量不足边界", "隐含终点或有效区间"}
+            or features.get("information_conversion") in {"单次关系转换", "多源信息联合转换", "流程或图谱反推"}
+            or features.get("calculation_model") in {"常规化学计量", "多步化学计量", "浓度或气体综合", "平衡常数或Ka/Kb/Ksp", "多模型定量耦合"}
+            or features.get("experiment_requirement") in {"数据归纳", "控制变量或异常分析", "方案设计或误差反演"}
+            or features.get("representation_conversion") in {"多次同类转换", "多表征连续转换", "逆向表征转换"}
+            or features.get("constraint_structure") == "多约束联合筛选"
+            or features.get("reasoning_chain") in {"多层因果", "逆向推理或临界分析"}
+        )
+    )
+    if broad_task_burden:
+        floor = max_level(floor, "难度3档")
+        rule_ids.append("broad_task_burden_floor_3")
+        evidence.append("4个及以上异质任务伴随真实推理/定量/信息转换负担")
+
+    # -------------------------------------------------------------
+    # 3 ↔ 4 档结构约束（完全移除 58-68 分数门槛）
+    # -------------------------------------------------------------
+    model_migration_multistage = (
+        features.get("model_relation") in {"模型切换", "多模型耦合"}
+        and features.get("process_structure") in {"多阶段显性流程", "多阶段强依赖", "循环或回流流程"}
+    )
+    complex_quantitative = (
+        features.get("calculation_model") in {"多模型定量耦合", "平衡常数或Ka/Kb/Ksp"}
+        and (
+            features.get("equation_structure") in {"2-3个方程联立", "4个以上方程或不等式组"}
+            or features.get("calculation_complexity") in {"多步计算", "多方程联立", "参数或范围计算"}
+            or features.get("parameter_operation") in {"双参数", "多参数"}
+        )
+    )
+    model_migration_system_coupling = (
+        features.get("model_relation") in {"模型切换", "多模型耦合"}
+        and features.get("substance_relation") in {"前后转化依赖", "组成—性质—反应网络"}
+    )
+    multitask_diagram_process_chain = (
+        features.get("required_task_breadth") == "4个及以上异质必要任务"
+        and features.get("information_carrier") in {"工艺流程图", "多载体综合", "实验装置", "单一图表"}
+        and features.get("step_count") in {"3-5步", "6-8步", "9-12步", "12步以上"}
+        and (
+            features.get("reasoning_chain") in {"多层因果", "逆向推理或临界分析"}
+            or features.get("information_conversion") in {"多源信息联合转换", "流程或图谱反推"}
+            or features.get("model_explicitness") in {"半隐含模型", "隐含模型"}
+            or features.get("model_relation") in {"模型切换", "多模型耦合"}
+        )
+    )
+
+    if (
+        model_migration_multistage
+        or complex_quantitative
+        or model_migration_system_coupling
+        or multitask_diagram_process_chain
+    ):
+        floor = max_level(floor, "难度4档")
+        rule_ids.append("hard_structural_cluster_floor_4")
+        if model_migration_multistage:
+            evidence.append("模型切换/耦合+多阶段流程")
+        if complex_quantitative:
+            evidence.append("复杂定量方程/参数计算")
+        if model_migration_system_coupling:
+            evidence.append("模型切换/耦合+体系依赖")
+        if multitask_diagram_process_chain:
+            evidence.append("多任务图表流程链伴随多层因果/半隐含")
+
+    # ceiling 3: 普通常规综合
+    regular_comprehensive = (
+        features.get("step_count") in {"1-2步", "3-5步"}
+        and not high_names
+        and features.get("model_relation") in {"单一模型", "同一模型多状态"}
+        and features.get("process_structure") not in {"多阶段强依赖", "循环或回流流程"}
+        and features.get("calculation_model") not in {"多模型定量耦合"}
+        and features.get("information_conversion") not in {"多源信息联合转换", "流程或图谱反推"}
+        and features.get("experiment_requirement") not in {"控制变量或异常分析", "方案设计或误差反演"}
+        and features.get("route_design_requirement") not in {"合成路线设计", "分离提纯方案设计", "路线优化与可行性验证"}
+        and features.get("constraint_structure") != "多约束联合筛选"
+        and not (model_migration_multistage or complex_quantitative or model_migration_system_coupling or multitask_diagram_process_chain)
+    )
+    if regular_comprehensive:
+        ceiling = min_level(ceiling, "难度3档")
+        rule_ids.append("regular_comprehensive_ceiling_3")
+        evidence.append("普通常规综合，无高难无强耦合模型")
+
+    conflict = LEVEL_INDEX[floor] > LEVEL_INDEX[ceiling]
+
+    return {
+        "difficulty_floor": floor,
+        "difficulty_ceiling": ceiling,
+        "rule_ids": rule_ids,
+        "evidence": evidence,
+        "confidence": "高" if not conflict else "低",
+        "constraint_conflict": conflict,
+    }
+
+
+def apply_structural_level_constraint(
+    score_level: str,
+    constraint: dict[str, Any],
+) -> tuple[str, str, bool]:
+    """将基于连续分数的档位限制在结构特征允许的 [floor, ceiling] 区间内。
+
+    只约束档位，不修改任何连续分数。
+    """
+    if constraint.get("constraint_conflict"):
+        return score_level, "conflict_maintained", True
+
+    score_idx = LEVEL_INDEX[score_level]
+    floor_idx = LEVEL_INDEX[constraint["difficulty_floor"]]
+    ceiling_idx = LEVEL_INDEX[constraint["difficulty_ceiling"]]
+
+    if floor_idx > ceiling_idx:
+        return score_level, "conflict_maintained", True
+
+    final_idx = min(ceiling_idx, max(floor_idx, score_idx))
+    final_level = INDEX_LEVEL[final_idx]
+
+    if final_level == score_level:
+        action = "maintained"
+    elif final_idx > score_idx:
+        action = f"raised_to_{final_level}"
+    else:
+        action = f"lowered_to_{final_level}"
+
+    return final_level, action, False
+
+
 def _apply_stage1_structural_level_guards(
     *,
     level: str,
@@ -826,79 +1086,20 @@ def _apply_stage1_structural_level_guards(
     features: dict[str, Any],
     high_names: list[str],
 ) -> tuple[str, list[dict[str, Any]]]:
-    """回收已验证的相邻档位标尺偏差；每题至多调整一档。"""
+    """旧接口兼容：委托给确定性结构约束函数。"""
+    constraint = derive_structural_level_constraint(features, high_names)
+    guarded_level, action, conflict = apply_structural_level_constraint(level, constraint)
     actions: list[dict[str, Any]] = []
-    final_level = level
-
-    if (
-        level == "难度1档"
-        and features.get("required_task_breadth")
-        in {"2-3个异质必要任务", "4个及以上异质必要任务", "多问递进任务链"}
-    ):
-        final_level = "难度2档"
+    if action != "maintained":
         actions.append({
-            "rule": "multiple_required_tasks_level_one_floor",
+            "rule": "structural_level_constraint",
             "from": level,
-            "to": final_level,
-            "evidence": [features.get("required_task_breadth")],
+            "to": guarded_level,
+            "action": action,
+            "rule_ids": constraint["rule_ids"],
+            "evidence": constraint["evidence"],
         })
-    elif (
-        level == "难度1档"
-        and features.get("calculation_model") == "常规化学计量"
-    ):
-        final_level = "难度2档"
-        actions.append({
-            "rule": "standard_stoichiometry_level_one_floor",
-            "from": level,
-            "to": final_level,
-            "evidence": ["常规化学计量"],
-        })
-    elif (
-        level == "难度1档"
-        and features.get("primary_problem_structure") == "概念辨析"
-        and features.get("knowledge_count") == "4个及以上"
-        and features.get("substance_relation") == "相互独立"
-    ):
-        final_level = "难度2档"
-        actions.append({
-            "rule": "independent_multi_concept_level_one_floor",
-            "from": level,
-            "to": final_level,
-            "evidence": ["概念辨析", "4个及以上独立知识点", "相互独立"],
-        })
-    elif (
-        level == "难度3档"
-        and 80 <= original_accuracy <= 83
-        and features.get("primary_problem_structure") == "概念辨析"
-        and features.get("step_count") == "1-2步"
-        and features.get("substance_relation") == "相互独立"
-        and features.get("process_structure") == "单阶段"
-        and features.get("representation_conversion") == "无转换"
-        and not high_names
-    ):
-        final_level = "难度2档"
-        actions.append({
-            "rule": "low_structure_independent_concept_recovery",
-            "from": level,
-            "to": final_level,
-            "evidence": ["1-2步", "相互独立", "无转换", "无高难结构"],
-        })
-    elif (
-        level == "难度2档"
-        and 85 <= original_accuracy < 88
-        and features.get("step_count") == "3-5步"
-        and features.get("substance_count") == "2-3种"
-        and features.get("substance_relation") == "同一反应体系"
-        and features.get("calculation_model") == "常规化学计量"
-    ):
-        final_level = "难度3档"
-        actions.append({
-            "rule": "standard_stoichiometry_chain_level_two_floor",
-            "from": level,
-            "to": final_level,
-            "evidence": ["3-5步", "同一反应体系", "常规化学计量"],
-        })
-    return final_level, actions
+    return guarded_level, actions
 
 
 def derive_accuracy_calibration_band(
@@ -1013,8 +1214,6 @@ def enrich_stage1_rating(
     distinct_points = list(dict.fromkeys(str(value).strip() for value in features["knowledge_points"]))
     features["knowledge_points"] = distinct_points
     features["knowledge_count"] = "1个" if len(distinct_points) == 1 else ("2-3个" if len(distinct_points) <= 3 else "4个及以上")
-    # 实验是任务形式与方法维度，不能仅因“内容模块+实验”
-    # 就把知识范围推导成跨模块综合。
     content_l1 = {
         value for value in features["knowledge_L1"] if value != "化学实验"
     }
@@ -1034,13 +1233,10 @@ def enrich_stage1_rating(
 
     model_raw_accuracy = raw_accuracy
     high = detect_high_difficulty_features(features)
-    raw_accuracy, calibration_band, score_normalization_actions = (
-        _normalize_raw_accuracy_for_calibration_band(
-            model_accuracy=model_raw_accuracy,
-            features=features,
-            high_names=high.names,
-        )
-    )
+    # V14: 连续分数和结构档位解耦，不进行 production calibration band clamp
+    calibration_band = derive_accuracy_calibration_band(features, high.names)
+    score_normalization_actions: list[dict[str, Any]] = []
+
     active = detect_active_features(features)
     high_count = len(high.names)
     enabled = (
@@ -1057,6 +1253,13 @@ def enrich_stage1_rating(
     multiplier_candidate = multiplier_policy["multiplier_candidate"]
     multiplier = multiplier_policy["multiplier_applied"]
     adjusted = multiplier_policy["adjusted_accuracy"]
+
+    score_derived_level = map_accuracy_to_level(adjusted)
+    structural_constraint = derive_structural_level_constraint(features, high.names)
+    guarded_level, constraint_action, constraint_conflict = apply_structural_level_constraint(
+        score_derived_level, structural_constraint
+    )
+
     rating["model_predicted_accuracy_raw"] = model_raw_accuracy
     rating["accuracy_calibration_band"] = calibration_band
     rating["score_normalization_actions"] = score_normalization_actions
@@ -1078,15 +1281,25 @@ def enrich_stage1_rating(
     ]
     rating["multiplier_applied"] = multiplier
     rating["predicted_accuracy"] = adjusted
-    raw_step1_level = map_accuracy_to_level(adjusted)
-    guarded_level, guard_actions = _apply_stage1_structural_level_guards(
-        level=raw_step1_level,
-        original_accuracy=raw_accuracy,
-        features=features,
-        high_names=high.names,
+
+    rating["difficulty_level_from_score"] = score_derived_level
+    rating["structural_level_constraint"] = structural_constraint
+    rating["structural_constraint_applied"] = (guarded_level != score_derived_level)
+    rating["structural_constraint_action"] = constraint_action
+    rating["difficulty_level_step1_before_structural_constraint"] = score_derived_level
+    rating["difficulty_level_step1_before_structural_guards"] = score_derived_level
+    rating["stage1_structural_guard_actions"] = (
+        [{
+            "rule": "structural_level_constraint",
+            "from": score_derived_level,
+            "to": guarded_level,
+            "action": constraint_action,
+            "rule_ids": structural_constraint["rule_ids"],
+            "evidence": structural_constraint["evidence"],
+        }]
+        if guarded_level != score_derived_level
+        else []
     )
-    rating["difficulty_level_step1_before_structural_guards"] = raw_step1_level
-    rating["stage1_structural_guard_actions"] = guard_actions
     rating["difficulty_level_step1"] = guarded_level
     rating["full_dependent_organic_route_detected"] = _is_full_dependent_organic_route(features)
     return rating
@@ -1148,7 +1361,7 @@ def recalculate_verification(
     verification: dict[str, Any],
     multiplier_enabled: bool | None = None,
 ) -> dict[str, Any]:
-    """应用二阶段的 feature 修正，再由程序重算高难特征、乘数和档位。"""
+    """应用二阶段的 feature 修正，再由程序重算高难特征、乘数、结构约束和档位。"""
     reviewed = copy.deepcopy(verification)
     corrected_features = copy.deepcopy(original_features)
     applied: list[dict[str, Any]] = []
@@ -1195,26 +1408,17 @@ def recalculate_verification(
     except (KeyError, TypeError, ValueError):
         model_reviewed_accuracy = float(original_accuracy)
     model_reviewed_accuracy = min(100.0, max(0.0, model_reviewed_accuracy))
+
     high = detect_high_difficulty_features(corrected_features)
     structural_revision_supported = bool(applied)
-    calibration_band = derive_accuracy_calibration_band(
+    reviewed_constraint = derive_structural_level_constraint(
         corrected_features, high.names
     )
-    score_outside_band = (
-        float(original_accuracy) < calibration_band["minimum"]
-        or float(original_accuracy) > calibration_band["maximum"]
-    )
-    score_calibration_supported = (
-        not structural_revision_supported
-        and reviewed.get("confidence") == "高"
-        and score_outside_band
-        and calibration_band["minimum"]
-        <= model_reviewed_accuracy
-        <= calibration_band["maximum"]
-    )
+
+    # V14 规则：无合法结构修正时，reviewed_accuracy 必须严格保持第一阶段原始值
     reviewed_accuracy = (
         model_reviewed_accuracy
-        if structural_revision_supported or score_calibration_supported
+        if structural_revision_supported
         else float(original_accuracy)
     )
     reviewed_count = len(high.names)
@@ -1234,31 +1438,22 @@ def recalculate_verification(
     multiplier_candidate = multiplier_policy["multiplier_candidate"]
     multiplier = multiplier_policy["multiplier_applied"]
     adjusted_accuracy = multiplier_policy["adjusted_accuracy"]
-    reviewed_level = map_accuracy_to_level(adjusted_accuracy)
+
+    score_derived_level = map_accuracy_to_level(adjusted_accuracy)
+    reviewed_level, constraint_action, constraint_conflict = apply_structural_level_constraint(
+        score_derived_level, reviewed_constraint
+    )
+
+    # 若无合法结构修正，复核档位严格维持当前档位
+    if not structural_revision_supported:
+        reviewed_level = current_level
+
     boundary = reviewed.get("adjacent_boundary_review") or {}
     boundary_verdict = boundary.get("verdict", "维持")
     current_index = LEVEL_INDEX[current_level]
     reviewed_index = LEVEL_INDEX[reviewed_level]
-    boundary_promotion_candidate = _chemistry_58_boundary_promotion_candidate(
-        current_level=current_level,
-        original_accuracy=reviewed_accuracy,
-        features=corrected_features,
-    )
-    structural_cluster_candidate, structural_cluster_signals = (
-        _chemistry_structural_cluster_promotion_candidate(
-            current_level=current_level,
-            original_accuracy=reviewed_accuracy,
-            features=corrected_features,
-        )
-    )
-    any_boundary_promotion_candidate = (
-        boundary_promotion_candidate or structural_cluster_candidate
-    )
-    if any_boundary_promotion_candidate and reviewed_index == current_index:
-        reviewed_direction = "应更难一档"
-        proposed_reasonableness = "偏低"
-        reviewed_target_level = "难度4档"
-    elif reviewed_index == current_index:
+
+    if reviewed_index == current_index:
         reviewed_direction = "维持"
         proposed_reasonableness = "合理"
         reviewed_target_level = reviewed_level
@@ -1270,14 +1465,12 @@ def recalculate_verification(
         reviewed_direction = "应更难一档"
         proposed_reasonableness = "偏低"
         reviewed_target_level = reviewed_level
+
     action_map = {
         "维持": "维持",
         "应更简单一档": "建议降一档",
         "应更难一档": "建议升一档",
     }
-    # 乘数由程序根据“修正后的合法 features”确定。若二阶段已提供并通过
-    # 校验的结构修正，计数或组合变化正是应重新计算乘数的原因，不能反过来
-    # 视为乘数不合理而阻断同一条合法改档链。
     multiplier_changed_after_supported_revision = (
         structural_revision_supported
         and (
@@ -1293,8 +1486,7 @@ def recalculate_verification(
         if isinstance(item, dict)
     )
     boundary_verdict_consistent = (
-        any_boundary_promotion_candidate
-        or boundary_verdict == reviewed_direction
+        boundary_verdict == reviewed_direction
     )
     blocks_two_to_one = (
         current_level == "难度2档"
@@ -1302,13 +1494,14 @@ def recalculate_verification(
     )
     auto_adjustment_eligible = (
         allow_auto_adjustment
-        and (structural_revision_supported or any_boundary_promotion_candidate)
+        and structural_revision_supported
         and reviewed.get("confidence") == "高"
         and reviewed_direction != "维持"
         and boundary_verdict_consistent
         and input_review.get("status") != "信息不足"
         and not unresolved_overlap
         and not blocks_two_to_one
+        and not constraint_conflict
     )
     reasonableness = (
         proposed_reasonableness if auto_adjustment_eligible else "合理"
@@ -1349,19 +1542,11 @@ def recalculate_verification(
             "reviewed_original_predicted_accuracy_model_raw": (
                 model_reviewed_accuracy
             ),
-            "score_calibration_band": calibration_band,
-            "score_calibration_supported": score_calibration_supported,
+            "reviewed_structural_level_constraint": reviewed_constraint,
             "reviewed_original_predicted_accuracy": reviewed_accuracy,
             "reviewed_predicted_accuracy": adjusted_accuracy,
             "reviewed_difficulty_level": reviewed_level,
             "reviewed_direction": reviewed_direction,
-            "chemistry_58_boundary_promotion_candidate": (
-                boundary_promotion_candidate
-            ),
-            "chemistry_structural_cluster_promotion_candidate": (
-                structural_cluster_candidate
-            ),
-            "chemistry_structural_cluster_signals": structural_cluster_signals,
             "auto_downgrade_two_to_one_blocked": blocks_two_to_one,
             "boundary_verdict_consistent": boundary_verdict_consistent,
             "auto_adjustment_eligible": auto_adjustment_eligible,

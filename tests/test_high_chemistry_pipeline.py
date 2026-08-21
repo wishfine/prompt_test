@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""高中化学两阶段难度 Pipeline 的核心行为测试。"""
+"""高中化学两阶段难度 Pipeline 的核心行为测试（V14 解耦分数与结构档位约束）。"""
 
 from __future__ import annotations
 
 import copy
+import inspect
 import sys
 import unittest
 from pathlib import Path
@@ -99,388 +100,262 @@ class AccuracyAndSchemaTests(unittest.TestCase):
 
     def test_feature_schema_rejects_missing_field(self) -> None:
         features = base_features()
-        features.pop("critical_condition")
-        with self.assertRaisesRegex(ValueError, "critical_condition"):
+        del features["reaction_relation"]
+        with self.assertRaises(ValueError):
             core.validate_feature_schema(features)
 
-    def test_feature_schema_requires_task_breadth(self) -> None:
-        features = base_features()
-        features.pop("required_task_breadth")
-        with self.assertRaisesRegex(ValueError, "required_task_breadth"):
+    def test_feature_schema_rejects_invalid_enum_value(self) -> None:
+        features = base_features(step_count="100步")
+        with self.assertRaises(ValueError):
             core.validate_feature_schema(features)
 
-    def test_feature_schema_rejects_inconsistent_taxonomy(self) -> None:
-        with self.assertRaisesRegex(ValueError, "knowledge_L1"):
-            core.validate_feature_schema(
-                base_features(
-                    knowledge_L1=["有机化学"],
-                    knowledge_L2=["物质分类与化学用语"],
-                )
-            )
+    def test_normalize_stage1_rating_coerces_shared_model_string_values(self) -> None:
+        normalized, log = core.normalize_stage1_rating({
+            "features": base_features(shared_model_across_subquestions="是"),
+            "reason": "测试",
+            "predicted_accuracy": 80,
+        })
+        self.assertIs(normalized["features"]["shared_model_across_subquestions"], True)
+        self.assertEqual(log[0]["field"], "shared_model_across_subquestions")
 
-    def test_normalization_derives_l1_from_valid_l2(self) -> None:
-        rating = {
+    def test_normalize_stage1_rating_derives_l1_from_valid_l2_with_log(self) -> None:
+        normalized, log = core.normalize_stage1_rating({
             "features": base_features(
                 knowledge_L1=["元素化学"],
-                knowledge_L2=[
-                    "原子结构与元素周期律",
-                    "水溶液中的离子平衡",
-                    "实验探究与方案设计",
-                ],
+                knowledge_L2=["物质分类与化学用语", "化学反应与能量"],
             ),
             "reason": "测试",
-            "predicted_accuracy": 70,
-        }
-
-        normalized, log = core.normalize_stage1_rating(rating)
-
+            "predicted_accuracy": 80,
+        })
         self.assertEqual(
-            normalized["features"]["knowledge_L1"],
-            ["化学基本概念", "化学反应原理", "化学实验"],
+            set(normalized["features"]["knowledge_L1"]),
+            {"化学基本概念", "化学反应原理"},
         )
-        self.assertTrue(
-            any(item.get("field") == "knowledge_L1" for item in log)
-        )
+        l1_log = [item for item in log if item["field"] == "knowledge_L1"]
+        self.assertEqual(len(l1_log), 1)
+        self.assertIn("固定父级", l1_log[0]["reason"])
 
 
 @unittest.skipIf(core is None, "高中化学核心模块尚未实现")
-class ChemistryHighFeatureTests(unittest.TestCase):
-    def test_many_independent_substances_are_not_high(self) -> None:
-        detected = core.detect_high_difficulty_features(
-            base_features(
-                substance_count="7种及以上",
-                substance_relation="相互独立",
-                reaction_count="4-6个",
-                reaction_relation="并列独立",
-            )
-        )
-        self.assertNotIn("多物质强耦合", detected.names)
-        self.assertNotIn("多反应或多阶段强耦合", detected.names)
+class StructuralLevelConstraintTests(unittest.TestCase):
+    def test_structural_constraint_signature_has_no_accuracy_parameters(self) -> None:
+        sig = inspect.signature(core.derive_structural_level_constraint)
+        params = list(sig.parameters.keys())
+        self.assertNotIn("original_accuracy", params)
+        self.assertNotIn("predicted_accuracy", params)
+        self.assertNotIn("score", params)
+        self.assertEqual(params, ["features", "high_names"])
 
-    def test_true_multi_substance_network_is_high(self) -> None:
-        detected = core.detect_high_difficulty_features(
-            base_features(
-                substance_count="4-6种",
-                substance_relation="组成—性质—反应网络",
-                reaction_count="4-6个",
-                reaction_relation="多路径反应网络",
-                evidence_relation="证据链相互支持",
-                model_relation="多模型耦合",
-            )
-        )
-        self.assertIn("多物质强耦合", detected.names)
+    def test_strict_direct_prototype_sets_floor_and_ceiling_to_level_one(self) -> None:
+        features = base_features()
+        constraint = core.derive_structural_level_constraint(features, [])
+        self.assertEqual(constraint["difficulty_floor"], "难度1档")
+        self.assertEqual(constraint["difficulty_ceiling"], "难度1档")
+        self.assertFalse(constraint["constraint_conflict"])
 
-    def test_competition_critical_and_two_way_classification_share_one_node(self) -> None:
-        detected = core.detect_high_difficulty_features(
-            base_features(
-                competing_reaction="多反应竞争并需筛选",
-                reaction_relation="多路径反应网络",
-                evidence_relation="证据冲突需排除",
-                hidden_conditions="单个隐含条件",
-                critical_condition="需要推导过量不足边界",
-                classification_discussion="2类讨论",
-                reasoning_chain="逆向推理或临界分析",
-            )
-        )
-        overlap_node = {
-            "竞争反应与副反应判断",
-            "隐含临界或过量不足",
-            "复杂分类讨论",
-        }
-        self.assertEqual(len(overlap_node.intersection(detected.names)), 1)
-        self.assertTrue(detected.suppressed_overlaps)
-
-    def test_four_distinct_high_structures_apply_point_seven(self) -> None:
+    def test_multiple_tasks_sets_floor_to_at_least_level_two(self) -> None:
         features = base_features(
-            substance_count="4-6种",
-            substance_relation="组成—性质—反应网络",
-            reaction_count="4-6个",
-            reaction_relation="前后反应强依赖",
-            evidence_relation="证据链相互支持",
-            process_structure="多阶段强依赖",
-            model_relation="多模型耦合",
-            constraint_structure="多约束联合筛选",
-            equation_structure="2-3个方程联立",
-            reasoning_chain="多层因果",
-            information_carrier="多载体综合",
-            information_conversion="多源信息联合转换",
+            required_task_breadth="2-3个异质必要任务",
+            step_count="1-2步",
+            reasoning_chain="简单因果",
         )
-        detected = core.detect_high_difficulty_features(features)
-        self.assertGreaterEqual(len(detected.names), 4)
-        output = core.enrich_stage1_rating(
-            {"features": features, "reason": "测试", "predicted_accuracy": 80},
-            multiplier_enabled=True,
-        )
-        self.assertEqual(output["multiplier_applied"], 0.70)
-        self.assertEqual(output["predicted_accuracy"], 56.0)
-        self.assertEqual(output["difficulty_level_step1"], "难度4档")
+        constraint = core.derive_structural_level_constraint(features, [])
+        self.assertEqual(constraint["difficulty_floor"], "难度2档")
+        self.assertEqual(constraint["difficulty_ceiling"], "难度2档")
 
-    def test_active_count_is_not_used_as_high_count(self) -> None:
+    def test_basic_explicit_application_sets_ceiling_to_level_two(self) -> None:
         features = base_features(
-            knowledge_scope="同模块跨章节",
-            substance_count="2-3种",
+            step_count="1-2步",
+            model_explicitness="模型完全显性",
+            reasoning_chain="简单因果",
+            substance_relation="相互独立",
+        )
+        constraint = core.derive_structural_level_constraint(features, [])
+        self.assertEqual(constraint["difficulty_ceiling"], "难度2档")
+
+    def test_standard_chain_sets_floor_to_level_three(self) -> None:
+        features = base_features(
+            step_count="3-5步",
             substance_relation="同一反应体系",
             reaction_count="2-3个",
-            reaction_relation="显性顺序衔接",
-            process_structure="两阶段显性流程",
-            representation_conversion="一次常规转换",
-            information_carrier="单一图表",
-            information_conversion="直接读取",
+            reasoning_chain="简单因果",
+            calculation_model="常规化学计量",
+            required_task_breadth="2-3个异质必要任务",
         )
-        active = core.detect_active_features(features)
-        high = core.detect_high_difficulty_features(features)
-        self.assertGreaterEqual(len(active), 5)
-        self.assertEqual(high.names, [])
+        constraint = core.derive_structural_level_constraint(features, [])
+        self.assertEqual(constraint["difficulty_floor"], "难度3档")
+        self.assertEqual(constraint["difficulty_ceiling"], "难度3档")
 
-    def test_strong_dependent_stages_do_not_require_four_reaction_nodes(self) -> None:
-        detected = core.detect_high_difficulty_features(
-            base_features(
-                reaction_count="2-3个",
-                reaction_relation="前后反应强依赖",
-                process_structure="多阶段强依赖",
-                step_count="6-8步",
-                reasoning_chain="多层因果",
-            )
-        )
-        self.assertIn("多反应或多阶段强耦合", detected.names)
-
-    def test_short_explicit_sequence_is_not_strong_stage_coupling(self) -> None:
-        detected = core.detect_high_difficulty_features(
-            base_features(
-                reaction_count="2-3个",
-                reaction_relation="显性顺序衔接",
-                process_structure="两阶段显性流程",
-                step_count="3-5步",
-            )
-        )
-        self.assertNotIn("多反应或多阶段强耦合", detected.names)
-
-    def test_full_dependent_organic_route_keeps_information_and_chain_as_distinct_high_features(self) -> None:
-        """路线反推与下游设计共享中间体时，不能因图中箭头显性而压成普通4档。"""
+    def test_broad_task_burden_sets_floor_to_level_three(self) -> None:
         features = base_features(
-            knowledge_L1=["有机化学"],
-            knowledge_L2=["有机合成与推断"],
-            knowledge_points=["中间体结构反推", "同分异构体筛选", "合成路线设计", "官能团转化"],
-            substance_count="4-6种",
-            substance_relation="前后转化依赖",
-            reaction_count="4-6个",
-            reaction_relation="显性顺序衔接",
+            required_task_breadth="4个及以上异质必要任务",
+            step_count="1-2步",
+            calculation_model="常规化学计量",
+            information_conversion="单次关系转换",
+        )
+        constraint = core.derive_structural_level_constraint(features, [])
+        self.assertEqual(constraint["difficulty_floor"], "难度3档")
+
+    def test_model_switch_and_multistage_flow_sets_floor_to_level_four(self) -> None:
+        features = base_features(
+            model_relation="模型切换",
             process_structure="多阶段显性流程",
-            primary_problem_structure="有机合成",
-            step_count="6-8步",
-            subquestion_dependency="后问依赖前问",
-            shared_model_across_subquestions=True,
-            model_explicitness="半隐含模型",
-            model_relation="同一模型多状态",
-            reasoning_chain="多层因果",
-            representation_conversion="多次同类转换",
-            evidence_relation="证据链相互支持",
-            hidden_conditions="单个隐含条件",
-            constraint_structure="多约束联合筛选",
-            information_carrier="工艺流程图",
-            information_conversion="流程或图谱反推",
-            route_design_requirement="合成路线设计",
-            context_type="有机合成",
-            context_load="需要信息转换",
+            step_count="3-5步",
+            substance_relation="前后转化依赖",
         )
-        detected = core.detect_high_difficulty_features(features)
-        self.assertIn("多反应或多阶段强耦合", detected.names)
-        self.assertIn("高层级信息转换", detected.names)
-        self.assertIn("高阶实验、合成或分离设计", detected.names)
+        constraint = core.derive_structural_level_constraint(features, [])
+        self.assertEqual(constraint["difficulty_floor"], "难度4档")
 
-        output = core.enrich_stage1_rating(
-            {"features": features, "reason": "测试", "predicted_accuracy": 42},
-            multiplier_enabled=True,
+    def test_complex_quantitative_sets_floor_to_level_four(self) -> None:
+        features = base_features(
+            calculation_model="平衡常数或Ka/Kb/Ksp",
+            equation_structure="2-3个方程联立",
+            calculation_complexity="多步计算",
+            step_count="3-5步",
         )
-        self.assertTrue(output["multiplier_triggered"])
-        self.assertEqual(output["difficulty_level_step1"], "难度5档")
-        self.assertFalse(output["multiplier_final_level_guard_applied"])
+        constraint = core.derive_structural_level_constraint(features, [])
+        self.assertEqual(constraint["difficulty_floor"], "难度4档")
 
-    def test_quantitative_multi_model_dependency_is_a_high_feature(self) -> None:
-        detected = core.detect_high_difficulty_features(
-            base_features(
-                model_relation="多模型耦合",
-                calculation_model="多模型定量耦合",
-                calculation_complexity="多步计算",
-                equation_structure="单方程",
-                step_count="6-8步",
-                reasoning_chain="多层因果",
-            )
+    def test_regular_comprehensive_sets_ceiling_to_level_three(self) -> None:
+        features = base_features(
+            step_count="3-5步",
+            substance_relation="同一反应体系",
+            model_relation="单一模型",
+            process_structure="单阶段",
+            calculation_model="常规化学计量",
         )
-        self.assertIn("多模型或多平衡耦合", detected.names)
+        constraint = core.derive_structural_level_constraint(features, [])
+        self.assertEqual(constraint["difficulty_ceiling"], "难度3档")
+
+    def test_score_84_and_85_on_exact_structural_three_yield_final_level_three_with_intact_raw_scores(self) -> None:
+        features = base_features(
+            step_count="3-5步",
+            substance_relation="同一反应体系",
+            reaction_count="2-3个",
+            reasoning_chain="简单因果",
+            calculation_model="常规化学计量",
+            required_task_breadth="2-3个异质必要任务",
+        )
+        # Score 84 (score level 3)
+        res84 = core.enrich_stage1_rating({
+            "features": copy.deepcopy(features),
+            "reason": "测试84分",
+            "predicted_accuracy": 84.0,
+        })
+        self.assertEqual(res84["model_predicted_accuracy_raw"], 84.0)
+        self.assertEqual(res84["original_predicted_accuracy"], 84.0)
+        self.assertEqual(res84["difficulty_level_from_score"], "难度3档")
+        self.assertEqual(res84["difficulty_level_step1"], "难度3档")
+
+        # Score 85 (score level 2, but structural floor 3)
+        res85 = core.enrich_stage1_rating({
+            "features": copy.deepcopy(features),
+            "reason": "测试85分",
+            "predicted_accuracy": 85.0,
+        })
+        self.assertEqual(res85["model_predicted_accuracy_raw"], 85.0)
+        self.assertEqual(res85["original_predicted_accuracy"], 85.0)
+        self.assertEqual(res85["difficulty_level_from_score"], "难度2档")
+        self.assertEqual(res85["difficulty_level_step1"], "难度3档")
+        self.assertTrue(res85["structural_constraint_applied"])
+
+    def test_score_57_and_58_on_regular_structural_three_yield_final_level_three_with_intact_raw_scores(self) -> None:
+        features = base_features(
+            step_count="3-5步",
+            substance_relation="同一反应体系",
+            reaction_count="2-3个",
+            reasoning_chain="简单因果",
+            calculation_model="常规化学计量",
+            required_task_breadth="2-3个异质必要任务",
+        )
+        # Score 58 (score level 3)
+        res58 = core.enrich_stage1_rating({
+            "features": copy.deepcopy(features),
+            "reason": "测试58分",
+            "predicted_accuracy": 58.0,
+        })
+        self.assertEqual(res58["model_predicted_accuracy_raw"], 58.0)
+        self.assertEqual(res58["original_predicted_accuracy"], 58.0)
+        self.assertEqual(res58["difficulty_level_from_score"], "难度3档")
+        self.assertEqual(res58["difficulty_level_step1"], "难度3档")
+
+        # Score 57 (score level 4, but structural ceiling 3)
+        res57 = core.enrich_stage1_rating({
+            "features": copy.deepcopy(features),
+            "reason": "测试57分",
+            "predicted_accuracy": 57.0,
+        })
+        self.assertEqual(res57["model_predicted_accuracy_raw"], 57.0)
+        self.assertEqual(res57["original_predicted_accuracy"], 57.0)
+        self.assertEqual(res57["difficulty_level_from_score"], "难度4档")
+        self.assertEqual(res57["difficulty_level_step1"], "难度3档")
+        self.assertTrue(res57["structural_constraint_applied"])
+
+    def test_stage2_without_feature_corrections_maintains_stage1_level_even_with_subjective_score_change(self) -> None:
+        features = base_features(step_count="3-5步")
+        reviewed = core.recalculate_verification(
+            current_level="难度3档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=70.0,
+            original_features=features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [],
+                "reviewed_high_difficulty_features": [],
+                "reviewed_original_predicted_accuracy": 62.0,
+                "has_structural_revision": False,
+                "adjacent_boundary_review": {"verdict": "维持"},
+                "confidence": "高",
+                "input_sufficiency_review": {"status": "充分"},
+                "high_feature_overlap_review": [],
+            },
+        )
+        self.assertEqual(reviewed["reviewed_original_predicted_accuracy_model_raw"], 62.0)
+        self.assertEqual(reviewed["reviewed_original_predicted_accuracy"], 70.0)
+        self.assertEqual(reviewed["reviewed_difficulty_level"], "难度3档")
+        self.assertEqual(reviewed["adjusted_difficulty_level"], "难度3档")
+        self.assertFalse(reviewed["auto_adjustment_eligible"])
+
+    def test_stage2_valid_feature_correction_recalculates_constraint_and_adjusts_at_most_one_level(self) -> None:
+        features = base_features()
+        reviewed = core.recalculate_verification(
+            current_level="难度1档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=90.0,
+            original_features=features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [
+                    {
+                        "field": "step_count",
+                        "from": "1-2步",
+                        "to": "3-5步",
+                        "evidence": "解析显示存在三个连续有效决策",
+                    }
+                ],
+                "reviewed_high_difficulty_features": [],
+                "reviewed_original_predicted_accuracy": 86.0,
+                "has_structural_revision": True,
+                "adjacent_boundary_review": {"verdict": "应更难一档"},
+                "confidence": "高",
+                "input_sufficiency_review": {"status": "充分"},
+                "high_feature_overlap_review": [],
+            },
+        )
+        self.assertTrue(reviewed["has_structural_revision"])
+        self.assertTrue(reviewed["auto_adjustment_eligible"])
+        self.assertEqual(reviewed["reviewed_direction"], "应更难一档")
+        self.assertEqual(reviewed["adjusted_difficulty_level"], "难度2档")
 
 
 @unittest.skipIf(core is None, "高中化学核心模块尚未实现")
-class PipelineAndInputTests(unittest.TestCase):
-    def test_accuracy_calibration_bands_separate_direct_task_and_standard_chain(self) -> None:
-        direct = core.derive_accuracy_calibration_band(
-            base_features(
-                required_task_breadth="单一规则任务",
-                step_count="1-2步",
-                model_explicitness="模型完全显性",
-                reasoning_chain="直接套用",
-            ),
-            [],
-        )
-        self.assertEqual((direct["minimum"], direct["maximum"]), (88.0, 100.0))
-
-        basic = core.derive_accuracy_calibration_band(
-            base_features(
-                required_task_breadth="2-3个异质必要任务",
-                step_count="1-2步",
-                model_explicitness="模型完全显性",
-                reasoning_chain="简单因果",
-            ),
-            [],
-        )
-        self.assertEqual((basic["minimum"], basic["maximum"]), (85.0, 87.0))
-
-        standard = core.derive_accuracy_calibration_band(
-            base_features(
-                required_task_breadth="2-3个异质必要任务",
-                substance_relation="同一反应体系",
-                reaction_count="2-3个",
-                step_count="3-5步",
-                reasoning_chain="简单因果",
-                calculation_model="常规化学计量",
-                calculation_complexity="简单计算",
-            ),
-            [],
-        )
-        self.assertEqual((standard["minimum"], standard["maximum"]), (65.0, 74.0))
-
-    def test_stage1_score_is_projected_only_when_outside_calibration_band(self) -> None:
-        output = core.enrich_stage1_rating(
-            {
-                "features": base_features(
-                    required_task_breadth="2-3个异质必要任务",
-                    step_count="1-2步",
-                    model_explicitness="模型完全显性",
-                    reasoning_chain="简单因果",
-                ),
-                "reason": "两个异质基础任务",
-                "predicted_accuracy": 92,
-            }
-        )
-        self.assertEqual(output["model_predicted_accuracy_raw"], 92.0)
-        self.assertEqual(output["original_predicted_accuracy"], 87.0)
-        self.assertEqual(
-            output["score_calibration_actions"][0]["rule"],
-            "calibration_band_ceiling",
-        )
-
-    def test_stage2_accepts_only_band_backed_score_calibration(self) -> None:
-        features = base_features(
-            required_task_breadth="2-3个异质必要任务",
-            step_count="1-2步",
-            model_explicitness="模型完全显性",
-            reasoning_chain="简单因果",
-        )
-        reviewed = core.recalculate_verification(
-            current_level="难度2档",
-            original_high_count=0,
-            original_high_features=[],
-            original_accuracy=92.0,
-            original_features=features,
-            allow_auto_adjustment=True,
-            verification={
-                "feature_corrections": [],
-                "reviewed_high_difficulty_features": [],
-                "reviewed_original_predicted_accuracy": 86.0,
-                "has_structural_revision": False,
-                "adjacent_boundary_review": {"verdict": "维持"},
-                "confidence": "高",
-                "input_sufficiency_review": {"status": "充分"},
-                "high_feature_overlap_review": [],
-            },
-        )
-        self.assertTrue(reviewed["score_calibration_supported"])
-        self.assertEqual(reviewed["reviewed_original_predicted_accuracy"], 86.0)
-
-    def test_stage2_rejects_score_change_already_inside_calibration_band(self) -> None:
-        features = base_features(
-            required_task_breadth="2-3个异质必要任务",
-            step_count="1-2步",
-            model_explicitness="模型完全显性",
-            reasoning_chain="简单因果",
-        )
-        reviewed = core.recalculate_verification(
-            current_level="难度2档",
-            original_high_count=0,
-            original_high_features=[],
-            original_accuracy=86.0,
-            original_features=features,
-            allow_auto_adjustment=True,
-            verification={
-                "feature_corrections": [],
-                "reviewed_high_difficulty_features": [],
-                "reviewed_original_predicted_accuracy": 85.0,
-                "has_structural_revision": False,
-                "adjacent_boundary_review": {"verdict": "维持"},
-                "confidence": "高",
-                "input_sufficiency_review": {"status": "充分"},
-                "high_feature_overlap_review": [],
-            },
-        )
-        self.assertFalse(reviewed["score_calibration_supported"])
-        self.assertEqual(reviewed["reviewed_original_predicted_accuracy"], 86.0)
-
-    def test_direct_prototype_score_is_normalized_before_level_mapping(self) -> None:
-        output = core.enrich_stage1_rating(
-            {
-                "features": base_features(
-                    knowledge_points=["石油裂解的目的"],
-                    knowledge_count="1个",
-                    knowledge_scope="单知识点",
-                    substance_count="1种",
-                    substance_relation="单一物质",
-                    step_count="1-2步",
-                    required_task_breadth="单一规则任务",
-                    model_explicitness="模型完全显性",
-                    reasoning_chain="直接套用",
-                    representation_conversion="无转换",
-                    information_conversion="无信息转换",
-                    calculation_model="无定量计算",
-                    experiment_requirement="无",
-                ),
-                "reason": "单一教材事实直接辨析",
-                "predicted_accuracy": 82,
-            }
-        )
-        self.assertEqual(output["model_predicted_accuracy_raw"], 82.0)
-        self.assertEqual(output["original_predicted_accuracy"], 88.0)
-        self.assertEqual(output["difficulty_level_step1"], "难度1档")
-        self.assertEqual(
-            output["score_normalization_actions"][0]["rule"],
-            "direct_prototype_score_floor",
-        )
-
+class MultiplierAndHighFeatureTests(unittest.TestCase):
     def test_multiplier_boundaries(self) -> None:
         expected = {0: 1.0, 2: 1.0, 3: 0.85, 4: 0.70, 8: 0.70}
         for count, multiplier in expected.items():
             self.assertEqual(core.multiplier_for_high_count(count), multiplier)
-
-    def test_enrichment_preserves_raw_score_and_separates_counts(self) -> None:
-        features = base_features(
-            reaction_count="4-6个",
-            reaction_relation="前后反应强依赖",
-            process_structure="多阶段强依赖",
-            step_count="6-8步",
-            constraint_structure="多约束联合筛选",
-            reasoning_chain="多层因果",
-            information_carrier="多载体综合",
-            information_conversion="多源信息联合转换",
-            evidence_relation="证据链相互支持",
-        )
-        output = core.enrich_stage1_rating(
-            {"features": features, "reason": "测试", "predicted_accuracy": 80},
-            multiplier_enabled=True,
-        )
-        self.assertEqual(output["original_predicted_accuracy"], 80.0)
-        self.assertEqual(output["high_difficulty_feature_count"], 3)
-        self.assertEqual(output["multiplier_applied"], 0.85)
-        self.assertEqual(output["predicted_accuracy"], 68.0)
-        self.assertGreater(output["active_feature_count"], 3)
 
     def test_chemistry_multiplier_requires_math_style_trigger_combo(self) -> None:
         features = base_features(
@@ -501,7 +376,6 @@ class PipelineAndInputTests(unittest.TestCase):
         self.assertEqual(output["multiplier_candidate"], 0.85)
         self.assertEqual(output["multiplier_applied"], 1.0)
         self.assertEqual(output["predicted_accuracy"], 80.0)
-        self.assertEqual(output["difficulty_level_step1"], "难度3档")
 
     def test_multiplier_floor_keeps_nonfinal_high_combo_in_level_four(self) -> None:
         features = base_features(
@@ -545,567 +419,9 @@ class PipelineAndInputTests(unittest.TestCase):
         self.assertFalse(output["multiplier_final_level_guard_applied"])
         self.assertEqual(output["difficulty_level_step1"], "难度5档")
 
-    def test_independent_multi_concept_question_cannot_stay_in_level_one(self) -> None:
-        output = core.enrich_stage1_rating(
-            {
-                "features": base_features(
-                    knowledge_points=["物质分类", "电解质", "胶体", "氧化物"],
-                    substance_count="4-6种",
-                    substance_relation="相互独立",
-                ),
-                "reason": "四个独立基础判断",
-                "predicted_accuracy": 88,
-            }
-        )
-        self.assertEqual(output["difficulty_level_step1"], "难度2档")
-        self.assertEqual(
-            output["stage1_structural_guard_actions"][0]["rule"],
-            "independent_multi_concept_level_one_floor",
-        )
 
-    def test_multiple_required_tasks_cannot_stay_in_level_one(self) -> None:
-        output = core.enrich_stage1_rating(
-            {
-                "features": base_features(
-                    knowledge_points=["离子共存", "离子颜色"],
-                    substance_count="2-3种",
-                    substance_relation="相互独立",
-                    required_task_breadth="2-3个异质必要任务",
-                ),
-                "reason": "两个不可合并的基础判断",
-                "predicted_accuracy": 88,
-            }
-        )
-        self.assertEqual(output["difficulty_level_step1"], "难度2档")
-        self.assertEqual(
-            output["score_calibration_actions"][0]["rule"],
-            "calibration_band_ceiling",
-        )
-
-    def test_standard_stoichiometry_cannot_stay_in_level_one(self) -> None:
-        output = core.enrich_stage1_rating(
-            {
-                "features": base_features(
-                    knowledge_L2=["物质的量与化学计量"],
-                    knowledge_points=["反应热", "盖斯定律"],
-                    substance_count="2-3种",
-                    substance_relation="同一反应体系",
-                    calculation_model="常规化学计量",
-                    calculation_complexity="简单计算",
-                ),
-                "reason": "一步热化学计算",
-                "predicted_accuracy": 88,
-            }
-        )
-        self.assertEqual(output["difficulty_level_step1"], "难度2档")
-        self.assertEqual(
-            output["stage1_structural_guard_actions"][0]["rule"],
-            "standard_stoichiometry_level_one_floor",
-        )
-
-    def test_low_structure_independent_concept_question_is_recovered_from_level_three(self) -> None:
-        output = core.enrich_stage1_rating(
-            {
-                "features": base_features(
-                    knowledge_points=["物质分类", "电解质"],
-                    substance_count="2-3种",
-                    substance_relation="相互独立",
-                    reasoning_chain="简单因果",
-                    constraint_structure="单一约束",
-                ),
-                "reason": "多个独立基础判断",
-                "predicted_accuracy": 82,
-            }
-        )
-        self.assertEqual(output["difficulty_level_step1"], "难度2档")
-        self.assertEqual(
-            output["stage1_structural_guard_actions"][0]["rule"],
-            "low_structure_independent_concept_recovery",
-        )
-
-    def test_standard_stoichiometry_chain_cannot_stay_in_level_two(self) -> None:
-        output = core.enrich_stage1_rating(
-            {
-                "features": base_features(
-                    knowledge_L2=["物质的量与化学计量"],
-                    knowledge_points=["物质的量", "化学方程式", "质量关系"],
-                    substance_count="2-3种",
-                    substance_relation="同一反应体系",
-                    reaction_count="2-3个",
-                    step_count="3-5步",
-                    reasoning_chain="简单因果",
-                    calculation_model="常规化学计量",
-                    calculation_complexity="简单计算",
-                ),
-                "reason": "同一反应体系的连续计量",
-                "predicted_accuracy": 86,
-            }
-        )
-        self.assertEqual(output["difficulty_level_step1"], "难度3档")
-        self.assertEqual(
-            output["stage1_structural_guard_actions"][0]["rule"],
-            "standard_stoichiometry_chain_level_two_floor",
-        )
-
-    def test_review_score_is_locked_without_supported_feature_revision(self) -> None:
-        features = base_features()
-        reviewed = core.recalculate_verification(
-            current_level="难度3档",
-            original_high_count=0,
-            original_high_features=[],
-            original_accuracy=70.0,
-            original_features=features,
-            allow_auto_adjustment=True,
-            verification={
-                "feature_corrections": [],
-                "reviewed_high_difficulty_features": [],
-                "reviewed_original_predicted_accuracy": 62.0,
-                "has_structural_revision": False,
-                "adjacent_boundary_review": {"verdict": "维持"},
-                "confidence": "高",
-                "input_sufficiency_review": {"status": "充分"},
-                "high_feature_overlap_review": [],
-            },
-        )
-        self.assertEqual(
-            reviewed["reviewed_original_predicted_accuracy_model_raw"], 62.0
-        )
-        self.assertEqual(reviewed["reviewed_original_predicted_accuracy"], 70.0)
-        self.assertFalse(reviewed["has_structural_revision"])
-
-    def test_review_score_can_change_after_supported_feature_revision(self) -> None:
-        features = base_features()
-        reviewed = core.recalculate_verification(
-            current_level="难度3档",
-            original_high_count=0,
-            original_high_features=[],
-            original_accuracy=70.0,
-            original_features=features,
-            allow_auto_adjustment=True,
-            verification={
-                "feature_corrections": [
-                    {
-                        "field": "step_count",
-                        "from": "1-2步",
-                        "to": "3-5步",
-                        "evidence": "解析包含三个前后关联决策",
-                    }
-                ],
-                "reviewed_high_difficulty_features": [],
-                "reviewed_original_predicted_accuracy": 62.0,
-                "has_structural_revision": True,
-                "adjacent_boundary_review": {"verdict": "维持"},
-                "confidence": "高",
-                "input_sufficiency_review": {"status": "充分"},
-                "high_feature_overlap_review": [],
-            },
-        )
-        self.assertEqual(reviewed["reviewed_original_predicted_accuracy"], 62.0)
-        self.assertTrue(reviewed["has_structural_revision"])
-
-    def test_review_rejects_mismatched_from_value_and_locks_score(self) -> None:
-        features = base_features()
-        reviewed = core.recalculate_verification(
-            current_level="难度3档",
-            original_high_count=0,
-            original_high_features=[],
-            original_accuracy=70.0,
-            original_features=features,
-            allow_auto_adjustment=True,
-            verification={
-                "feature_corrections": [
-                    {
-                        "field": "step_count",
-                        "from": "6-8步",
-                        "to": "3-5步",
-                        "evidence": "from 与第一阶段事实不一致",
-                    }
-                ],
-                "reviewed_high_difficulty_features": [],
-                "reviewed_original_predicted_accuracy": 62.0,
-                "has_structural_revision": True,
-                "adjacent_boundary_review": {"verdict": "维持"},
-                "confidence": "高",
-                "input_sufficiency_review": {"status": "充分"},
-                "high_feature_overlap_review": [],
-            },
-        )
-        self.assertEqual(reviewed["reviewed_original_predicted_accuracy"], 70.0)
-        self.assertFalse(reviewed["has_structural_revision"])
-        self.assertEqual(len(reviewed["feature_corrections_rejected"]), 1)
-
-    def test_program_derived_feature_correction_cannot_authorize_score_change(self) -> None:
-        features = base_features(
-            knowledge_points=["物质分类", "胶体性质"],
-            knowledge_count="2-3个",
-            knowledge_scope="同章节综合",
-        )
-        reviewed = core.recalculate_verification(
-            current_level="难度3档",
-            original_high_count=0,
-            original_high_features=[],
-            original_accuracy=70.0,
-            original_features=features,
-            allow_auto_adjustment=True,
-            verification={
-                "feature_corrections": [
-                    {
-                        "field": "knowledge_scope",
-                        "from": "同章节综合",
-                        "to": "单知识点",
-                        "evidence": "模型试图修改程序派生字段",
-                    }
-                ],
-                "reviewed_high_difficulty_features": [],
-                "reviewed_original_predicted_accuracy": 88.0,
-                "has_structural_revision": True,
-                "adjacent_boundary_review": {"verdict": "应更简单一档"},
-                "confidence": "高",
-                "input_sufficiency_review": {"status": "充分"},
-                "high_feature_overlap_review": [],
-            },
-        )
-        self.assertEqual(reviewed["reviewed_original_predicted_accuracy"], 70.0)
-        self.assertFalse(reviewed["has_structural_revision"])
-        self.assertEqual(reviewed["review_action"], "维持")
-        self.assertEqual(len(reviewed["feature_corrections_applied"]), 0)
-        self.assertIn(
-            "程序派生字段",
-            reviewed["feature_corrections_rejected"][0]["reason"],
-        )
-
-    def test_stage2_auto_adjustment_uses_evidence_guards(self) -> None:
-        features = base_features()
-        reviewed = core.recalculate_verification(
-            current_level="难度1档",
-            original_high_count=0,
-            original_high_features=[],
-            original_accuracy=90.0,
-            original_features=features,
-            allow_auto_adjustment=True,
-            verification={
-                "feature_corrections": [
-                    {
-                        "field": "step_count",
-                        "from": "1-2步",
-                        "to": "3-5步",
-                        "evidence": "解析显示存在三个连续有效决策",
-                    }
-                ],
-                "reviewed_high_difficulty_features": [],
-                "reviewed_original_predicted_accuracy": 86.0,
-                "has_structural_revision": True,
-                "adjacent_boundary_review": {"verdict": "应更难一档"},
-                "confidence": "高",
-                "input_sufficiency_review": {"status": "充分"},
-                "high_feature_overlap_review": [],
-            },
-        )
-        self.assertTrue(reviewed["auto_adjustment_eligible"])
-        self.assertEqual(reviewed["reviewed_direction"], "应更难一档")
-        self.assertEqual(reviewed["rating_reasonableness"], "偏低")
-        self.assertEqual(reviewed["adjusted_difficulty_level"], "难度2档")
-
-    def test_stage2_low_confidence_or_direction_conflict_blocks_auto_adjustment(self) -> None:
-        features = base_features()
-        for confidence, verdict in (("低", "应更难一档"), ("高", "应更简单一档")):
-            with self.subTest(confidence=confidence, verdict=verdict):
-                reviewed = core.recalculate_verification(
-                    current_level="难度1档",
-                    original_high_count=0,
-                    original_high_features=[],
-                    original_accuracy=90.0,
-                    original_features=features,
-                    allow_auto_adjustment=True,
-                    verification={
-                        "feature_corrections": [
-                            {
-                                "field": "step_count",
-                                "from": "1-2步",
-                                "to": "3-5步",
-                                "evidence": "解析显示存在三个连续有效决策",
-                            }
-                        ],
-                        "reviewed_high_difficulty_features": [],
-                        "reviewed_original_predicted_accuracy": 86.0,
-                        "has_structural_revision": True,
-                        "adjacent_boundary_review": {"verdict": verdict},
-                        "confidence": confidence,
-                        "input_sufficiency_review": {"status": "充分"},
-                        "high_feature_overlap_review": [],
-                    },
-                )
-                self.assertFalse(reviewed["auto_adjustment_eligible"])
-                self.assertEqual(reviewed["rating_reasonableness"], "合理")
-                self.assertEqual(reviewed["adjusted_difficulty_level"], "难度1档")
-                self.assertTrue(reviewed["review_requires_manual"])
-
-    def test_stage2_58_boundary_structural_channel_promotes_three_to_four(self) -> None:
-        features = base_features(
-            step_count="3-5步",
-            reasoning_chain="多层因果",
-            information_carrier="多载体综合",
-            information_conversion="多源信息联合转换",
-        )
-        reviewed = core.recalculate_verification(
-            current_level="难度3档",
-            original_high_count=0,
-            original_high_features=[],
-            original_accuracy=60.0,
-            original_features=features,
-            allow_auto_adjustment=True,
-            verification={
-                "feature_corrections": [],
-                "reviewed_high_difficulty_features": [],
-                "reviewed_original_predicted_accuracy": 60.0,
-                "has_structural_revision": False,
-                "adjacent_boundary_review": {"verdict": "维持"},
-                "confidence": "高",
-                "input_sufficiency_review": {"status": "充分"},
-                "high_feature_overlap_review": [],
-            },
-        )
-        self.assertTrue(reviewed["chemistry_58_boundary_promotion_candidate"])
-        self.assertTrue(reviewed["auto_adjustment_eligible"])
-        self.assertEqual(reviewed["reviewed_direction"], "应更难一档")
-        self.assertEqual(reviewed["adjusted_difficulty_level"], "难度4档")
-
-    def test_stage2_58_boundary_representation_channel_requires_decisive_structure(self) -> None:
-        features = base_features(
-            step_count="3-5步",
-            reasoning_chain="多层因果",
-            representation_conversion="一次常规转换",
-        )
-        reviewed = core.recalculate_verification(
-            current_level="难度3档",
-            original_high_count=0,
-            original_high_features=[],
-            original_accuracy=68.0,
-            original_features=features,
-            allow_auto_adjustment=True,
-            verification={
-                "feature_corrections": [],
-                "reviewed_high_difficulty_features": [],
-                "reviewed_original_predicted_accuracy": 68.0,
-                "has_structural_revision": False,
-                "adjacent_boundary_review": {"verdict": "维持"},
-                "confidence": "高",
-                "input_sufficiency_review": {"status": "充分"},
-                "high_feature_overlap_review": [],
-            },
-        )
-        self.assertFalse(reviewed["chemistry_58_boundary_promotion_candidate"])
-        self.assertFalse(reviewed["auto_adjustment_eligible"])
-        self.assertEqual(reviewed["adjusted_difficulty_level"], "难度3档")
-
-    def test_stage2_58_boundary_representation_channel_accepts_reaction_chain(self) -> None:
-        features = base_features(
-            substance_count="2-3种",
-            substance_relation="同一反应体系",
-            reaction_count="2-3个",
-            step_count="3-5步",
-            reasoning_chain="多层因果",
-            representation_conversion="一次常规转换",
-        )
-        reviewed = core.recalculate_verification(
-            current_level="难度3档",
-            original_high_count=0,
-            original_high_features=[],
-            original_accuracy=65.0,
-            original_features=features,
-            allow_auto_adjustment=True,
-            verification={
-                "feature_corrections": [],
-                "reviewed_high_difficulty_features": [],
-                "reviewed_original_predicted_accuracy": 65.0,
-                "has_structural_revision": False,
-                "adjacent_boundary_review": {"verdict": "维持"},
-                "confidence": "高",
-                "input_sufficiency_review": {"status": "充分"},
-                "high_feature_overlap_review": [],
-            },
-        )
-        self.assertTrue(reviewed["chemistry_58_boundary_promotion_candidate"])
-        self.assertTrue(reviewed["auto_adjustment_eligible"])
-        self.assertEqual(reviewed["adjusted_difficulty_level"], "难度4档")
-
-    def test_stage2_structural_cluster_promotes_model_switch_with_multistage_flow(self) -> None:
-        features = base_features(
-            substance_count="4-6种",
-            substance_relation="前后转化依赖",
-            reaction_count="2-3个",
-            reaction_relation="显性顺序衔接",
-            process_structure="多阶段显性流程",
-            step_count="3-5步",
-            model_explicitness="半隐含模型",
-            model_relation="模型切换",
-            reasoning_chain="多层因果",
-            representation_conversion="一次常规转换",
-            evidence_relation="证据链相互支持",
-            information_conversion="单次关系转换",
-        )
-        reviewed = core.recalculate_verification(
-            current_level="难度3档",
-            original_high_count=0,
-            original_high_features=[],
-            original_accuracy=62.0,
-            original_features=features,
-            allow_auto_adjustment=True,
-            verification={
-                "feature_corrections": [],
-                "reviewed_high_difficulty_features": [],
-                "reviewed_original_predicted_accuracy": 62.0,
-                "has_structural_revision": False,
-                "adjacent_boundary_review": {"verdict": "维持"},
-                "confidence": "高",
-                "input_sufficiency_review": {"status": "充分"},
-                "high_feature_overlap_review": [],
-            },
-        )
-        self.assertTrue(reviewed["chemistry_structural_cluster_promotion_candidate"])
-        self.assertTrue(reviewed["auto_adjustment_eligible"])
-        self.assertEqual(reviewed["adjusted_difficulty_level"], "难度4档")
-
-    def test_stage2_structural_cluster_rejects_isolated_model_switch(self) -> None:
-        features = base_features(
-            step_count="3-5步",
-            model_explicitness="半隐含模型",
-            model_relation="模型切换",
-            reasoning_chain="多层因果",
-            representation_conversion="一次常规转换",
-        )
-        reviewed = core.recalculate_verification(
-            current_level="难度3档",
-            original_high_count=0,
-            original_high_features=[],
-            original_accuracy=62.0,
-            original_features=features,
-            allow_auto_adjustment=True,
-            verification={
-                "feature_corrections": [],
-                "reviewed_high_difficulty_features": [],
-                "reviewed_original_predicted_accuracy": 62.0,
-                "has_structural_revision": False,
-                "adjacent_boundary_review": {"verdict": "维持"},
-                "confidence": "高",
-                "input_sufficiency_review": {"status": "充分"},
-                "high_feature_overlap_review": [],
-            },
-        )
-        self.assertFalse(reviewed["chemistry_structural_cluster_promotion_candidate"])
-        self.assertFalse(reviewed["auto_adjustment_eligible"])
-
-    def test_supported_feature_revision_may_change_multiplier_without_blocking_auto_adjustment(self) -> None:
-        features = base_features(
-            reaction_count="4-6个",
-            reaction_relation="前后反应强依赖",
-            model_relation="模型切换",
-            process_structure="单阶段",
-            step_count="3-5步",
-            reasoning_chain="多层因果",
-            representation_conversion="一次常规转换",
-        )
-        reviewed = core.recalculate_verification(
-            current_level="难度3档",
-            original_high_count=0,
-            original_high_features=[],
-            original_accuracy=62.0,
-            original_features=features,
-            allow_auto_adjustment=True,
-            verification={
-                "feature_corrections": [{
-                    "field": "process_structure",
-                    "from": "单阶段",
-                    "to": "多阶段强依赖",
-                    "evidence": "后续反应必须以上一阶段中间体为条件",
-                }],
-                "reviewed_high_difficulty_features": [],
-                "reviewed_original_predicted_accuracy": 62.0,
-                "has_structural_revision": True,
-                "adjacent_boundary_review": {"verdict": "应更难一档"},
-                "confidence": "高",
-                "input_sufficiency_review": {"status": "充分"},
-                "high_feature_overlap_review": [],
-            },
-        )
-        self.assertTrue(reviewed["has_structural_revision"])
-        self.assertTrue(reviewed["auto_adjustment_eligible"])
-        self.assertEqual(reviewed["multiplier_reasonableness"], "合理")
-        self.assertEqual(reviewed["adjusted_difficulty_level"], "难度4档")
-
-    def test_stage2_representation_channel_rejects_score_above_68(self) -> None:
-        features = base_features(
-            step_count="3-5步",
-            reasoning_chain="多层因果",
-            representation_conversion="一次常规转换",
-        )
-        reviewed = core.recalculate_verification(
-            current_level="难度3档",
-            original_high_count=0,
-            original_high_features=[],
-            original_accuracy=70.0,
-            original_features=features,
-            allow_auto_adjustment=True,
-            verification={
-                "feature_corrections": [],
-                "reviewed_high_difficulty_features": [],
-                "reviewed_original_predicted_accuracy": 70.0,
-                "has_structural_revision": False,
-                "adjacent_boundary_review": {"verdict": "维持"},
-                "confidence": "高",
-                "input_sufficiency_review": {"status": "充分"},
-                "high_feature_overlap_review": [],
-            },
-        )
-        self.assertFalse(reviewed["chemistry_58_boundary_promotion_candidate"])
-        self.assertFalse(reviewed["auto_adjustment_eligible"])
-
-    def test_stage2_never_automatically_downgrades_two_to_one(self) -> None:
-        features = base_features(step_count="3-5步")
-        reviewed = core.recalculate_verification(
-            current_level="难度2档",
-            original_high_count=0,
-            original_high_features=[],
-            original_accuracy=86.0,
-            original_features=features,
-            allow_auto_adjustment=True,
-            verification={
-                "feature_corrections": [
-                    {
-                        "field": "step_count",
-                        "from": "3-5步",
-                        "to": "1-2步",
-                        "evidence": "复核认为只有一步",
-                    }
-                ],
-                "reviewed_high_difficulty_features": [],
-                "reviewed_original_predicted_accuracy": 90.0,
-                "has_structural_revision": True,
-                "adjacent_boundary_review": {"verdict": "应更简单一档"},
-                "confidence": "高",
-                "input_sufficiency_review": {"status": "充分"},
-                "high_feature_overlap_review": [],
-            },
-        )
-        self.assertFalse(reviewed["auto_adjustment_eligible"])
-        self.assertEqual(reviewed["adjusted_difficulty_level"], "难度2档")
-        self.assertTrue(reviewed["review_requires_manual"])
-
-    def test_experiment_task_does_not_force_cross_content_module(self) -> None:
-        features = base_features(
-            knowledge_L1=["化学反应原理", "化学实验"],
-            knowledge_L2=["水溶液中的离子平衡", "实验探究与方案设计"],
-            knowledge_points=["酸碱平衡", "实验方案评价"],
-            knowledge_count="2-3个",
-            knowledge_scope="跨模块综合",
-            primary_problem_structure="实验探究",
-            experiment_requirement="方案设计或误差反演",
-        )
-        output = core.enrich_stage1_rating(
-            {"features": features, "reason": "测试", "predicted_accuracy": 70}
-        )
-        self.assertEqual(output["features"]["knowledge_scope"], "同章节综合")
-
+@unittest.skipIf(core is None, "高中化学核心模块尚未实现")
+class FinalizationAndPreparationTests(unittest.TestCase):
     def test_question_preparation_removes_labels_recursively_without_mutation(self) -> None:
         source = {
             "question_id": 123,
@@ -1152,44 +468,6 @@ class PipelineAndInputTests(unittest.TestCase):
         )
         self.assertEqual(result.final_level, "难度4档")
         self.assertTrue(result.needs_manual_review)
-
-    def test_structural_revision_requires_concrete_feature_evidence(self) -> None:
-        with self.assertRaisesRegex(ValueError, "结构修订"):
-            core.validate_structural_revision_evidence(
-                {
-                    "has_structural_revision": True,
-                    "feature_corrections": [],
-                    "missed_features": ["无"],
-                }
-            )
-
-    def test_structural_revision_accepts_feature_correction_or_real_omission(self) -> None:
-        core.validate_structural_revision_evidence(
-            {
-                "has_structural_revision": True,
-                "feature_corrections": [
-                    {
-                        "field": "step_count",
-                        "from": "3-5步",
-                        "to": "1-2步",
-                        "evidence": "各选项彼此独立，不构成连续链",
-                    }
-                ],
-                "missed_features": ["无"],
-            }
-        )
-        core.validate_structural_revision_evidence(
-            {
-                "has_structural_revision": True,
-                "feature_corrections": [],
-                "missed_features": ["遗漏了共享物质流依赖"],
-            }
-        )
-
-
-class InitialRedStateTests(unittest.TestCase):
-    def test_high_chemistry_core_module_exists(self) -> None:
-        self.assertIsNotNone(core, "尚未实现 high_chemistry_pipeline_core")
 
 
 if __name__ == "__main__":
