@@ -755,16 +755,10 @@ def derive_structural_level_constraint(
             "constraint_conflict": False,
         }
 
-    # floor 2: 明确不是最基础 1 档
-    if features.get("required_task_breadth") in {
-        "2-3个异质必要任务",
-        "4个及以上异质必要任务",
-        "多问递进任务链",
-    }:
-        floor = max_level(floor, "难度2档")
-        rule_ids.append("multiple_required_tasks_floor_2")
-        evidence.append(f"多必要任务广度({features.get('required_task_breadth')})")
-
+    # -------------------------------------------------------------
+    # 1 ↔ 2 档结构约束
+    # -------------------------------------------------------------
+    # floor 2: 定量计算模型
     if features.get("calculation_model") in {
         "常规化学计量",
         "多步化学计量",
@@ -775,19 +769,10 @@ def derive_structural_level_constraint(
         rule_ids.append("calculation_model_floor_2")
         evidence.append(f"定量计算模型({features.get('calculation_model')})")
 
-    if (
-        features.get("primary_problem_structure") == "概念辨析"
-        and features.get("knowledge_count") == "4个及以上"
-        and features.get("substance_relation") == "相互独立"
-    ):
-        floor = max_level(floor, "难度2档")
-        rule_ids.append("independent_multi_concept_floor_2")
-        evidence.append("4个及以上独立概念辨析")
-
     # -------------------------------------------------------------
     # 2 ↔ 3 档结构约束
     # -------------------------------------------------------------
-    # ceiling 2: 明确基础显性应用 (basic_explicit_application)
+    # ceiling 2: 1-2步显性基础应用 (basic_explicit_application)
     basic_explicit_app = (
         features.get("step_count") == "1-2步"
         and features.get("model_explicitness") == "模型完全显性"
@@ -812,54 +797,70 @@ def derive_structural_level_constraint(
         rule_ids.append("basic_explicit_application_ceiling_2")
         evidence.append("1-2步显性基础应用，无高难无强依赖")
 
-    # floor 3: 明确常规综合
-    standard_chain = (
+    # ceiling 2: 并列基础多任务 (parallel_basic_bundle)
+    parallel_basic_bundle = (
+        features.get("required_task_breadth") in {"2-3个异质必要任务", "4个及以上异质必要任务"}
+        and features.get("substance_relation") in {"单一物质", "相互独立"}
+        and features.get("reaction_relation") == "无反应链"
+        and features.get("process_structure") == "单阶段"
+        and features.get("subquestion_dependency") != "后问依赖前问"
+        and not features.get("shared_model_across_subquestions", False)
+        and features.get("model_explicitness") == "模型完全显性"
+        and features.get("model_relation") in {"单一模型", "同一模型多状态"}
+        and features.get("reasoning_chain") in {"直接套用", "简单因果"}
+        and features.get("information_conversion") in {"无信息转换", "直接读取"}
+        and features.get("evidence_relation") in {"直接给定", "单证据对应", "多证据独立"}
+        and features.get("hidden_conditions") == "无"
+        and features.get("critical_condition") in {"无临界", "显性给出临界"}
+        and features.get("constraint_structure") in {"无约束", "单一约束", "多约束相互独立"}
+        and features.get("calculation_model") in {"无定量计算", "常规化学计量"}
+        and features.get("calculation_complexity") in {"直接判断", "简单计算"}
+        and features.get("experiment_requirement") in {"无", "基础操作或读数", "直接现象解释"}
+        and features.get("route_design_requirement") in {"无", "已知路线补全"}
+        and not high_names
+    )
+    if parallel_basic_bundle:
+        ceiling = min_level(ceiling, "难度2档")
+        rule_ids.append("parallel_basic_bundle_ceiling_2")
+        evidence.append("并列基础多任务(单阶段/无反应链/模型显性/直接套用)")
+
+    # floor 3: 真实关联依赖链 (standard_chain, 收紧真实依赖)
+    has_real_dependency = (
+        features.get("reaction_relation") in {"显性顺序衔接", "前后反应强依赖", "多路径反应网络"}
+        or features.get("subquestion_dependency") == "后问依赖前问"
+        or (features.get("shared_model_across_subquestions") is True and features.get("process_structure") != "单阶段")
+        or features.get("substance_relation") in {"前后转化依赖", "组成—性质—反应网络"}
+        or features.get("process_structure") in {"多阶段显性流程", "多阶段强依赖", "循环或回流流程"}
+    )
+    standard_chain_tight = (
         features.get("step_count") in {"3-5步", "6-8步", "9-12步", "12步以上"}
-        and features.get("substance_relation") in {"同一反应体系", "前后转化依赖", "组成—性质—反应网络"}
+        and has_real_dependency
         and (
-            features.get("reaction_count") in {"2-3个", "4-6个", "7个及以上"}
-            or features.get("calculation_model") in {"常规化学计量", "多步化学计量", "平衡常数或Ka/Kb/Ksp", "多模型定量耦合"}
-            or features.get("information_conversion") not in {"无信息转换", "直接读取"}
-            or features.get("experiment_requirement") not in {"无", "基础操作或读数"}
+            features.get("calculation_model") in {"多步化学计量", "平衡常数或Ka/Kb/Ksp", "多模型定量耦合"}
+            or features.get("information_conversion") in {"多源信息联合转换", "流程或图谱反推", "单次关系转换"}
+            or features.get("experiment_requirement") in {"控制变量或异常分析", "方案设计或误差反演", "数据归纳"}
             or features.get("reasoning_chain") in {"多层因果", "逆向推理或临界分析"}
         )
     )
-    if standard_chain:
+    if standard_chain_tight:
         floor = max_level(floor, "难度3档")
         rule_ids.append("standard_chain_floor_3")
-        evidence.append("3-5步以上关联决策链/同一反应体系")
-
-    broad_task_burden = (
-        features.get("required_task_breadth") == "4个及以上异质必要任务"
-        and (
-            features.get("critical_condition") in {"需要推导过量不足边界", "隐含终点或有效区间"}
-            or features.get("information_conversion") in {"单次关系转换", "多源信息联合转换", "流程或图谱反推"}
-            or features.get("calculation_model") in {"常规化学计量", "多步化学计量", "浓度或气体综合", "平衡常数或Ka/Kb/Ksp", "多模型定量耦合"}
-            or features.get("experiment_requirement") in {"数据归纳", "控制变量或异常分析", "方案设计或误差反演"}
-            or features.get("representation_conversion") in {"多次同类转换", "多表征连续转换", "逆向表征转换"}
-            or features.get("constraint_structure") == "多约束联合筛选"
-            or features.get("reasoning_chain") in {"多层因果", "逆向推理或临界分析"}
-        )
-    )
-    if broad_task_burden:
-        floor = max_level(floor, "难度3档")
-        rule_ids.append("broad_task_burden_floor_3")
-        evidence.append("4个及以上异质任务伴随真实推理/定量/信息转换负担")
+        evidence.append("3-5步以上真实关联依赖链")
 
     # -------------------------------------------------------------
-    # 3 ↔ 4 档结构约束（严格纯特征判定，严禁宽泛判难）
+    # 3 ↔ 4 档结构约束
     # -------------------------------------------------------------
     # 1. 复杂定量：严格与 high_difficulty_features 保持一致
     complex_quantitative = "复杂定量、参数或范围" in high_names
 
-    # 2. 路径 A: 6-8步及以上 + 模型迁移 + 多阶段强依赖（真正的高深流程）
+    # 2. 长链路径 A: 6-8步及以上 + 模型迁移 + 多阶段强依赖
     model_migration_multistage_strong = (
         features.get("step_count") in {"6-8步", "9-12步", "12步以上"}
         and features.get("model_relation") in {"模型切换", "多模型耦合"}
         and features.get("process_structure") in {"多阶段强依赖", "循环或回流流程"}
     )
 
-    # 3. 路径 B: 6-8步及以上 + 模型迁移 + 体系耦合 + 另一个独立高负担信号
+    # 3. 长链路径 B: 6-8步及以上 + 模型迁移 + 体系耦合 + 独立高负担信号
     has_additional_high_burden = (
         bool(set(high_names) - {"多模型或多平衡耦合"})
         or features.get("information_conversion") in {"多源信息联合转换", "流程或图谱反推"}
@@ -878,37 +879,79 @@ def derive_structural_level_constraint(
         and has_additional_high_burden
     )
 
+    # 4. 短链高密度综合路径 C: 3-5步及以上 + 至少2个独立强负担轴共同作用
+    axis_model_ident = features.get("model_explicitness") in {"半隐含模型", "隐含模型"}
+    axis_reasoning = features.get("reasoning_chain") in {"多层因果", "逆向推理或临界分析"}
+    axis_model_relation = features.get("model_relation") in {"模型切换", "多模型耦合"}
+    axis_quant = (
+        features.get("calculation_model") in {"平衡常数或Ka/Kb/Ksp", "多模型定量耦合", "多步化学计量"}
+        and features.get("calculation_complexity") in {"多方程联立", "参数或范围计算", "多步计算"}
+    )
+    axis_info = (
+        features.get("information_conversion") in {"多源信息联合转换", "流程或图谱反推"}
+        or (features.get("information_conversion") == "单次关系转换" and features.get("evidence_relation") in {"证据链相互支持", "证据冲突需排除"})
+    )
+    axis_exp = (
+        features.get("experiment_requirement") in {"控制变量或异常分析", "方案设计或误差反演"}
+        or features.get("route_design_requirement") in {"合成路线设计", "分离提纯方案设计", "路线优化与可行性验证"}
+    )
+    axis_constraint = (
+        features.get("constraint_structure") == "多约束联合筛选"
+        or features.get("critical_condition") in {"需要推导过量不足边界", "隐含终点或有效区间"}
+    )
+    axes = [axis_model_ident, axis_reasoning, axis_model_relation, axis_quant, axis_info, axis_exp, axis_constraint]
+    is_compressed_high = (
+        sum(axes) >= 2
+        and features.get("step_count") in {"3-5步", "6-8步", "9-12步", "12步以上"}
+        and (
+            features.get("model_relation") in {"模型切换", "多模型耦合"}
+            or features.get("information_conversion") not in {"无信息转换", "直接读取"}
+            or features.get("calculation_model") not in {"无定量计算", "常规化学计量"}
+            or features.get("experiment_requirement") not in {"无", "基础操作或读数", "直接现象解释"}
+        )
+    )
+
     if (
         complex_quantitative
         or model_migration_multistage_strong
         or model_migration_system_coupling_strong
+        or is_compressed_high
     ):
         floor = max_level(floor, "难度4档")
-        rule_ids.append("hard_structural_cluster_floor_4")
+        rule_ids.append(
+            "compressed_high_burden_floor_4"
+            if is_compressed_high and not (complex_quantitative or model_migration_multistage_strong or model_migration_system_coupling_strong)
+            else "hard_structural_cluster_floor_4"
+        )
         if complex_quantitative:
             evidence.append("复杂定量、参数或范围(高难特征)")
         if model_migration_multistage_strong:
             evidence.append("长步数(6-8步+)+模型迁移+多阶段强依赖")
         if model_migration_system_coupling_strong:
             evidence.append("长步数(6-8步+)+模型迁移+体系耦合+高层信息/约束/实验负担")
+        if is_compressed_high:
+            evidence.append(f"短链高密度综合(命中{sum(axes)}个独立强负担轴)")
 
-    # ceiling 3: 普通常规综合
-    regular_comprehensive = (
+    # ceiling 3: 普通常规综合 (严格保护真正显性简单的常规题)
+    regular_comprehensive_tight = (
         features.get("step_count") in {"1-2步", "3-5步"}
         and not high_names
+        and features.get("model_explicitness") == "模型完全显性"
+        and features.get("reasoning_chain") in {"直接套用", "简单因果"}
+        and features.get("hidden_conditions") == "无"
+        and features.get("information_conversion") in {"无信息转换", "直接读取"}
         and features.get("model_relation") in {"单一模型", "同一模型多状态"}
         and features.get("process_structure") not in {"多阶段强依赖", "循环或回流流程"}
         and features.get("calculation_model") not in {"多模型定量耦合"}
-        and features.get("information_conversion") not in {"多源信息联合转换", "流程或图谱反推"}
         and features.get("experiment_requirement") not in {"控制变量或异常分析", "方案设计或误差反演"}
         and features.get("route_design_requirement") not in {"合成路线设计", "分离提纯方案设计", "路线优化与可行性验证"}
         and features.get("constraint_structure") != "多约束联合筛选"
-        and not (complex_quantitative or model_migration_multistage_strong or model_migration_system_coupling_strong)
+        and not (complex_quantitative or model_migration_multistage_strong or model_migration_system_coupling_strong or is_compressed_high)
     )
-    if regular_comprehensive:
+    if regular_comprehensive_tight:
         ceiling = min_level(ceiling, "难度3档")
         rule_ids.append("regular_comprehensive_ceiling_3")
-        evidence.append("普通常规综合，无高难无强耦合模型")
+        evidence.append("普通常规综合(显性模型/简单因果/直接读取)")
 
     conflict = LEVEL_INDEX[floor] > LEVEL_INDEX[ceiling]
 

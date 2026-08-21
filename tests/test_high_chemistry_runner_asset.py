@@ -22,7 +22,7 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertTrue(RUNNER.exists())
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn("high_chemistry_two_stage_v20", source)
+        self.assertIn("high_chemistry_two_stage_v21", source)
         self.assertIn("ENABLE_STAGE2_AUTO_ADJUST", source)
         self.assertIn("ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER", source)
         self.assertIn(
@@ -127,9 +127,7 @@ class HighChemistryAssetTests(unittest.TestCase):
         for required in (
             "普通高考考生总体中预计能够完整答对本题的比例",
             "同一回答规则下的直接选项辨析",
-            "彼此独立的基础判断",
-            "6—8个有效化学决策",
-            "进入38—58比较",
+            "进入较难综合区（38—58）比较",
             "两个以上高阶阶段",
             "共享同一物质流",
             "答案依赖",
@@ -157,10 +155,10 @@ class HighChemistryAssetTests(unittest.TestCase):
         for obsolete in ("75 分边界", "55 分边界", "35 分边界"):
             self.assertNotIn(obsolete, stage1)
         for required in (
-            "三个及以上异质必要决策",
-            "多个必须完整作答的异质输出",
-            "不能因各任务相互独立就默认达到85",
-            "并同时具有下列至少两类真实结构",
+            "基础应用与常规综合的区别",
+            "局部认知负担和相互依赖",
+            "长链路径",
+            "高密度短链路径",
         ):
             self.assertIn(required, stage1)
 
@@ -172,7 +170,6 @@ class HighChemistryAssetTests(unittest.TestCase):
         for required in (
             "四个选项、四种物质或四个反应名称本身不构成四条独立规则",
             "predicted_accuracy 必须不低于88",
-            "同一反应体系中的3—5个有效化学决策",
             "路线图箭头显性不等于作答依赖弱",
             "路线反推、限制性结构筛选与自主路线设计",
         ):
@@ -191,8 +188,8 @@ class HighChemistryAssetTests(unittest.TestCase):
         source = PROMPT.read_text(encoding="utf-8")
         exec(compile(source, str(PROMPT), "exec"), namespace)
         stage1 = namespace["FEATURE_EXTRACTION_PROMPT_PREFIX"]
-        self.assertIn("模型切换或多模型耦合", stage1)
-        self.assertIn("多阶段流程", stage1)
+        self.assertIn("模型切换", stage1)
+        self.assertIn("多阶段显性流程", stage1)
         self.assertNotIn("结构簇通道", stage1)
 
     def test_stage1_distinguishes_representation_checks_from_single_rule_tasks(self) -> None:

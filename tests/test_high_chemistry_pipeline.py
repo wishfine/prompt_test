@@ -154,9 +154,9 @@ class StructuralLevelConstraintTests(unittest.TestCase):
         self.assertEqual(constraint["rule_ids"], ["direct_prototype_exact_1"])
         self.assertFalse(constraint["constraint_conflict"])
 
-    def test_multiple_tasks_sets_floor_to_at_least_level_two(self) -> None:
+    def test_calculation_model_sets_floor_to_at_least_level_two(self) -> None:
         features = base_features(
-            required_task_breadth="2-3个异质必要任务",
+            calculation_model="常规化学计量",
             step_count="1-2步",
             reasoning_chain="简单因果",
         )
@@ -174,43 +174,64 @@ class StructuralLevelConstraintTests(unittest.TestCase):
         constraint = core.derive_structural_level_constraint(features, [])
         self.assertEqual(constraint["difficulty_ceiling"], "难度2档")
 
+    def test_parallel_basic_bundle_sets_ceiling_to_level_two(self) -> None:
+        features = base_features(
+            required_task_breadth="4个及以上异质必要任务",
+            substance_relation="相互独立",
+            reaction_relation="无反应链",
+            process_structure="单阶段",
+            step_count="3-5步",
+            model_explicitness="模型完全显性",
+            reasoning_chain="简单因果",
+            information_conversion="无信息转换",
+        )
+        constraint = core.derive_structural_level_constraint(features, [])
+        self.assertEqual(constraint["difficulty_ceiling"], "难度2档")
+        self.assertIn("parallel_basic_bundle_ceiling_2", constraint["rule_ids"])
+
     def test_standard_chain_sets_floor_to_level_three(self) -> None:
         features = base_features(
             step_count="3-5步",
-            substance_relation="同一反应体系",
+            substance_relation="前后转化依赖",
+            reaction_relation="显性顺序衔接",
             reaction_count="2-3个",
-            reasoning_chain="简单因果",
+            reasoning_chain="多层因果",
             calculation_model="常规化学计量",
             required_task_breadth="2-3个异质必要任务",
         )
         constraint = core.derive_structural_level_constraint(features, [])
         self.assertEqual(constraint["difficulty_floor"], "难度3档")
-        self.assertEqual(constraint["difficulty_ceiling"], "难度3档")
+        self.assertIn("standard_chain_floor_3", constraint["rule_ids"])
 
-    def test_broad_task_burden_sets_floor_to_level_three(self) -> None:
+    def test_compressed_high_burden_sets_floor_to_level_four(self) -> None:
         features = base_features(
-            required_task_breadth="4个及以上异质必要任务",
-            step_count="1-2步",
-            calculation_model="常规化学计量",
-            information_conversion="单次关系转换",
+            step_count="3-5步",
+            model_explicitness="半隐含模型",
+            reasoning_chain="多层因果",
+            model_relation="模型切换",
+            information_conversion="多源信息联合转换",
         )
         constraint = core.derive_structural_level_constraint(features, [])
-        self.assertEqual(constraint["difficulty_floor"], "难度3档")
+        self.assertEqual(constraint["difficulty_floor"], "难度4档")
+        self.assertIn("compressed_high_burden_floor_4", constraint["rule_ids"])
 
     def test_ordinary_process_flow_does_not_force_floor_four(self) -> None:
-        """3-5步、显性流程、模型切换、前后转化、简单因果、无复杂计算 -> 不应被强制4档。"""
+        """3-5步、显性流程、单模型、前后转化、简单因果、无复杂计算 -> 不应被强制4档。"""
         features = base_features(
             step_count="3-5步",
             process_structure="多阶段显性流程",
-            model_relation="模型切换",
+            model_relation="单一模型",
+            model_explicitness="模型完全显性",
             substance_relation="前后转化依赖",
             reasoning_chain="简单因果",
             calculation_model="常规化学计量",
+            information_conversion="直接读取",
         )
         high = core.detect_high_difficulty_features(features)
         constraint = core.derive_structural_level_constraint(features, high.names)
-        self.assertEqual(constraint["difficulty_floor"], "难度3档")
-        # 验证 70 分（3档）在该结构下不会被硬推到 4 档，而是保持 3 档
+        self.assertEqual(constraint["difficulty_floor"], "难度2档")
+        self.assertEqual(constraint["difficulty_ceiling"], "难度3档")
+        # 验证 70 分（3档）在该结构下保持 3 档
         res = core.enrich_stage1_rating({"features": features, "reason": "测试", "predicted_accuracy": 70.0})
         self.assertEqual(res["difficulty_level_step1"], "难度3档")
 
@@ -238,33 +259,39 @@ class StructuralLevelConstraintTests(unittest.TestCase):
         constraint = core.derive_structural_level_constraint(features, high.names)
         self.assertEqual(constraint["difficulty_floor"], "难度4档")
 
-    def test_coupled_system_with_only_reaction_chain_does_not_force_floor_four(self) -> None:
-        """3-5步+模型切换+前后转化依赖+前后反应强依赖 -> 不应被强制4档，保持floor 3。"""
+    def test_coupled_system_without_extra_burden_does_not_force_floor_four(self) -> None:
+        """3-5步+模型切换+前后转化依赖+无额外强负担 -> 不应被强制4档。"""
         features = base_features(
             step_count="3-5步",
             model_relation="模型切换",
+            model_explicitness="模型完全显性",
             substance_relation="前后转化依赖",
-            reaction_relation="前后反应强依赖",
+            reaction_relation="显性顺序衔接",
             reaction_count="2-3个",
             reasoning_chain="简单因果",
+            information_conversion="直接读取",
+            calculation_model="常规化学计量",
         )
         high = core.detect_high_difficulty_features(features)
         constraint = core.derive_structural_level_constraint(features, high.names)
-        self.assertEqual(constraint["difficulty_floor"], "难度3档")
+        self.assertEqual(constraint["difficulty_floor"], "难度2档")
 
     def test_complex_quantitative_floor_four_strictly_tracks_high_names(self) -> None:
-        # Case 1: 常规计算无高难 -> floor 3
+        # Case 1: 常规计算无高难 -> floor 2 (不强制4档)
         regular_calc = base_features(
             step_count="3-5步",
             calculation_model="平衡常数或Ka/Kb/Ksp",
             calculation_complexity="多步计算",
             parameter_operation="无参数",
+            model_explicitness="模型完全显性",
+            reasoning_chain="简单因果",
+            information_conversion="直接读取",
             substance_relation="同一反应体系",
         )
         high1 = core.detect_high_difficulty_features(regular_calc)
         self.assertNotIn("复杂定量、参数或范围", high1.names)
         c1 = core.derive_structural_level_constraint(regular_calc, high1.names)
-        self.assertEqual(c1["difficulty_floor"], "难度3档")
+        self.assertEqual(c1["difficulty_floor"], "难度2档")
 
         # Case 2: 严格命中高难复杂定量 -> floor 4
         strict_complex = base_features(
@@ -294,10 +321,11 @@ class StructuralLevelConstraintTests(unittest.TestCase):
     def test_score_84_and_85_on_exact_structural_three_yield_final_level_three_with_intact_raw_scores(self) -> None:
         features = base_features(
             step_count="3-5步",
-            substance_relation="同一反应体系",
+            substance_relation="前后转化依赖",
+            reaction_relation="显性顺序衔接",
             reaction_count="2-3个",
-            reasoning_chain="简单因果",
-            calculation_model="常规化学计量",
+            reasoning_chain="多层因果",
+            calculation_model="多步化学计量",
             required_task_breadth="2-3个异质必要任务",
         )
         # Score 84 (score level 3)
@@ -327,7 +355,10 @@ class StructuralLevelConstraintTests(unittest.TestCase):
         features = base_features(
             step_count="3-5步",
             substance_relation="同一反应体系",
-            reaction_count="2-3个",
+            model_explicitness="模型完全显性",
+            information_conversion="直接读取",
+            model_relation="单一模型",
+            process_structure="单阶段",
             reasoning_chain="简单因果",
             calculation_model="常规化学计量",
             required_task_breadth="2-3个异质必要任务",
