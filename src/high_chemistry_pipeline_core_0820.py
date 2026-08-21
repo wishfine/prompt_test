@@ -614,7 +614,7 @@ def detect_active_features(features: dict[str, Any]) -> list[str]:
         (features.get("reaction_count") != "0-1个", "多反应"),
         (features.get("process_structure") != "单阶段", "多阶段"),
         (features.get("step_count") != "1-2步", "多步骤"),
-        (features.get("required_task_breadth") != "单一规则任务", "多任务广度"),
+        (features.get("required_task_breadth") != "单一规则任务", "多个不可合并的必要化学判断"),
         (features.get("subquestion_dependency") != "无多问", "多小问"),
         (bool(features.get("shared_model_across_subquestions")), "小问共享模型"),
         (features.get("model_explicitness") != "模型完全显性", "模型隐含"),
