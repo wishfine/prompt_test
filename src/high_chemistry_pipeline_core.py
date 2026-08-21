@@ -901,6 +901,41 @@ def _apply_stage1_structural_level_guards(
     return final_level, actions
 
 
+def _normalize_raw_accuracy_for_direct_prototype(
+    *,
+    model_accuracy: float,
+    features: dict[str, Any],
+) -> tuple[float, list[dict[str, Any]]]:
+    """仅修复事实层完全一致时的异常低分，保留模型原始分供审计。"""
+    direct_prototype = (
+        80 <= model_accuracy <= 84
+        and features.get("primary_problem_structure") == "概念辨析"
+        and features.get("knowledge_count") == "1个"
+        and features.get("knowledge_scope") == "单知识点"
+        and features.get("substance_count") == "1种"
+        and features.get("substance_relation") == "单一物质"
+        and features.get("reaction_count") == "0-1个"
+        and features.get("process_structure") == "单阶段"
+        and features.get("step_count") == "1-2步"
+        and features.get("required_task_breadth") == "单一规则任务"
+        and features.get("model_explicitness") == "模型完全显性"
+        and features.get("model_relation") == "单一模型"
+        and features.get("reasoning_chain") == "直接套用"
+        and features.get("representation_conversion") == "无转换"
+        and features.get("information_conversion") == "无信息转换"
+        and features.get("experiment_requirement") == "无"
+        and features.get("calculation_model") == "无定量计算"
+    )
+    if not direct_prototype:
+        return model_accuracy, []
+    return 88.0, [{
+        "rule": "direct_prototype_score_floor",
+        "from": model_accuracy,
+        "to": 88.0,
+        "evidence": ["单一规则任务", "最长链1-2步", "完全显性", "无计算和信息转换"],
+    }]
+
+
 def enrich_stage1_rating(
     stage1_rating: dict[str, Any],
     *,
@@ -945,6 +980,13 @@ def enrich_stage1_rating(
     else:
         features["knowledge_scope"] = "单知识点"
 
+    model_raw_accuracy = raw_accuracy
+    raw_accuracy, score_normalization_actions = (
+        _normalize_raw_accuracy_for_direct_prototype(
+            model_accuracy=model_raw_accuracy,
+            features=features,
+        )
+    )
     high = detect_high_difficulty_features(features)
     active = detect_active_features(features)
     high_count = len(high.names)
@@ -962,6 +1004,8 @@ def enrich_stage1_rating(
     multiplier_candidate = multiplier_policy["multiplier_candidate"]
     multiplier = multiplier_policy["multiplier_applied"]
     adjusted = multiplier_policy["adjusted_accuracy"]
+    rating["model_predicted_accuracy_raw"] = model_raw_accuracy
+    rating["score_normalization_actions"] = score_normalization_actions
     rating["original_predicted_accuracy"] = raw_accuracy
     rating["active_features"] = active
     rating["active_feature_count"] = len(active)

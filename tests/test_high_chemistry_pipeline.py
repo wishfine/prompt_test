@@ -312,6 +312,36 @@ class ChemistryHighFeatureTests(unittest.TestCase):
 
 @unittest.skipIf(core is None, "高中化学核心模块尚未实现")
 class PipelineAndInputTests(unittest.TestCase):
+    def test_direct_prototype_score_is_normalized_before_level_mapping(self) -> None:
+        output = core.enrich_stage1_rating(
+            {
+                "features": base_features(
+                    knowledge_points=["石油裂解的目的"],
+                    knowledge_count="1个",
+                    knowledge_scope="单知识点",
+                    substance_count="1种",
+                    substance_relation="单一物质",
+                    step_count="1-2步",
+                    required_task_breadth="单一规则任务",
+                    model_explicitness="模型完全显性",
+                    reasoning_chain="直接套用",
+                    representation_conversion="无转换",
+                    information_conversion="无信息转换",
+                    calculation_model="无定量计算",
+                    experiment_requirement="无",
+                ),
+                "reason": "单一教材事实直接辨析",
+                "predicted_accuracy": 82,
+            }
+        )
+        self.assertEqual(output["model_predicted_accuracy_raw"], 82.0)
+        self.assertEqual(output["original_predicted_accuracy"], 88.0)
+        self.assertEqual(output["difficulty_level_step1"], "难度1档")
+        self.assertEqual(
+            output["score_normalization_actions"][0]["rule"],
+            "direct_prototype_score_floor",
+        )
+
     def test_multiplier_boundaries(self) -> None:
         expected = {0: 1.0, 2: 1.0, 3: 0.85, 4: 0.70, 8: 0.70}
         for count, multiplier in expected.items():
