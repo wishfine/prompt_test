@@ -1217,6 +1217,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=1000,
         help="每批创建的 asyncio 任务数，避免全量数据一次性占用内存",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="兼容断点续跑参数（本脚本默认已自动断点续跑）",
+    )
     return parser
 
 
