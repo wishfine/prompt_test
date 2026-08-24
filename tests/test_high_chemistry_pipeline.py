@@ -197,20 +197,23 @@ class StructuralLevelConstraintTests(unittest.TestCase):
         constraint = core.derive_structural_level_constraint(features, [])
         self.assertEqual(constraint["difficulty_ceiling"], "难度2档")
 
-    def test_parallel_basic_bundle_sets_ceiling_to_level_two(self) -> None:
+    def test_parallel_light_bundle_sets_ceiling_to_level_two(self) -> None:
         features = base_features(
-            required_task_breadth="4个及以上异质必要任务",
+            required_task_breadth="2-3个异质必要任务",
             substance_relation="相互独立",
             reaction_relation="无反应链",
             process_structure="单阶段",
             step_count="1-2步",
             model_explicitness="模型完全显性",
-            reasoning_chain="简单因果",
+            model_relation="单一模型",
+            reasoning_chain="直接套用",
             information_conversion="无信息转换",
+            calculation_model="无定量计算",
+            experiment_requirement="无",
         )
         constraint = core.derive_structural_level_constraint(features, [])
         self.assertEqual(constraint["difficulty_ceiling"], "难度2档")
-        self.assertIn("parallel_basic_bundle_strict_ceiling_2", constraint["rule_ids"])
+        self.assertIn("parallel_light_bundle_ceiling_2", constraint["rule_ids"])
 
     def test_standard_chain_sets_floor_to_level_three(self) -> None:
         features = base_features(
@@ -516,22 +519,20 @@ class MultiplierAndHighFeatureTests(unittest.TestCase):
 
     def test_multiplier_floor_keeps_nonfinal_high_combo_in_level_four(self) -> None:
         features = base_features(
-            reaction_count="4-6个",
-            reaction_relation="前后反应强依赖",
-            process_structure="多阶段强依赖",
             model_relation="多模型耦合",
-            step_count="6-8步",
+            step_count="3-5步",
             reasoning_chain="多层因果",
+            equation_structure="2-3个方程联立",
             constraint_structure="多约束联合筛选",
             information_carrier="多载体综合",
             information_conversion="多源信息联合转换",
             evidence_relation="证据链相互支持",
         )
         output = core.enrich_stage1_rating(
-            {"features": features, "reason": "测试", "predicted_accuracy": 45}
+            {"features": features, "reason": "测试", "predicted_accuracy": 42}
         )
         self.assertTrue(output["multiplier_triggered"])
-        self.assertEqual(output["multiplier_applied"], 0.70)
+        self.assertEqual(output["multiplier_applied"], 0.85)
         self.assertTrue(output["multiplier_final_level_guard_applied"])
         self.assertEqual(output["predicted_accuracy"], 38.0)
         self.assertEqual(output["difficulty_level_step1"], "难度4档")
@@ -582,7 +583,8 @@ class FinalizationAndPreparationTests(unittest.TestCase):
             ["1", "2"],
         )
         self.assertTrue(prepared.input_quality["has_analysis"])
-        self.assertEqual(prepared.input_quality["input_sufficiency"], "部分缺失")
+        self.assertEqual(prepared.input_quality["input_sufficiency"], "信息不足")
+        self.assertFalse(prepared.input_quality["evaluation_valid"])
 
     def test_stage2_is_audit_only_by_default(self) -> None:
         result = core.finalize_level(
@@ -618,18 +620,16 @@ class FinalizationAndPreparationTests(unittest.TestCase):
         self.assertEqual(constraint["difficulty_floor"], "难度3档")
         self.assertIn("same_system_simple_causal_floor_3", constraint["rule_ids"])
         self.assertNotIn("basic_explicit_application_ceiling_2", constraint["rule_ids"])
-        self.assertNotIn("parallel_basic_bundle_strict_ceiling_2", constraint["rule_ids"])
+        self.assertNotIn("parallel_light_bundle_ceiling_2", constraint["rule_ids"])
 
     def test_heterogeneous_multicarrier_floor_4_rule(self) -> None:
-        """测试 heterogeneous_multicarrier_floor_4 (4+异质任务+多载体综合+额外处理负担) 提升为 4 档 floor 并解除 ceiling3。"""
+        """测试 heterogeneous_multicarrier_floor_4 (4+异质任务+多载体综合+3-5步+2个独立决策节点) 提升为 4 档 floor 并解除 ceiling3。"""
         feats = base_features(
-            step_count="1-2步",
+            step_count="3-5步",
             required_task_breadth="4个及以上异质必要任务",
             information_carrier="多载体综合",
-            calculation_model="常规化学计量",
-            model_explicitness="模型完全显性",
-            reasoning_chain="直接套用",
-            information_conversion="直接读取",
+            model_explicitness="半隐含模型",
+            critical_condition="需要推导过量不足边界",
         )
         constraint = core.derive_structural_level_constraint(feats, [])
         self.assertEqual(constraint["difficulty_floor"], "难度4档")
@@ -757,9 +757,27 @@ class FinalizationAndPreparationTests(unittest.TestCase):
         self.assertEqual(enriched["stage1_validation_retry_count"], 1)
         self.assertEqual(enriched["stage1_validation_retry_reasons"], reasons)
 
-    def test_parallel_basic_bundle_strict_requires_one_to_two_steps(self) -> None:
-        """测试 parallel_basic_bundle_strict 严格限定 step_count=='1-2步'，3-5步及以上题不被误压成 ceiling2。"""
-        feats_1_2 = base_features(
+    def test_parallel_light_bundle_ceiling_2_rule(self) -> None:
+        """测试 parallel_light_bundle_ceiling_2: 2-3个异质任务命中 ceiling2，4个及以上异质任务不再被强制压为 ceiling2。"""
+        feats_2_3 = base_features(
+            step_count="1-2步",
+            required_task_breadth="2-3个异质必要任务",
+            substance_relation="相互独立",
+            reaction_relation="无反应链",
+            process_structure="单阶段",
+            model_explicitness="模型完全显性",
+            model_relation="单一模型",
+            reasoning_chain="直接套用",
+            information_conversion="无信息转换",
+            calculation_model="无定量计算",
+            experiment_requirement="无",
+        )
+        constraint_2_3 = core.derive_structural_level_constraint(feats_2_3, [])
+        self.assertIn("parallel_light_bundle_ceiling_2", constraint_2_3["rule_ids"])
+        self.assertEqual(constraint_2_3["difficulty_ceiling"], "难度2档")
+
+        # 4个及以上异质任务绝不命中 parallel_light_bundle_ceiling_2
+        feats_4_plus = base_features(
             step_count="1-2步",
             required_task_breadth="4个及以上异质必要任务",
             substance_relation="相互独立",
@@ -769,35 +787,88 @@ class FinalizationAndPreparationTests(unittest.TestCase):
             model_relation="单一模型",
             reasoning_chain="直接套用",
             information_conversion="无信息转换",
-            evidence_relation="直接给定",
+            calculation_model="无定量计算",
+            experiment_requirement="无",
         )
-        constraint_1_2 = core.derive_structural_level_constraint(feats_1_2, [])
-        self.assertIn("parallel_basic_bundle_strict_ceiling_2", constraint_1_2["rule_ids"])
-        self.assertEqual(constraint_1_2["difficulty_ceiling"], "难度2档")
+        constraint_4_plus = core.derive_structural_level_constraint(feats_4_plus, [])
+        self.assertNotIn("parallel_light_bundle_ceiling_2", constraint_4_plus["rule_ids"])
 
-        # 3-5 步虽然其他特征并列，但绝不命中 parallel_basic_bundle_strict
-        feats_3_5 = base_features(
+    def test_compressed_high_burden_floor_4_decision_nodes_deduplication(self) -> None:
+        """测试 5 类独立决策节点去重：仅有 model_explicitness+reasoning_chain+model_relation 归并为 1 个节点，不触发 floor4；增加 joint_constraint 归并为 2 个节点，正确触发 floor4。"""
+        feats_single_node = base_features(
             step_count="3-5步",
-            required_task_breadth="4个及以上异质必要任务",
-            substance_relation="相互独立",
-            reaction_relation="无反应链",
-            process_structure="单阶段",
-            model_explicitness="模型完全显性",
-            model_relation="单一模型",
-            reasoning_chain="直接套用",
-            information_conversion="无信息转换",
-            evidence_relation="直接给定",
+            model_explicitness="半隐含模型",
+            reasoning_chain="多层因果",
+            model_relation="模型切换",
+            calculation_model="常规化学计量",
+            information_conversion="直接读取",
+            constraint_structure="单一约束",
         )
-        constraint_3_5 = core.derive_structural_level_constraint(feats_3_5, [])
-        self.assertNotIn("parallel_basic_bundle_strict_ceiling_2", constraint_3_5["rule_ids"])
+        constraint_single = core.derive_structural_level_constraint(feats_single_node, [])
+        self.assertNotIn("compressed_high_burden_floor_4", constraint_single["rule_ids"])
 
-    def test_build_stage1_semantic_repair_schema(self) -> None:
-        """测试 build_stage1_semantic_repair_schema 仅包含冲突字段与预测分数相关字段。"""
-        schema = core.build_stage1_semantic_repair_schema(["step_count", "reasoning_chain"])
-        self.assertEqual(schema["type"], "object")
-        self.assertEqual(set(schema["required"]), {"step_count", "reasoning_chain", "reason", "predicted_accuracy"})
-        self.assertEqual(set(schema["properties"].keys()), {"step_count", "reasoning_chain", "reason", "predicted_accuracy"})
-        self.assertFalse(schema["additionalProperties"])
+        feats_two_nodes = base_features(
+            step_count="3-5步",
+            model_explicitness="半隐含模型",
+            reasoning_chain="多层因果",
+            model_relation="模型切换",
+            calculation_model="常规化学计量",
+            information_conversion="直接读取",
+            constraint_structure="多约束联合筛选",
+        )
+        constraint_two = core.derive_structural_level_constraint(feats_two_nodes, [])
+        self.assertIn("compressed_high_burden_floor_4", constraint_two["rule_ids"])
+        self.assertEqual(constraint_two["difficulty_floor"], "难度4档")
+
+    def test_direct_prototype_exact_1_score_floor_calibration(self) -> None:
+        """测试极简直接套用结构原型强制 88 分下限校准。"""
+        rating = {
+            "predicted_accuracy": 42.0,
+            "features": base_features(
+                knowledge_points=["物质分类"],
+                knowledge_L1=["化学基本概念"],
+                knowledge_L2=["物质分类与化学用语"],
+                substance_count="1种",
+                reaction_count="0-1个",
+                step_count="1-2步",
+                required_task_breadth="单一规则任务",
+                model_explicitness="模型完全显性",
+                model_relation="单一模型",
+                reasoning_chain="直接套用",
+                representation_conversion="无转换",
+                information_conversion="无信息转换",
+                calculation_model="无定量计算",
+                experiment_requirement="无",
+                hidden_conditions="无",
+            ),
+        }
+        enriched = core.enrich_stage1_rating(rating)
+        self.assertEqual(enriched["original_predicted_accuracy"], 88.0)
+        self.assertEqual(enriched["difficulty_level_step1"], "难度1档")
+        self.assertTrue(enriched["score_calibration_applied"])
+        self.assertEqual(enriched["score_calibration_actions"][0]["rule"], "direct_prototype_score_floor")
+
+    def test_prepare_question_visual_dependency_hard_trigger_and_evaluation_valid(self) -> None:
+        """测试图像强依赖硬触发与输入评估有效性标记。"""
+        q = {
+            "stem": "某化学转化关系如下，请回答下列问题：",
+            "stem_image_url": "https://example.com/route.png",
+            "sub_questions": [],
+            "analysis": "解析内容",
+        }
+        # auto 模式下自动包含图片，输入充分且 evaluation_valid=True
+        prep_auto = core.prepare_question(q, image_mode="auto")
+        self.assertTrue(prep_auto.input_quality["image_required"])
+        self.assertTrue(prep_auto.input_quality["image_included"])
+        self.assertEqual(prep_auto.input_quality["input_sufficiency"], "充分")
+        self.assertTrue(prep_auto.input_quality["evaluation_valid"])
+
+        # off 模式下强依赖图像却缺失图像，标记为 evaluation_valid=False, input_sufficiency="信息不足"
+        prep_off = core.prepare_question(q, image_mode="off")
+        self.assertTrue(prep_off.input_quality["image_required"])
+        self.assertFalse(prep_off.input_quality["image_included"])
+        self.assertEqual(prep_off.input_quality["input_sufficiency"], "信息不足")
+        self.assertFalse(prep_off.input_quality["evaluation_valid"])
 
 
 if __name__ == "__main__":

@@ -60,6 +60,47 @@ Mini 等支持调温度的模型仍会读取 `TEMPERATURE`；未配置时不发�
 
 真实模型调用需要在服务器的 venv 中执行，本机只适合做静态检查。
 
+## 初中英语知识点排序
+
+排序 Prompt 位于 `prompts/初中英语知识点排序提示词.txt`。程序只允许模型重排每条记录原有 `output` 中的分号分隔项，并会用多重集合校验阻止标签增删改写。成功结果的 `output` 会改为排序后字符串，原始顺序保存在 `original_output`，同时保留 `ordered_output` 数组和 `sorted_output` 字段。项目中确认可用的模型名是 `doubao-seed-2.0-lite` 和 `deepseek-v4-flash`。
+
+在服务器项目目录执行（默认使用豆包 Lite）：
+
+```bash
+source venv/bin/activate
+python scripts/sort_junior_english_knowledge_points.py \
+  --input /home/share_ssd_data/nfs-data1/wangmeng148/coding/vllm-main/scripts/tiku_multiq_func_label_cls/data_process/output/main_questions_2to3_kp_labels_1000.jsonl \
+  --output outputs/english_kp_ordering/doubao_seed_2.0_lite.jsonl \
+  --prompt prompts/初中英语知识点排序提示词.txt \
+  --model doubao-seed-2.0-lite \
+  --max-workers 20 \
+  --retries 3 \
+  --resume
+```
+
+如需改用 DeepSeek V4 Flash，只替换模型名和输出文件：
+
+```bash
+python scripts/sort_junior_english_knowledge_points.py \
+  --input /home/share_ssd_data/nfs-data1/wangmeng148/coding/vllm-main/scripts/tiku_multiq_func_label_cls/data_process/output/main_questions_2to3_kp_labels_1000.jsonl \
+  --output outputs/english_kp_ordering/deepseek_v4_flash.jsonl \
+  --prompt prompts/初中英语知识点排序提示词.txt \
+  --model deepseek-v4-flash \
+  --max-workers 20 \
+  --retries 3 \
+  --resume
+```
+
+排序完成后生成接近初中化学验收页逻辑的交互式 HTML（统计栏、Top 知识点、搜索、状态筛选、逐题原始/排序后对照）：
+
+```bash
+python scripts/generate_junior_english_knowledge_points_html.py \
+  --input outputs/english_kp_ordering/doubao_seed_2.0_lite.jsonl \
+  --output outputs/english_kp_ordering/doubao_seed_2.0_lite.html
+```
+
+HTML 页面可直接在服务器下载后用浏览器打开；也可以把 `--input` 换成 DeepSeek 的结果文件。
+
 ## 评级配置
 
 - 正式生产入口固定使用 `gpt56_hybrid`、`doubao-seed-2.0-lite`、三次独立评级和结构化送分边界校准；不要再手工拼接生产环境变量。

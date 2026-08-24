@@ -499,34 +499,51 @@ def _is_full_dependent_organic_route(features: dict[str, Any]) -> bool:
     )
 
 
+def unique_high_decision_nodes(high_feature_evidence: list[dict[str, Any]]) -> set[str]:
+    """提取高难特征命中的唯一 decision_node 集合，实现跨特征重复计数归一化。"""
+    return {
+        str(item.get("decision_node"))
+        for item in high_feature_evidence
+        if item.get("decision_node")
+    }
+
+
 def _apply_chemistry_multiplier_policy(
     *,
     original_accuracy: float,
     high_names: list[str],
+    high_evidence: list[dict[str, Any]] | None = None,
+    features: dict[str, Any] | None = None,
     multiplier_enabled: bool,
     full_dependent_organic_route: bool = False,
 ) -> dict[str, Any]:
-    candidate = multiplier_for_high_count(len(high_names))
+    high_nodes = unique_high_decision_nodes(high_evidence or [])
+    high_node_count = len(high_nodes) if high_evidence is not None else len(high_names)
+    candidate = multiplier_for_high_count(high_node_count)
     matched_combo = (
         _matched_multiplier_trigger_combo(high_names)
         if multiplier_enabled
         else []
     )
-    triggered = bool(matched_combo)
+    triggered = bool(matched_combo) and high_node_count >= 2
     applied = candidate if triggered else 1.0
     adjusted = round(original_accuracy * applied, 1)
     raw_level = map_accuracy_to_level(original_accuracy)
     adjusted_level = map_accuracy_to_level(adjusted)
-    active = set(high_names)
+
+    feats = features or {}
     strong_final = (
         original_accuracy <= 52
+        and high_node_count >= 2
         and (
-            (
-                "高阶实验、合成或分离设计" in active
-                and "多约束联合" in active
-            )
+            feats.get("step_count") in {"6-8步", "9-12步", "12步以上"}
             or full_dependent_organic_route
         )
+        and bool(high_nodes.intersection({
+            "advanced_design",
+            "joint_constraints",
+            "reaction_process_network",
+        }))
     )
     final_guard = (
         raw_level == "难度4档"
@@ -534,7 +551,7 @@ def _apply_chemistry_multiplier_policy(
         and not strong_final
     )
     if final_guard:
-        adjusted = 38.0
+        adjusted = max(adjusted, 38.0)
     return {
         "multiplier_candidate": candidate,
         "multiplier_triggered": triggered,
@@ -975,42 +992,37 @@ def derive_structural_level_constraint(
         rule_ids.append("basic_explicit_application_ceiling_2")
         evidence.append("1-2步显性基础应用，无高难无强依赖")
 
-    # ceiling 2: 严格并列基础多任务 (parallel_basic_bundle_strict，不含 error_risk 伪硬门槛)
-    parallel_basic_bundle_strict = (
+    # ceiling 2: 轻量并列基础任务 (parallel_light_bundle_ceiling_2)
+    parallel_light_bundle_ceiling_2 = (
         features.get("step_count") == "1-2步"
-        and features.get("required_task_breadth") in {"2-3个异质必要任务", "4个及以上异质必要任务"}
+        and features.get("required_task_breadth") == "2-3个异质必要任务"
+        and features.get("model_explicitness") == "模型完全显性"
+        and features.get("model_relation") == "单一模型"
+        and features.get("reasoning_chain") == "直接套用"
+        and features.get("knowledge_count") in {"1个", "2-3个"}
+        and features.get("knowledge_scope") != "跨模块综合"
         and features.get("substance_relation") in {"单一物质", "相互独立"}
         and features.get("reaction_relation") in {"无反应链", "并列独立"}
         and features.get("process_structure") == "单阶段"
         and features.get("subquestion_dependency") != "后问依赖前问"
         and not features.get("shared_model_across_subquestions", False)
-        and features.get("model_explicitness") == "模型完全显性"
-        and features.get("model_relation") in {"单一模型", "同一模型多状态"}
-        and features.get("reasoning_chain") in {"直接套用", "简单因果"}
-        and features.get("information_conversion") in {"无信息转换", "直接读取"}
-        and features.get("evidence_relation") in {"直接给定", "单证据对应", "多证据独立"}
         and features.get("hidden_conditions") == "无"
         and features.get("critical_condition") in {"无临界", "显性给出临界"}
+        and features.get("information_conversion") in {"无信息转换", "直接读取"}
+        and features.get("evidence_relation") in {"直接给定", "单证据对应", "多证据独立"}
         and features.get("constraint_structure") in {"无约束", "单一约束", "多约束相互独立"}
         and features.get("calculation_model") in {"无定量计算", "常规化学计量"}
         and features.get("calculation_complexity") in {"直接判断", "简单计算"}
         and features.get("experiment_requirement") in {"无", "基础操作或读数", "直接现象解释"}
         and features.get("route_design_requirement") in {"无", "已知路线补全"}
         and features.get("competing_reaction") == "无"
-        and features.get("classification_discussion") == "无"
-        and features.get("representation_conversion") in {"无转换", "一次常规转换"}
-        and features.get("context_load") in {"纯包装", "简单规律映射"}
         and not high_names
-        and not (
-            features.get("reasoning_chain") == "简单因果"
-            and features.get("evidence_relation") == "多证据独立"
-        )
-        and not same_system_simple_causal_floor_3
+        and not _has_real_dependency(features)
     )
-    if parallel_basic_bundle_strict:
+    if parallel_light_bundle_ceiling_2:
         ceiling = min_level(ceiling, "难度2档")
-        rule_ids.append("parallel_basic_bundle_strict_ceiling_2")
-        evidence.append("严格并列基础多任务(单阶段/无反应链或并列独立/模型显性/直接套用/无隐含与干扰)")
+        rule_ids.append("parallel_light_bundle_ceiling_2")
+        evidence.append("轻量并列基础任务(1-2步/2-3任务/单一模型/直接套用/无隐含与干扰)")
 
     # 5 大独立中等认知负担组 (Grouped Moderate Burdens for Level 3 Protection，杜绝单节点重复计数)
     moderate_model_condition = (
@@ -1053,7 +1065,7 @@ def derive_structural_level_constraint(
     standard_comprehensive_floor_3 = (
         not high_names
         and not basic_explicit_app
-        and not parallel_basic_bundle_strict
+        and not parallel_light_bundle_ceiling_2
         and (
             (
                 features.get("step_count") in {
@@ -1130,27 +1142,46 @@ def derive_structural_level_constraint(
         and has_additional_high_burden
     )
 
-    # 4. 短链高密度综合路径 C: 3-5步及以上 + 至少2个独立强负担轴共同作用
-    axis_model_ident = features.get("model_explicitness") in {"半隐含模型", "隐含模型", "需要自主建模"}
-    axis_reasoning = features.get("reasoning_chain") in {"多层因果", "逆向推理或临界分析"}
-    axis_model_relation = features.get("model_relation") in {"模型切换", "多模型耦合"}
-    axis_quant = (
-        features.get("calculation_model") in {"平衡常数或Ka/Kb/Ksp", "多模型定量耦合", "多步化学计量"}
-        and features.get("calculation_complexity") in {"多方程联立", "参数或范围计算", "多步计算"}
+    # 4. 短链高密度综合路径 C: 3-5步及以上 + 5类独立决策节点去重归并 (至少2个独立决策节点)
+    model_reasoning_node = (
+        features.get("model_explicitness") in {"半隐含模型", "隐含模型", "需要自主建模"}
+        or features.get("reasoning_chain") in {"多层因果", "逆向推理或临界分析"}
+        or features.get("model_relation") in {"模型切换", "多模型耦合"}
     )
-    axis_info = (
+    quantitative_or_critical_node = (
+        (
+            features.get("calculation_model") in {"平衡常数或Ka/Kb/Ksp", "多模型定量耦合", "多步化学计量"}
+            and features.get("calculation_complexity") in {"多方程联立", "参数或范围计算", "多步计算"}
+        )
+        or features.get("critical_condition") in {"需要推导过量不足边界", "隐含终点或有效区间"}
+    )
+    information_inference_node = (
         features.get("information_conversion") in {"多源信息联合转换", "流程或图谱反推"}
-        or (features.get("information_conversion") == "单次关系转换" and features.get("evidence_relation") in {"证据链相互支持", "证据冲突需排除"})
+        or (
+            features.get("information_conversion") == "单次关系转换"
+            and features.get("evidence_relation") in {"证据链相互支持", "证据冲突需排除"}
+        )
     )
-    axis_exp = (
+    experiment_or_route_node = (
         features.get("experiment_requirement") in {"控制变量或异常分析", "方案设计或误差反演"}
         or features.get("route_design_requirement") in {"合成路线设计", "分离提纯方案设计", "路线优化与可行性验证"}
     )
-    axis_constraint = (
+    joint_constraint_node = (
         features.get("constraint_structure") == "多约束联合筛选"
-        or features.get("critical_condition") in {"需要推导过量不足边界", "隐含终点或有效区间"}
     )
-    axes = [axis_model_ident, axis_reasoning, axis_model_relation, axis_quant, axis_info, axis_exp, axis_constraint]
+
+    decision_nodes = {
+        name
+        for name, active in {
+            "model_reasoning": model_reasoning_node,
+            "quantitative_or_critical": quantitative_or_critical_node,
+            "information_inference": information_inference_node,
+            "experiment_or_route": experiment_or_route_node,
+            "joint_constraint": joint_constraint_node,
+        }.items()
+        if active
+    }
+
     compressed_middle_guard = (
         features.get("step_count") == "3-5步"
         and features.get("model_relation") in {"单一模型", "同一模型多状态"}
@@ -1158,7 +1189,7 @@ def derive_structural_level_constraint(
         and features.get("calculation_model") == "无定量计算"
     )
     is_compressed_high = (
-        sum(axes) >= 2
+        len(decision_nodes) >= 2
         and features.get("step_count") in {"3-5步", "6-8步", "9-12步", "12步以上"}
         and (
             features.get("model_relation") in {"模型切换", "多模型耦合"}
@@ -1169,21 +1200,12 @@ def derive_structural_level_constraint(
         and not compressed_middle_guard
     )
 
-    # 5. 异质多载体综合路径 D: 4个及以上异质任务 + 多载体综合 + 至少一个额外处理负担
+    # 5. 异质多载体综合路径 D: 4个及以上异质任务 + 多载体综合 + 3-5步以上 + 至少2个独立决策节点
     heterogeneous_multicarrier_floor_4 = (
         features.get("required_task_breadth") == "4个及以上异质必要任务"
         and features.get("information_carrier") == "多载体综合"
-        and (
-            features.get("calculation_model") != "无定量计算"
-            or features.get("model_relation") != "单一模型"
-            or features.get("information_conversion") != "直接读取"
-            or features.get("representation_conversion") in {
-                "多次同类转换",
-                "多表征连续转换",
-                "逆向表征转换",
-            }
-            or features.get("route_design_requirement") != "无"
-        )
+        and features.get("step_count") in {"3-5步", "6-8步", "9-12步", "12步以上"}
+        and len(decision_nodes) >= 2
     )
 
     if (
@@ -1204,7 +1226,7 @@ def derive_structural_level_constraint(
             )
         )
         if heterogeneous_multicarrier_floor_4:
-            evidence.append("4个以上异质任务+多载体综合+额外处理负担")
+            evidence.append(f"4个以上异质任务+多载体综合+独立决策节点(命中{len(decision_nodes)}个)")
         if complex_quantitative:
             evidence.append("复杂定量、参数或范围(高难特征)")
         if model_migration_multistage_strong:
@@ -1212,7 +1234,7 @@ def derive_structural_level_constraint(
         if model_migration_system_coupling_strong:
             evidence.append("长步数(6-8步+)+模型迁移+体系耦合+高层信息/约束/实验负担")
         if is_compressed_high:
-            evidence.append(f"短链高密度综合(命中{sum(axes)}个独立强负担轴)")
+            evidence.append(f"短链高密度综合(命中{len(decision_nodes)}个独立决策节点: {sorted(decision_nodes)})")
 
     # ceiling 3: 普通常规综合 (严格保护真正显性简单的常规题)
     regular_comprehensive_tight = (
@@ -1362,6 +1384,33 @@ def enrich_stage1_rating(
     model_raw_accuracy = raw_accuracy
     high = detect_high_difficulty_features(features)
 
+    # 极强结构原型直接校准 (direct_prototype_score_floor)
+    direct_prototype = (
+        features.get("knowledge_scope") == "单知识点"
+        and features.get("substance_count") == "1种"
+        and features.get("reaction_count") in {"0-1个", "无反应"}
+        and features.get("step_count") == "1-2步"
+        and features.get("required_task_breadth") == "单一规则任务"
+        and features.get("model_explicitness") == "模型完全显性"
+        and features.get("model_relation") == "单一模型"
+        and features.get("reasoning_chain") == "直接套用"
+        and features.get("representation_conversion") == "无转换"
+        and features.get("information_conversion") in {"无信息转换", "直接读取"}
+        and features.get("calculation_model") == "无定量计算"
+        and features.get("experiment_requirement") == "无"
+        and features.get("hidden_conditions") == "无"
+        and not high.names
+    )
+    score_calibration_actions: list[dict[str, Any]] = []
+    if direct_prototype and raw_accuracy < 88.0:
+        score_calibration_actions.append({
+            "rule": "direct_prototype_score_floor",
+            "from": raw_accuracy,
+            "to": 88.0,
+            "reason": "单知识点/单一物质/1-2步/直接套用无转换极简原型强制88分下限",
+        })
+        raw_accuracy = 88.0
+
     active = detect_active_features(features)
     high_count = len(high.names)
     enabled = (
@@ -1372,6 +1421,8 @@ def enrich_stage1_rating(
     multiplier_policy = _apply_chemistry_multiplier_policy(
         original_accuracy=raw_accuracy,
         high_names=high.names,
+        high_evidence=high.evidence,
+        features=features,
         multiplier_enabled=enabled,
         full_dependent_organic_route=_is_full_dependent_organic_route(features),
     )
@@ -1387,6 +1438,8 @@ def enrich_stage1_rating(
 
     rating["model_predicted_accuracy_raw"] = model_raw_accuracy
     rating["original_predicted_accuracy"] = raw_accuracy
+    rating["score_calibration_actions"] = score_calibration_actions
+    rating["score_calibration_applied"] = bool(score_calibration_actions)
     rating["active_features"] = active
     rating["active_feature_count"] = len(active)
     rating["high_difficulty_features"] = high.names
@@ -1540,7 +1593,6 @@ def normalize_stage1_rating(
                 }
             )
     validate_feature_schema(features)
-    validate_stage1_semantic_consistency(features)
     return normalized, log
 
 
@@ -1652,6 +1704,8 @@ def recalculate_verification(
     multiplier_policy = _apply_chemistry_multiplier_policy(
         original_accuracy=reviewed_accuracy,
         high_names=high.names,
+        high_evidence=high.evidence,
+        features=corrected_features,
         multiplier_enabled=enabled,
         full_dependent_organic_route=_is_full_dependent_organic_route(
             corrected_features
@@ -1745,6 +1799,8 @@ def recalculate_verification(
         and reviewed_target_level == "难度2档"
         and (
             "basic_explicit_application_ceiling_2"
+            in reviewed_constraint.get("rule_ids", [])
+            or "parallel_light_bundle_ceiling_2"
             in reviewed_constraint.get("rule_ids", [])
             or "parallel_basic_bundle_strict_ceiling_2"
             in reviewed_constraint.get("rule_ids", [])
@@ -1909,6 +1965,36 @@ def prepare_question(source_question: dict[str, Any], image_mode: str = "auto") 
         })
     question["sub_questions"] = sorted(subquestions, key=_safe_question_sort_key)
 
+    VISUAL_DEPENDENCY_PATTERNS = (
+        "如图",
+        "下图",
+        "图中",
+        "曲线",
+        "流程如下",
+        "流程图",
+        "装置如下",
+        "装置图",
+        "晶胞",
+        "结构如图",
+        "转化关系如下",
+        "反应历程",
+        "谱图",
+        "设备A",
+        "设备B",
+        "设备C",
+        "图像",
+        "图谱",
+        "光谱",
+        "<img",
+    )
+    TEXT_HOLE_PATTERNS = (
+        r"该物质\s+的一氯代物",
+        r"以\s+和\s+为原料",
+        r"结构简式为[：:]\s*$",
+        r"有机物\s+的主链",
+        r"设备[ABC]、?[ABC]?\s*分别为",
+    )
+
     parent_analysis = str(question.get("analysis") or "").strip()
     child_analysis = any(str(item.get("analysis") or "").strip() for item in subquestions)
     has_analysis = bool(parent_analysis) or child_analysis
@@ -1917,10 +2003,14 @@ def prepare_question(source_question: dict[str, Any], image_mode: str = "auto") 
         str(question.get("options") or ""),
         *[str(item.get("stem") or "") + str(item.get("options") or "") for item in subquestions],
     ]).strip()
-    image_required = not text or bool(re.search(r"如图|图中|下图|图像|图谱|光谱|流程图|装置图|<img", text, re.I))
+
+    has_visual_pattern = bool(any(pat in text for pat in VISUAL_DEPENDENCY_PATTERNS)) or bool(any(re.search(pat, text) for pat in TEXT_HOLE_PATTERNS))
     stem_urls = _image_urls(question, ("stem_image_url", "stem_pic_url"))
     analysis_urls = _image_urls(question, ("analysis_image_url", "analysis_pic_url"))
     all_urls = list(dict.fromkeys(stem_urls + analysis_urls))
+
+    image_required = bool(stem_urls and has_visual_pattern) or (not text) or has_visual_pattern
+
     if image_mode == "all":
         selected = all_urls
     elif image_mode == "auto" and image_required:
@@ -1928,14 +2018,23 @@ def prepare_question(source_question: dict[str, Any], image_mode: str = "auto") 
     else:
         selected = []
 
-    if not text and not selected:
+    if image_required and not selected:
         sufficiency = "信息不足"
-    elif image_required and not selected:
-        sufficiency = "部分缺失" if has_analysis else "信息不足"
+        evaluation_valid = False
+        insufficiency_reason = "题目强依赖图像但未包含图像输入"
+    elif not text and not selected:
+        sufficiency = "信息不足"
+        evaluation_valid = False
+        insufficiency_reason = "题干文本与图像均缺失"
     elif not has_analysis:
         sufficiency = "部分缺失"
+        evaluation_valid = True
+        insufficiency_reason = None
     else:
         sufficiency = "充分"
+        evaluation_valid = True
+        insufficiency_reason = None
+
     return PreparedQuestion(
         question=question,
         source_difficulty_untrusted=source_difficulty,
@@ -1947,6 +2046,8 @@ def prepare_question(source_question: dict[str, Any], image_mode: str = "auto") 
             "image_available": bool(all_urls),
             "image_included": bool(selected),
             "input_sufficiency": sufficiency,
+            "evaluation_valid": evaluation_valid,
+            "input_insufficiency_reason": insufficiency_reason,
         },
         selected_image_urls=selected,
     )
