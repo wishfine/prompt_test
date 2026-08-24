@@ -236,7 +236,15 @@ def _extract_output_text(response_json: dict[str, Any]) -> str:
 def _parse_json_object(text: str) -> dict[str, Any]:
     if not text:
         raise ValueError("模型响应为空")
-    repaired = json_repair.repair_json(text, return_objects=True)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = json_repair.repair_json(text, return_objects=True)
+    else:
+        if not isinstance(parsed, dict):
+            raise ValueError("模型响应不是 JSON 对象")
+        return parsed
+    repaired = parsed
     if not isinstance(repaired, dict):
         raise ValueError("模型响应不是 JSON 对象")
     return repaired
@@ -412,6 +420,14 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
     normalized["verification_normalization_log"] = normalization_log
     if not isinstance(result["has_structural_revision"], bool):
         raise ValueError("has_structural_revision 必须为布尔值")
+    if result["has_structural_revision"] and not valid_corrections:
+        normalized["has_structural_revision"] = False
+        normalization_log.append(
+            {
+                "action": "downgrade_empty_structural_revision",
+                "reason": "未提供可执行的 feature_corrections，按无结构修订处理",
+            }
+        )
     boundary_review = result["adjacent_boundary_review"]
     if not isinstance(boundary_review, dict):
         raise ValueError("adjacent_boundary_review 必须为对象")

@@ -971,6 +971,24 @@ def normalize_stage1_rating(
         features["shared_model_across_subquestions"] = False
         log.append({"field": "shared_model_across_subquestions", "from": shared, "to": False})
 
+    # JSON 字符串中把斜杠二次转义不改变任何化学语义；仅在去转义后
+    # 恰好命中该字段的合法枚举时才修复，避免模糊映射。
+    for field, options in FEATURE_OPTIONS.items():
+        value = features.get(field)
+        if not isinstance(value, str) or "\\/" not in value:
+            continue
+        unescaped = value.replace("\\/", "/")
+        if unescaped in options:
+            features[field] = unescaped
+            log.append(
+                {
+                    "field": field,
+                    "from": value,
+                    "to": unescaped,
+                    "reason": "JSON 斜杠二次转义的精确还原",
+                }
+            )
+
     # L1 是 L2 的确定性父级，不应让模型重复填写造成整题失败。
     # 只有当 L2 本身完整合法时才自动派生；非法或缺失 L2 仍交给校验报错。
     knowledge_l2 = features.get("knowledge_L2")
