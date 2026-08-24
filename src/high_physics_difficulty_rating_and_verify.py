@@ -58,6 +58,9 @@ TEMPERATURE_RAW = os.getenv("TEMPERATURE", "")
 ENABLE_STAGE2_AUTO_ADJUST = (
     os.getenv("ENABLE_STAGE2_AUTO_ADJUST", "0").strip() == "1"
 )
+ENABLE_LOW_INFORMATION_LOAD_GUARD = (
+    os.getenv("ENABLE_LOW_INFORMATION_LOAD_GUARD", "1").strip() == "1"
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT = ROOT / "data" / "high-physics-sample25k.jsonl"
@@ -65,7 +68,7 @@ DEFAULT_PROMPT = ROOT / "prompts" / "高中物理难度打标提示词.txt"
 DEFAULT_OUTPUT = ROOT / "outputs" / "model_runs" / "high_physics_two_stage.jsonl"
 DEFAULT_ERRORS = ROOT / "outputs" / "model_runs" / "high_physics_two_stage_errors.jsonl"
 DEFAULT_CACHE = ROOT / "outputs" / "cache" / "high_physics_stage1_prefix_cache.json"
-PIPELINE_VERSION = "high_physics_two_stage_v7_2_1"
+PIPELINE_VERSION = "high_physics_two_stage_v7_2_2"
 SUBJECT_DISPLAY_NAME = "高中物理"
 PROGRESS_DESCRIPTION = "High Physics Pipeline"
 
@@ -519,6 +522,9 @@ def build_stage2_fallback_result(
         "model_name": MODEL_NAME,
         "temperature": TEMPERATURE,
         "stage2_auto_adjustment_enabled": ENABLE_STAGE2_AUTO_ADJUST,
+        "low_information_load_guard_enabled": (
+            ENABLE_LOW_INFORMATION_LOAD_GUARD
+        ),
         "difficulty_rating_stage1": copy.deepcopy(stage1),
         "difficulty_level_step1": level,
         "verification": None,
@@ -616,6 +622,9 @@ async def call_stage1(
                         normalized,
                         features_model_raw=raw_features,
                         normalization_log=normalization_log,
+                        enable_low_information_load_guard=(
+                            ENABLE_LOW_INFORMATION_LOAD_GUARD
+                        ),
                     )
                 except ValueError as exc:
                     if attempt < retries - 1:
@@ -710,6 +719,9 @@ async def call_stage2(
                         ],
                         original_features=stage1["features"],
                         allow_auto_adjustment=ENABLE_STAGE2_AUTO_ADJUST,
+                        enable_low_information_load_guard=(
+                            ENABLE_LOW_INFORMATION_LOAD_GUARD
+                        ),
                         verification=validated,
                     ),
                     total_usage,
@@ -837,6 +849,9 @@ async def process_question(
                 "temperature": TEMPERATURE,
                 "stage2_auto_adjustment_enabled": (
                     ENABLE_STAGE2_AUTO_ADJUST
+                ),
+                "low_information_load_guard_enabled": (
+                    ENABLE_LOW_INFORMATION_LOAD_GUARD
                 ),
                 "difficulty_rating_stage1": stage1,
                 "difficulty_level_step1": stage1["difficulty_level_step1"],

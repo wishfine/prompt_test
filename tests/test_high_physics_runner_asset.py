@@ -50,7 +50,7 @@ class RunnerAssetTests(unittest.TestCase):
     def test_runner_exists_and_compiles(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn('"high_physics_two_stage_v7_2_1"', source)
+        self.assertIn('"high_physics_two_stage_v7_2_2"', source)
 
     def test_prompt_distinguishes_answer_and_shared_model_dependency(self) -> None:
         prompt = (
@@ -91,6 +91,7 @@ class RunnerAssetTests(unittest.TestCase):
         self.assertIn("normalize_stage1_rating", source)
         self.assertIn("finalize_level", source)
         self.assertIn("ENABLE_STAGE2_AUTO_ADJUST", source)
+        self.assertIn("ENABLE_LOW_INFORMATION_LOAD_GUARD", source)
 
     def test_stage1_schema_repair_uses_latest_validation_error(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")

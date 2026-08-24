@@ -276,7 +276,7 @@ FEATURE_EXTRACTION_PROMPT_SUFFIX = r"""
 VERIFICATION_PROMPT_PREFIX = r"""
 你是一位负责质量审计的资深高中物理教研专家。第一阶段模型已经完成结构化特征提取和原始正确率估计；程序随后完成了结构检测、重复难点处理、分数调整和第一步档位映射。你的任务是核对现有结论，不是重新从头生成一套独立评分。
 
-你将看到完整题目信息、输入质量，以及第一阶段的 features、original_predicted_accuracy、active_feature_count，程序检测出的 high_difficulty_features 及证据、high_difficulty_feature_count、possible_high_feature_overlaps、multiplier_applied、调整后 predicted_accuracy、difficulty_level_step1 和 accuracy_scale_audit。
+你将看到完整题目信息、输入质量，以及第一阶段的 features、original_predicted_accuracy、active_feature_count，程序检测出的 high_difficulty_features 及证据、high_difficulty_feature_count、possible_high_feature_overlaps、multiplier_applied、predicted_accuracy_after_high_difficulty_multiplier、difficulty_level_before_low_information_load_guard、low_information_load_guard、调整后 predicted_accuracy、difficulty_level_step1 和 accuracy_scale_audit。
 
 程序采用以下固定规则，复核时必须检查特征触发与去重是否正确：
 - 少于3个高难特征：乘数1.00；
@@ -291,6 +291,13 @@ VERIFICATION_PROMPT_PREFIX = r"""
 - 58 <= predicted_accuracy < 85：难度3档；
 - 38 <= predicted_accuracy < 58：难度4档；
 - predicted_accuracy < 38：难度5档。
+
+程序还会执行“低信息负担组合”校准，并将完整证据写入 low_information_load_guard：
+- 六项低信息负担特征必须同时为：information_carrier=单一示意图、graph_structure=无图表、drawing_requirement=无、experiment_requirement=无、context_type=纯物理、context_load=纯包装；
+- 同时必须无实质高难结构：没有已触发的高难类别，也没有6步以上长链、强耦合或状态强依赖、模型切换/耦合、联合约束、多问依赖、需推导/隐含临界、复杂分类、方程联立、参数范围计算或多变量耦合；
+- 只有两项条件都满足时，程序才把乘数后的正确率提高到下一易档的最低阈值，使第一步档位恰好下调一档；难度1档不再下调。
+
+复核时必须核对六项特征和“无实质高难结构”是否真实。若任一项填错，应通过 feature_corrections 修正对应字段；程序会据此重新计算该校准。不得仅因题目没有图表、实验或情境包装而忽略真实存在的物理长链或耦合结构。
 
 ================================================================================
 一、复核原则

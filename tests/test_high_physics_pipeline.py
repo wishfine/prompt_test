@@ -81,6 +81,67 @@ class AccuracyMappingTests(unittest.TestCase):
                 self.assertEqual(core.map_accuracy_to_level(accuracy), expected)
 
 
+class LowInformationLoadGuardTests(unittest.TestCase):
+    def low_information_features(self, **overrides):
+        features = base_features(
+            information_carrier="单一示意图",
+            graph_structure="无图表",
+            drawing_requirement="无",
+            experiment_requirement="无",
+            context_type="纯物理",
+            context_load="纯包装",
+        )
+        features.update(overrides)
+        return features
+
+    def test_exact_low_information_without_substantial_structure_drops_one_level(self) -> None:
+        result = core.enrich_stage1_rating(
+            {
+                "features": self.low_information_features(),
+                "reason": "测试",
+                "predicted_accuracy": 52.0,
+            }
+        )
+
+        guard = result["low_information_load_guard"]
+        self.assertTrue(guard["triggered"])
+        self.assertEqual(
+            result["difficulty_level_before_low_information_load_guard"],
+            "难度4档",
+        )
+        self.assertEqual(result["predicted_accuracy"], 58.0)
+        self.assertEqual(result["difficulty_level_step1"], "难度3档")
+        self.assertEqual(guard["score_increase"], 6.0)
+
+    def test_low_information_guard_does_not_override_a_long_solution_chain(self) -> None:
+        result = core.enrich_stage1_rating(
+            {
+                "features": self.low_information_features(step_count="6-8步"),
+                "reason": "测试",
+                "predicted_accuracy": 52.0,
+            }
+        )
+
+        guard = result["low_information_load_guard"]
+        self.assertFalse(guard["triggered"])
+        self.assertIn("有效步骤达到6步以上", guard["substantial_structure_blockers"])
+        self.assertEqual(result["predicted_accuracy"], 52.0)
+        self.assertEqual(result["difficulty_level_step1"], "难度4档")
+
+    def test_low_information_guard_can_be_disabled_for_ablation(self) -> None:
+        result = core.enrich_stage1_rating(
+            {
+                "features": self.low_information_features(),
+                "reason": "测试",
+                "predicted_accuracy": 52.0,
+            },
+            enable_low_information_load_guard=False,
+        )
+
+        self.assertFalse(result["low_information_load_guard"]["triggered"])
+        self.assertEqual(result["predicted_accuracy"], 52.0)
+
+
 class HighDifficultyFeatureTests(unittest.TestCase):
     def test_multiple_objects_without_strong_coupling_is_not_high(self) -> None:
         features = base_features(
@@ -1143,6 +1204,49 @@ class FinalAdjustmentTests(unittest.TestCase):
 
 
 class VerificationRecalculationTests(unittest.TestCase):
+    def test_stage2_feature_correction_can_reverse_low_information_guard(self) -> None:
+        original_features = base_features(
+            information_carrier="单一示意图",
+            graph_structure="无图表",
+            drawing_requirement="无",
+            experiment_requirement="无",
+            context_type="纯物理",
+            context_load="纯包装",
+        )
+        verification = core.recalculate_verification(
+            current_level="难度3档",
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=52.0,
+            original_features=original_features,
+            allow_auto_adjustment=True,
+            verification={
+                "feature_corrections": [
+                    {
+                        "field": "context_type",
+                        "from": "纯物理",
+                        "to": "生活应用",
+                        "evidence": "题目要求把生活现象映射到物理规律",
+                    }
+                ],
+                "has_structural_revision": True,
+                "adjacent_boundary_review": {
+                    "boundaries_checked": ["58边界"],
+                    "verdict": "应更难一档",
+                    "decisive_evidence": ["低信息负担组合不再成立"],
+                },
+                "confidence": "高",
+                "reviewed_original_predicted_accuracy": 52.0,
+                "reviewed_high_difficulty_features": [],
+            },
+        )
+
+        self.assertFalse(
+            verification["reviewed_low_information_load_guard"]["triggered"]
+        )
+        self.assertEqual(verification["reviewed_difficulty_level"], "难度4档")
+        self.assertEqual(verification["adjusted_difficulty_level"], "难度4档")
+
     def test_program_recalculates_review_multiplier_accuracy_and_level(self) -> None:
         verification = core.recalculate_verification(
             current_level="难度4档",
@@ -1320,6 +1424,8 @@ class PromptAssetTests(unittest.TestCase):
         self.assertIn("reviewed_original_predicted_accuracy", stage2)
         self.assertIn("has_structural_revision", stage2)
         self.assertIn("adjacent_boundary_review", stage2)
+        self.assertIn("low_information_load_guard", stage2)
+        self.assertIn("六项低信息负担特征", stage2)
         self.assertIn("默认维持第一阶段", stage2)
         self.assertNotIn('"accuracy_anchor"', stage1)
         self.assertNotIn('"boundary_crossing_evidence"', stage1)

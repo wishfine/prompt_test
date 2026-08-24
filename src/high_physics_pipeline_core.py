@@ -173,6 +173,22 @@ HIGH_DIFFICULTY_FEATURE_NAMES = (
     "高阶实验设计或误差反演",
 )
 
+LOW_INFORMATION_LOAD_SIGNATURE = {
+    "information_carrier": "单一示意图",
+    "graph_structure": "无图表",
+    "drawing_requirement": "无",
+    "experiment_requirement": "无",
+    "context_type": "纯物理",
+    "context_load": "纯包装",
+}
+
+NEXT_EASIER_LEVEL_SCORE_FLOOR = {
+    "难度2档": 88.0,
+    "难度3档": 85.0,
+    "难度4档": 58.0,
+    "难度5档": 38.0,
+}
+
 ACCURACY_ANCHOR_RANGES: dict[str, tuple[float, float]] = {
     "教材直接原型": (92.0, 100.0),
     "低结构基础应用": (88.0, 92.0),
@@ -318,6 +334,116 @@ def multiplier_for_high_count(high_count: int) -> float:
     if high_count >= 3:
         return 0.85
     return 1.0
+
+
+def _low_information_load_blockers(
+    features: dict[str, Any],
+    high_feature_count: int,
+) -> list[str]:
+    """返回不能将“低信息负担”直接折算为降档的实质结构。"""
+    blockers: list[str] = []
+    if high_feature_count > 0:
+        blockers.append("已触发程序定义的高难类别")
+    checks = (
+        (
+            features.get("step_count") in {"6-8步", "9-12步", "12步以上"},
+            "有效步骤达到6步以上",
+        ),
+        (
+            features.get("object_relation") in {"双向耦合", "共同受约束"},
+            "对象存在强耦合或共同约束",
+        ),
+        (
+            features.get("process_state_relation")
+            in {"前后状态强依赖", "连续变化伴随边界"},
+            "过程或状态存在强依赖",
+        ),
+        (
+            features.get("model_relation") in {"模型切换", "多模型耦合"},
+            "存在模型切换或多模型耦合",
+        ),
+        (
+            features.get("constraint_structure") == "多约束联合筛选",
+            "存在多约束联合筛选",
+        ),
+        (
+            features.get("subquestion_dependency") == "后问依赖前问"
+            or features.get("shared_model_across_subquestions") is True,
+            "多问存在答案依赖或共享复杂模型",
+        ),
+        (
+            features.get("critical_state") in {"需要推导临界", "隐含临界"},
+            "存在需要推导或隐含的临界状态",
+        ),
+        (
+            features.get("classification_discussion") in {"3类讨论", "4类及以上"},
+            "存在复杂分类讨论",
+        ),
+        (
+            features.get("equation_structure")
+            in {"2-3个方程联立", "4个以上方程或不等式组"},
+            "存在方程联立或不等式组",
+        ),
+        (
+            features.get("calculation_complexity") == "参数或范围计算"
+            or features.get("variable_relation") == "多变量耦合",
+            "存在参数范围计算或多变量耦合",
+        ),
+    )
+    blockers.extend(reason for triggered, reason in checks if triggered)
+    return blockers
+
+
+def apply_low_information_load_guard(
+    *,
+    features: dict[str, Any],
+    high_feature_count: int,
+    adjusted_accuracy: float,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    """在无实质高难结构时，将分数补至下一易档最低阈值。
+
+    六项低信息负担特征只说明题目没有额外的信息呈现负担，不能覆盖
+    长链、多模型、强依赖或联合约束等实质物理难点。因此只有六项全部
+    命中且不存在上述结构时，才自动下调一档。
+    """
+    score_before = round(float(adjusted_accuracy), 1)
+    level_before = map_accuracy_to_level(score_before)
+    signature_values = {
+        field: features.get(field) for field in LOW_INFORMATION_LOAD_SIGNATURE
+    }
+    missing_signature = [
+        field
+        for field, expected in LOW_INFORMATION_LOAD_SIGNATURE.items()
+        if signature_values[field] != expected
+    ]
+    blockers = _low_information_load_blockers(features, high_feature_count)
+    result: dict[str, Any] = {
+        "enabled": enabled,
+        "triggered": False,
+        "signature": signature_values,
+        "missing_signature_fields": missing_signature,
+        "substantial_structure_blockers": blockers,
+        "score_before": score_before,
+        "score_after": score_before,
+        "score_increase": 0.0,
+        "level_before": level_before,
+        "level_after": level_before,
+    }
+    if not enabled or missing_signature or blockers or level_before == "难度1档":
+        return result
+
+    score_after = NEXT_EASIER_LEVEL_SCORE_FLOOR[level_before]
+    level_after = map_accuracy_to_level(score_after)
+    result.update(
+        {
+            "triggered": True,
+            "score_after": score_after,
+            "score_increase": round(score_after - score_before, 1),
+            "level_after": level_after,
+        }
+    )
+    return result
 
 
 def _supported_boundary_evidence(
@@ -1024,6 +1150,7 @@ def recalculate_verification(
     original_accuracy: float | None = None,
     original_features: dict[str, Any] | None = None,
     allow_auto_adjustment: bool = False,
+    enable_low_information_load_guard: bool = True,
 ) -> dict[str, Any]:
     """根据二阶段复核事实重新计算乘数、正确率和建议档位。
 
@@ -1093,13 +1220,23 @@ def recalculate_verification(
         reviewed_accuracy = float(original_accuracy)
     else:
         model_reviewed_accuracy = reviewed_accuracy
+    reviewed_feature_values = copy.deepcopy(original_features or {})
+    for correction in supported_corrections:
+        reviewed_feature_values[correction["field"]] = correction["to"]
     reviewed_count = len(reviewed_features)
     reviewed_multiplier = multiplier_for_high_count(reviewed_count)
-    reviewed_adjusted_accuracy = round(
+    reviewed_accuracy_after_multiplier = round(
         reviewed_accuracy * reviewed_multiplier,
         1,
     )
-    reviewed_level = map_accuracy_to_level(reviewed_adjusted_accuracy)
+    reviewed_low_information_guard = apply_low_information_load_guard(
+        features=reviewed_feature_values,
+        high_feature_count=reviewed_count,
+        adjusted_accuracy=reviewed_accuracy_after_multiplier,
+        enabled=enable_low_information_load_guard,
+    )
+    reviewed_adjusted_accuracy = reviewed_low_information_guard["score_after"]
+    reviewed_level = reviewed_low_information_guard["level_after"]
     current_index = LEVEL_INDEX[current_level]
     reviewed_index = LEVEL_INDEX[reviewed_level]
     if reviewed_index == current_index:
@@ -1139,6 +1276,12 @@ def recalculate_verification(
     normalized["reviewed_original_predicted_accuracy"] = reviewed_accuracy
     normalized["reviewed_high_difficulty_feature_count"] = reviewed_count
     normalized["reviewed_multiplier"] = reviewed_multiplier
+    normalized["reviewed_predicted_accuracy_after_high_difficulty_multiplier"] = (
+        reviewed_accuracy_after_multiplier
+    )
+    normalized["reviewed_low_information_load_guard"] = (
+        reviewed_low_information_guard
+    )
     normalized["reviewed_predicted_accuracy"] = reviewed_adjusted_accuracy
     normalized["reviewed_difficulty_level"] = reviewed_level
     normalized["multiplier_reasonableness"] = (
@@ -1501,6 +1644,7 @@ def enrich_stage1_rating(
     *,
     features_model_raw: dict[str, Any] | None = None,
     normalization_log: list[dict[str, Any]] | None = None,
+    enable_low_information_load_guard: bool = True,
 ) -> dict[str, Any]:
     """保存原始正确率，应用高难特征乘数并映射第一步档位。"""
     rating = copy.deepcopy(stage1_rating)
@@ -1552,6 +1696,12 @@ def enrich_stage1_rating(
     multiplier = multiplier_for_high_count(high_count)
 
     adjusted_accuracy = round(base_accuracy * multiplier, 1)
+    low_information_guard = apply_low_information_load_guard(
+        features=features,
+        high_feature_count=high_count,
+        adjusted_accuracy=adjusted_accuracy,
+        enabled=enable_low_information_load_guard,
+    )
     rating["original_predicted_accuracy"] = base_accuracy
     rating["accuracy_scale_audit"] = _accuracy_scale_audit(
         rating=rating,
@@ -1565,8 +1715,15 @@ def enrich_stage1_rating(
     rating["possible_high_feature_overlaps"] = high.possible_overlap_groups
     rating["high_difficulty_feature_count"] = high_count
     rating["multiplier_applied"] = multiplier
-    rating["predicted_accuracy"] = adjusted_accuracy
-    rating["difficulty_level_step1"] = map_accuracy_to_level(adjusted_accuracy)
+    rating["predicted_accuracy_after_high_difficulty_multiplier"] = (
+        adjusted_accuracy
+    )
+    rating["difficulty_level_before_low_information_load_guard"] = (
+        low_information_guard["level_before"]
+    )
+    rating["low_information_load_guard"] = low_information_guard
+    rating["predicted_accuracy"] = low_information_guard["score_after"]
+    rating["difficulty_level_step1"] = low_information_guard["level_after"]
     return rating
 
 
