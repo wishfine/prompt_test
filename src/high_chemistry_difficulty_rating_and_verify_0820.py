@@ -146,7 +146,7 @@ def _restrict_stage1_model_output(value: dict[str, Any]) -> dict[str, Any]:
     """Keep only fields that belong to the stage-1 model contract."""
     return {
         key: copy.deepcopy(value.get(key))
-        for key in ("features", "reason", "predicted_accuracy")
+        for key in ("features", "reason", "boundary_85_review", "predicted_accuracy")
     }
 
 
