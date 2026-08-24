@@ -22,7 +22,7 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertTrue(RUNNER.exists())
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn("high_chemistry_two_stage_v22_candidate_4", source)
+        self.assertIn("high_chemistry_two_stage_v22_candidate_5", source)
         self.assertIn("ENABLE_STAGE2_AUTO_ADJUST", source)
         self.assertIn("ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER", source)
         self.assertIn(
@@ -127,7 +127,7 @@ class HighChemistryAssetTests(unittest.TestCase):
         for required in (
             "普通高考考生总体中预计能够完整答对本题的比例",
             "同一回答规则下的直接选项辨析",
-            "进入较难综合区（38—58）比较",
+            "进入更难一区间（38—58）",
             "两个以上高阶阶段",
             "共享同一物质流",
             "答案依赖",
@@ -135,7 +135,7 @@ class HighChemistryAssetTests(unittest.TestCase):
             "轻微易错点不能单独把正确率压到88以下",
             "唯一回答规则",
             "完整作答稳定性",
-            "完整完成本题全部必要任务的概率",
+            "完整完成全部必要评分任务的概率",
         ):
             self.assertIn(required, stage1)
         self.assertIn("与上下相邻边界的距离", stage1)

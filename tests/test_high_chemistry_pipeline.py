@@ -696,6 +696,47 @@ class FinalizationAndPreparationTests(unittest.TestCase):
         self.assertEqual(rev2["adjusted_difficulty_level"], "难度3档")
         self.assertFalse(rev2["three_to_two_basicization_supported"])
 
+    def test_validate_stage1_semantic_consistency(self) -> None:
+        """测试 Candidate 5 第一阶段结构语义自洽性校验 (4大逻辑冲突拦截)。"""
+        # 1. 多层因果 + 1-2步 -> ValueError
+        feats1 = base_features(reasoning_chain="多层因果", step_count="1-2步")
+        with self.assertRaises(ValueError) as cm1:
+            core.validate_stage1_semantic_consistency(feats1)
+        self.assertIn("reasoning_chain=多层因果 但 step_count=1-2步", str(cm1.exception))
+
+        # 2. 直接套用 + 6-8步 -> ValueError
+        feats2 = base_features(reasoning_chain="直接套用", step_count="6-8步")
+        with self.assertRaises(ValueError) as cm2:
+            core.validate_stage1_semantic_consistency(feats2)
+        self.assertIn("reasoning_chain=直接套用 但 step_count 为6步以上", str(cm2.exception))
+
+        # 3. 多问递进任务链 + 无后问依赖前问且无共享模型 -> ValueError
+        feats3 = base_features(
+            required_task_breadth="多问递进任务链",
+            subquestion_dependency="无多问",
+            shared_model_across_subquestions=False,
+        )
+        with self.assertRaises(ValueError) as cm3:
+            core.validate_stage1_semantic_consistency(feats3)
+        self.assertIn("required_task_breadth=多问递进任务链，但没有答案依赖或共享模型", str(cm3.exception))
+
+        # 4. 强多阶段流程 + 1-2步 -> ValueError
+        feats4 = base_features(process_structure="多阶段强依赖", step_count="1-2步")
+        with self.assertRaises(ValueError) as cm4:
+            core.validate_stage1_semantic_consistency(feats4)
+        self.assertIn("process_structure 为强多阶段结构，但 step_count=1-2步", str(cm4.exception))
+
+        # 合法通过测试
+        valid_feats = base_features(
+            reasoning_chain="简单因果",
+            step_count="1-2步",
+            required_task_breadth="2-3个异质必要任务",
+            subquestion_dependency="无多问",
+            process_structure="单阶段",
+        )
+        # 应正常返回不抛异常
+        core.validate_stage1_semantic_consistency(valid_feats)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1387,6 +1387,63 @@ def enrich_stage1_rating(
     rating["full_dependent_organic_route_detected"] = _is_full_dependent_organic_route(features)
     return rating
 
+def validate_stage1_semantic_consistency(
+    features: dict[str, Any],
+) -> None:
+    """校验第一阶段关键特征之间的结构语义自洽性，冲突时抛出 ValueError 以触发模型重试。"""
+    step_count = features.get("step_count")
+    reasoning = features.get("reasoning_chain")
+    breadth = features.get("required_task_breadth")
+    dependency = features.get("subquestion_dependency")
+    shared = features.get("shared_model_across_subquestions")
+    process = features.get("process_structure")
+
+    # 1. 多层因果不可能只有1-2步最长链
+    if (
+        reasoning == "多层因果"
+        and step_count == "1-2步"
+    ):
+        raise ValueError(
+            "结构语义冲突：reasoning_chain=多层因果 "
+            "但 step_count=1-2步。请重新还原最长连续依赖链。"
+        )
+
+    # 2. 直接套用不能同时声称存在长连续链
+    if (
+        reasoning == "直接套用"
+        and step_count in {
+            "6-8步",
+            "9-12步",
+            "12步以上",
+        }
+    ):
+        raise ValueError(
+            "结构语义冲突：reasoning_chain=直接套用 "
+            "但 step_count 为6步以上。"
+        )
+
+    # 3. 多问递进任务链必须存在答案依赖或共享题干特有模型
+    if (
+        breadth == "多问递进任务链"
+        and dependency != "后问依赖前问"
+        and shared is not True
+    ):
+        raise ValueError(
+            "结构语义冲突：required_task_breadth=多问递进任务链，"
+            "但没有答案依赖或共享模型。"
+        )
+
+    # 4. 强多阶段流程不能只有1-2步最长链
+    if (
+        process in {"多阶段强依赖", "循环或回流流程"}
+        and step_count == "1-2步"
+    ):
+        raise ValueError(
+            "结构语义冲突：process_structure 为强多阶段结构，"
+            "但 step_count=1-2步。"
+        )
+
+
 def normalize_stage1_rating(
     stage1_rating: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -1429,6 +1486,7 @@ def normalize_stage1_rating(
                 }
             )
     validate_feature_schema(features)
+    validate_stage1_semantic_consistency(features)
     return normalized, log
 
 
