@@ -126,10 +126,8 @@ def accuracy_scale_diagnostics(predictions: dict[str, dict[str, Any]]) -> dict[s
     burden: Counter[str] = Counter()
     task_structure: Counter[str] = Counter()
     score_dist: Counter[float] = Counter()
-    boundary_85_decisions: Counter[str] = Counter()
     records_with_stage1 = threshold_inconsistent = low_structure_conflict = 0
     high_burden_conflict = three_state_risk = multi_reaction_risk = 0
-    boundary_85_missing = boundary_85_inconsistent = 0
     for row in predictions.values():
         stage1 = row.get("difficulty_rating") or row.get("difficulty_rating_stage1")
         if not isinstance(stage1, dict):
@@ -144,18 +142,6 @@ def accuracy_scale_diagnostics(predictions: dict[str, dict[str, Any]]) -> dict[s
             score_dist[original_accuracy] += 1
         except (KeyError, TypeError, ValueError):
             original_accuracy = None
-        boundary_85_review = stage1.get("boundary_85_review")
-        if not isinstance(boundary_85_review, dict):
-            boundary_85_missing += 1
-        else:
-            decision = boundary_85_review.get("decision")
-            if isinstance(decision, str):
-                boundary_85_decisions[decision] += 1
-            if (
-                (decision == "保持85及以上" and (original_accuracy is None or original_accuracy < 85))
-                or (decision == "进入85以下" and (original_accuracy is None or original_accuracy >= 85))
-            ):
-                boundary_85_inconsistent += 1
         audit = stage1.get("accuracy_scale_audit")
         if not isinstance(audit, dict):
             continue
@@ -173,9 +159,6 @@ def accuracy_scale_diagnostics(predictions: dict[str, dict[str, Any]]) -> dict[s
         "multi_reaction_boundary_review_risk_count": multi_reaction_risk,
         "unique_original_accuracy_count": len(score_dist),
         "top_original_accuracy_values": [{"score": score, "count": count} for score, count in score_dist.most_common(15)],
-        "boundary_85_decision_distribution": dict(boundary_85_decisions),
-        "boundary_85_review_missing_count": boundary_85_missing,
-        "boundary_85_review_inconsistent_count": boundary_85_inconsistent,
         "local_model_familiarity_distribution": dict(familiarity),
         "whole_question_burden_distribution": dict(burden),
         "task_completion_structure_distribution": dict(task_structure),
@@ -191,7 +174,6 @@ def mismatch_rows(labels: dict[str, dict[str, Any]], predictions: dict[str, dict
             continue
         row = predictions[question_id]
         stage1 = row.get("difficulty_rating") or row.get("difficulty_rating_stage1") or {}
-        boundary_85_review = stage1.get("boundary_85_review") if isinstance(stage1, dict) else {}
         rows.append({
             "question_id": question_id,
             "reference_level": truth,
@@ -200,9 +182,6 @@ def mismatch_rows(labels: dict[str, dict[str, Any]], predictions: dict[str, dict
             "reference_confidence": labels[question_id].get("confidence", ""),
             "reference_reason": labels[question_id].get("reason", ""),
             "pipeline_reason": stage1.get("reason", ""),
-            "boundary_85_decision": boundary_85_review.get("decision", "") if isinstance(boundary_85_review, dict) else "",
-            "boundary_85_decisive_chemical_task": boundary_85_review.get("decisive_chemical_task", "") if isinstance(boundary_85_review, dict) else "",
-            "boundary_85_why_not_other_side": boundary_85_review.get("why_not_other_side", "") if isinstance(boundary_85_review, dict) else "",
             "stem": row.get("stem", ""),
         })
     return rows
@@ -214,8 +193,7 @@ def write_mismatches(path: Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(handle, fieldnames=[
             "question_id", "reference_level", "final_level", "gap",
             "reference_confidence", "reference_reason", "pipeline_reason",
-            "boundary_85_decision", "boundary_85_decisive_chemical_task",
-            "boundary_85_why_not_other_side", "stem",
+            "stem",
         ])
         writer.writeheader()
         writer.writerows(rows)

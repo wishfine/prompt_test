@@ -123,35 +123,6 @@ HIGH_DIFFICULTY_FEATURE_NAMES = (
     "高阶实验、合成或分离设计",
 )
 
-BOUNDARY_85_DECISIONS = {
-    "保持85及以上",
-    "进入85以下",
-}
-
-
-def validate_boundary_85_review(review: Any, predicted_accuracy: Any) -> None:
-    """校验模型声明的 85 边界判断与原始分数一致，不改写分数。"""
-    if not isinstance(review, dict):
-        raise ValueError("boundary_85_review 必须为对象")
-    required = {"decision", "decisive_chemical_task", "why_not_other_side"}
-    if set(review) != required:
-        raise ValueError("boundary_85_review 字段必须且只能包括 decision、decisive_chemical_task、why_not_other_side")
-    decision = review.get("decision")
-    if decision not in BOUNDARY_85_DECISIONS:
-        raise ValueError("boundary_85_review.decision 非法值")
-    for field in ("decisive_chemical_task", "why_not_other_side"):
-        if not isinstance(review.get(field), str) or not review[field].strip():
-            raise ValueError(f"boundary_85_review.{field} 必须为非空字符串")
-    try:
-        accuracy = float(predicted_accuracy)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("predicted_accuracy 必须为数值") from exc
-    if decision == "保持85及以上" and accuracy < 85:
-        raise ValueError("boundary_85_review 声明保持85及以上，但 predicted_accuracy 小于85")
-    if decision == "进入85以下" and accuracy >= 85:
-        raise ValueError("boundary_85_review 声明进入85以下，但 predicted_accuracy 不小于85")
-
-
 def build_stage1_output_schema() -> dict[str, Any]:
     """由本模块的规范枚举生成第一阶段严格输出 Schema。"""
     feature_properties: dict[str, Any] = {
@@ -184,19 +155,9 @@ def build_stage1_output_schema() -> dict[str, Any]:
                 "additionalProperties": False,
             },
             "reason": {"type": "string"},
-            "boundary_85_review": {
-                "type": "object",
-                "properties": {
-                    "decision": {"type": "string", "enum": sorted(BOUNDARY_85_DECISIONS)},
-                    "decisive_chemical_task": {"type": "string"},
-                    "why_not_other_side": {"type": "string"},
-                },
-                "required": ["decision", "decisive_chemical_task", "why_not_other_side"],
-                "additionalProperties": False,
-            },
             "predicted_accuracy": {"type": "number"},
         },
-        "required": ["features", "reason", "boundary_85_review", "predicted_accuracy"],
+        "required": ["features", "reason", "predicted_accuracy"],
         "additionalProperties": False,
     }
 
@@ -976,8 +937,6 @@ def enrich_stage1_rating(
         raise ValueError("第一阶段 predicted_accuracy 缺失或不是数值") from exc
     if not 0 <= raw_accuracy <= 100:
         raise ValueError("第一阶段 predicted_accuracy 必须在 0 到 100 之间")
-    validate_boundary_85_review(rating.get("boundary_85_review"), raw_accuracy)
-
     distinct_points = list(dict.fromkeys(str(value).strip() for value in features["knowledge_points"]))
     features["knowledge_points"] = distinct_points
     features["knowledge_count"] = "1个" if len(distinct_points) == 1 else ("2-3个" if len(distinct_points) <= 3 else "4个及以上")
