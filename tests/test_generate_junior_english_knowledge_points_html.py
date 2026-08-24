@@ -59,6 +59,7 @@ class KnowledgePointsHtmlTests(unittest.TestCase):
         self.assertIn("q1", html)
         self.assertIn("原始知识点顺序", html)
         self.assertIn("排序后知识点顺序", html)
+        self.assertIn('<details class="question-details" open>', html)
         self.assertIn("人工复核", html)
         self.assertIn("localStorage", html)
         self.assertIn('data-status="changed"', html)

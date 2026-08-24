@@ -104,8 +104,8 @@ def _card(row: dict[str, Any], index: int) -> str:
         <span class="qid">#{index + 1} · {_escape(question_id)}</span>
         <span class="status status-{status}">{'顺序有变化' if status == 'changed' else '排序失败' if status == 'error' else '顺序未变化'}</span>
       </div>
-      <details class="question-details">
-        <summary>查看题目与解析原文</summary>
+      <details class="question-details" open>
+        <summary>题目与解析原文（点击折叠）</summary>
         <pre>{_escape(raw_input)}</pre>
       </details>
       {error_html}
@@ -182,7 +182,7 @@ h1 {{ margin:0 0 8px; font-size:28px; }} .subtitle {{ color:var(--muted); margin
   <section class="stats">{stat_items}</section>
   <section class="overview">
     <div class="panel"><h2>排序后第一知识点 Top 12</h2>{top_bars}</div>
-    <div class="panel"><h2>使用说明</h2><div class="muted">用下方筛选查看顺序发生变化的题目；点击“查看题目与解析原文”展开输入信息。蓝色标签为排序后的第 1 项。</div></div>
+    <div class="panel"><h2>使用说明</h2><div class="muted">用下方筛选查看顺序发生变化的题目；题目与解析原文默认展开，点击标题即可折叠。蓝色标签为排序后的第 1 项。</div></div>
   </section>
   <div class="toolbar" aria-label="筛选">
     <input id="search" type="search" placeholder="搜索题目 ID、题干或知识点">
