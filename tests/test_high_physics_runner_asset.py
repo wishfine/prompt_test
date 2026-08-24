@@ -17,6 +17,26 @@ import high_physics_difficulty_rating_and_verify as runner  # noqa: E402
 
 
 class RunnerAssetTests(unittest.TestCase):
+    @staticmethod
+    def _valid_verification(**overrides):
+        value = {
+            "difficulty_source": "测试",
+            "feature_corrections": [],
+            "missed_features": ["无"],
+            "has_structural_revision": False,
+            "adjacent_boundary_review": {
+                "boundaries_checked": ["58边界"],
+                "verdict": "维持",
+                "decisive_evidence": ["无结构修正"],
+            },
+            "confidence": "高",
+            "reviewed_original_predicted_accuracy": 68.0,
+            "reviewed_high_difficulty_features": [],
+            "analysis": "测试",
+        }
+        value.update(overrides)
+        return value
+
     def test_prompt_stage_separation_validator_rejects_stage1_leak(self) -> None:
         with self.assertRaisesRegex(ValueError, "第一阶段 Prompt 泄露后处理规则"):
             runner._validate_prompt_stage_separation(
@@ -50,7 +70,7 @@ class RunnerAssetTests(unittest.TestCase):
     def test_runner_exists_and_compiles(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn('"high_physics_two_stage_v7_2_2"', source)
+        self.assertIn('"high_physics_two_stage_v7_2_3"', source)
 
     def test_prompt_distinguishes_answer_and_shared_model_dependency(self) -> None:
         prompt = (
@@ -190,6 +210,36 @@ class RunnerAssetTests(unittest.TestCase):
             normalized["verification_normalization_log"][0]["action"],
             "ignore_non_feature_correction",
         )
+
+    def test_verification_permissively_drops_incomplete_correction(self) -> None:
+        value = self._valid_verification(
+            feature_corrections=[{"field": "critical_state"}]
+        )
+
+        normalized = runner.validate_verification(
+            value,
+            allow_incomplete_corrections=True,
+        )
+
+        self.assertEqual(normalized["feature_corrections"], [])
+        self.assertEqual(
+            normalized["verification_normalization_log"][0]["action"],
+            "drop_incomplete_feature_correction",
+        )
+        self.assertEqual(
+            normalized["verification_normalization_log"][0]["missing_fields"],
+            ["evidence", "from", "to"],
+        )
+
+    def test_stage2_repair_feedback_contains_schema_error_and_prior_json(self) -> None:
+        feedback = runner._build_stage2_repair_feedback(
+            ValueError("feature_corrections[0] 缺少字段：['from']"),
+            {"feature_corrections": [{"field": "critical_state"}]},
+        )
+
+        self.assertIn("feature_corrections[0] 缺少字段", feedback)
+        self.assertIn('"critical_state"', feedback)
+        self.assertIn("只输出完整合法 JSON", feedback)
 
     def test_stage2_error_record_preserves_paid_stage1_result(self) -> None:
         record = runner.build_pipeline_error(

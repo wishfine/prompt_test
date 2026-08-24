@@ -68,7 +68,7 @@ DEFAULT_PROMPT = ROOT / "prompts" / "高中物理难度打标提示词.txt"
 DEFAULT_OUTPUT = ROOT / "outputs" / "model_runs" / "high_physics_two_stage.jsonl"
 DEFAULT_ERRORS = ROOT / "outputs" / "model_runs" / "high_physics_two_stage_errors.jsonl"
 DEFAULT_CACHE = ROOT / "outputs" / "cache" / "high_physics_stage1_prefix_cache.json"
-PIPELINE_VERSION = "high_physics_two_stage_v7_2_2"
+PIPELINE_VERSION = "high_physics_two_stage_v7_2_3"
 SUBJECT_DISPLAY_NAME = "高中物理"
 PROGRESS_DESCRIPTION = "High Physics Pipeline"
 
@@ -325,6 +325,19 @@ def _json_block(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
+def _build_stage2_repair_feedback(error: Exception, raw_result: Any) -> str:
+    """构造第二阶段一次性格式修复反馈，不推测缺失特征事实。"""
+    return (
+        f"上一次第二阶段 JSON 校验失败：{error}\n"
+        "上一次输出如下：\n"
+        + _json_block(raw_result)
+        + "\n请仅修复 JSON 格式与字段完整性。"
+        "feature_corrections 的每一项必须同时包含 field、from、to、evidence；"
+        "若无法完整说明某项修正，请从 feature_corrections 中删除该项。"
+        "只输出完整合法 JSON。"
+    )
+
+
 def construct_question_text(question: dict[str, Any], input_quality: dict[str, Any]) -> str:
     """构造发送给模型的题目信息；输入已由 prepare_question 删除 difficulty。"""
     return (
@@ -344,7 +357,11 @@ def _content_with_images(text: str, image_urls: list[str]) -> str | list[dict[st
     return content
 
 
-def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
+def validate_verification(
+    result: dict[str, Any],
+    *,
+    allow_incomplete_corrections: bool = False,
+) -> dict[str, Any]:
     if not isinstance(result, dict):
         raise ValueError("第二阶段响应必须为对象")
     required = (
@@ -376,6 +393,16 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"feature_corrections[{index}] 必须为对象")
         correction_missing = correction_fields - correction.keys()
         if correction_missing:
+            if allow_incomplete_corrections:
+                normalization_log.append(
+                    {
+                        "action": "drop_incomplete_feature_correction",
+                        "index": index,
+                        "missing_fields": sorted(correction_missing),
+                        "raw_correction": copy.deepcopy(correction),
+                    }
+                )
+                continue
             raise ValueError(
                 f"feature_corrections[{index}] 缺少字段："
                 f"{sorted(correction_missing)}"
@@ -672,7 +699,7 @@ async def call_stage2(
     retries: int,
     timeout: int,
 ) -> tuple[dict[str, Any], dict[str, int], float]:
-    review_text = (
+    base_review_text = (
         VERIFICATION_PROMPT_PREFIX
         + "\n\n【题目信息】\n"
         + question_text
@@ -683,7 +710,15 @@ async def call_stage2(
     started = time.time()
     total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     last_error = ""
+    repair_feedback: str | None = None
     for attempt in range(retries):
+        review_text = (
+            base_review_text
+            if repair_feedback is None
+            else base_review_text
+            + "\n\n【格式修复要求】\n"
+            + repair_feedback
+        )
         payload: dict[str, Any] = {
             "model": MODEL_NAME,
             "input": [
@@ -703,8 +738,26 @@ async def call_stage2(
                 current_usage = _usage(body)
                 for key in total_usage:
                     total_usage[key] += current_usage[key]
-                parsed = _parse_json_object(_extract_output_text(body))
-                validated = validate_verification(parsed)
+                raw_output = _extract_output_text(body)
+                try:
+                    parsed = _parse_json_object(raw_output)
+                    validated = validate_verification(
+                        parsed,
+                        allow_incomplete_corrections=(
+                            repair_feedback is not None
+                        ),
+                    )
+                except ValueError as exc:
+                    if repair_feedback is None and attempt < retries - 1:
+                        repair_feedback = _build_stage2_repair_feedback(
+                            exc,
+                            raw_output,
+                        )
+                        last_error = str(exc)
+                        continue
+                    raise RuntimeError(
+                        f"第二阶段响应格式修复失败：{exc}"
+                    ) from exc
                 return (
                     recalculate_verification(
                         current_level=stage1["difficulty_level_step1"],
