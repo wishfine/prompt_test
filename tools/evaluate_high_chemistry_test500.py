@@ -443,23 +443,109 @@ def build_report(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--labels", required=True)
-    parser.add_argument("--predictions", required=True)
-    parser.add_argument("--output")
+    parser.add_argument("--labels", "--reference", dest="labels", required=True, help="参考标签文件路径")
+    parser.add_argument("--predictions", nargs="+", required=True, help="模型预测输出文件路径 (支持一个或多个)")
+    parser.add_argument("--output", help="输出报告文件路径 (可选)")
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
     labels = read_by_id(Path(args.labels))
-    predictions = read_by_id(Path(args.predictions))
-    report = build_report(labels, predictions)
-    text = json.dumps(report, ensure_ascii=False, indent=2)
+    pred_paths = [Path(p) for p in args.predictions]
+
+    if len(pred_paths) == 1:
+        predictions = read_by_id(pred_paths[0])
+        report = build_report(labels, predictions)
+        text = json.dumps(report, ensure_ascii=False, indent=2)
+        if args.output:
+            output = Path(args.output)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(text + "\n", encoding="utf-8")
+        print(text)
+        return
+
+    # 多 Run 评测与汇总对比
+    run_reports: list[dict[str, Any]] = []
+    print("=" * 72)
+    print(" 高中化学 Test 500 多跑评测汇总")
+    print("=" * 72)
+
+    for path in pred_paths:
+        predictions = read_by_id(path)
+        report = build_report(labels, predictions)
+        run_reports.append({
+            "path": str(path),
+            "name": path.stem,
+            "report": report,
+            "predictions": predictions,
+        })
+        fin = report["final"]
+        s1 = report["step1"]
+        print(f"\n▶ 文件: {path.name}")
+        print(f"  Step 1 Accuracy : {s1['accuracy']:.2%} ({s1['exact']}/{s1['valid_samples']})")
+        print(f"  Final Accuracy  : {fin['accuracy']:.2%} ({fin['exact']}/{fin['valid_samples']})")
+        print(f"  Final QWK       : {fin['quadratic_weighted_kappa']}")
+        print(f"  Final MAE       : {fin['mean_absolute_error']}")
+        print("  各档位 Recall / Precision:")
+        for lvl in LEVELS:
+            rec = fin["per_level_recall"].get(lvl, 0.0)
+            prec = fin["per_level_precision"].get(lvl, 0.0)
+            cnt = fin["truth_distribution"].get(lvl, 0)
+            pred_cnt = fin["prediction_distribution"].get(lvl, 0)
+            print(f"    {lvl} (True={cnt:3d}, Pred={pred_cnt:3d}): Recall={rec:.2%}, Precision={prec:.2%}")
+
+    # 多跑一致性分析
+    if len(run_reports) >= 2:
+        all_qids = set(labels.keys())
+        agree_step1 = 0
+        agree_final = 0
+        agree_final_correct = 0
+        
+        for qid in all_qids:
+            s1_preds = [r["predictions"][qid].get("difficulty_level_step1") for r in run_reports if qid in r["predictions"]]
+            fin_preds = [r["predictions"][qid].get("final_difficulty_level") for r in run_reports if qid in r["predictions"]]
+            if len(s1_preds) == len(run_reports) and len(set(s1_preds)) == 1:
+                agree_step1 += 1
+            if len(fin_preds) == len(run_reports) and len(set(fin_preds)) == 1:
+                agree_final += 1
+                truth = (
+                    labels[qid].get("revalidated_difficulty_level")
+                    or labels[qid].get("reviewed_difficulty_level")
+                    or labels[qid].get("manual_difficulty_level")
+                )
+                if fin_preds[0] == truth:
+                    agree_final_correct += 1
+
+        total_tested = len(all_qids)
+        mean_s1_acc = sum(r["report"]["step1"]["accuracy"] for r in run_reports) / len(run_reports)
+        mean_fin_acc = sum(r["report"]["final"]["accuracy"] for r in run_reports) / len(run_reports)
+        mean_qwk = sum(r["report"]["final"]["quadratic_weighted_kappa"] or 0.0 for r in run_reports) / len(run_reports)
+
+        print("\n" + "=" * 72)
+        print(" 多跑稳定性与一致性统计")
+        print("=" * 72)
+        print(f"  Step 1 全跑完全一致题数 : {agree_step1} / {total_tested} ({agree_step1/total_tested:.2%})")
+        print(f"  Final  全跑完全一致题数 : {agree_final} / {total_tested} ({agree_final/total_tested:.2%})")
+        if agree_final > 0:
+            print(f"  稳定题集 (一致题) 准确率 : {agree_final_correct} / {agree_final} ({agree_final_correct/agree_final:.2%})")
+        print(f"  多跑平均 Step 1 Accuracy: {mean_s1_acc:.2%}")
+        print(f"  多跑平均 Final Accuracy : {mean_fin_acc:.2%}")
+        print(f"  多跑平均 Final QWK      : {mean_qwk:.4f}")
+
     if args.output:
+        combined = {
+            "runs": [{k: v for k, v in r.items() if k != "predictions"} for r in run_reports],
+            "multi_run_consistency": {
+                "agree_step1_count": agree_step1 if len(run_reports) >= 2 else None,
+                "agree_final_count": agree_final if len(run_reports) >= 2 else None,
+                "agree_final_correct_count": agree_final_correct if len(run_reports) >= 2 else None,
+            } if len(run_reports) >= 2 else None,
+        }
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(text + "\n", encoding="utf-8")
-    print(text)
+        output.write_text(json.dumps(combined, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"\n报告已保存至: {args.output}")
 
 
 if __name__ == "__main__":
