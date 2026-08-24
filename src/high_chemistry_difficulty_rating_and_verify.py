@@ -78,9 +78,9 @@ DEFAULT_PROMPT = ROOT / "prompts" / "高中化学难度打标提示词.txt"
 DEFAULT_OUTPUT = ROOT / "outputs" / "model_runs" / "high_chemistry_two_stage.jsonl"
 DEFAULT_ERRORS = ROOT / "outputs" / "model_runs" / "high_chemistry_two_stage_errors.jsonl"
 DEFAULT_CACHE = ROOT / "outputs" / "cache" / "high_chemistry_stage1_prefix_cache.json"
-PIPELINE_VERSION = "high_chemistry_two_stage_v22_candidate_5"
-PROMPT_VERSION = "high_chemistry_prompt_v22_candidate_5"
-STRUCTURAL_CONSTRAINT_VERSION = "structural_constraint_v22_candidate_5"
+PIPELINE_VERSION = "high_chemistry_two_stage_v22_candidate_6"
+PROMPT_VERSION = "high_chemistry_prompt_v22_candidate_6"
+STRUCTURAL_CONSTRAINT_VERSION = "structural_constraint_v22_candidate_6"
 PROMPT_SHA256 = ""
 CORE_SHA256 = hashlib.sha256(
     (ROOT / "src" / "high_chemistry_pipeline_core.py").read_bytes()
@@ -719,6 +719,7 @@ async def call_stage1(
     total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     last_error = ""
     repair_feedback: str | None = None
+    validation_retry_reasons: list[str] = []
     for attempt in range(retries):
         use_cache = bool(cache_id and repair_feedback is None)
         if repair_feedback is not None:
@@ -778,8 +779,11 @@ async def call_stage1(
                         normalized,
                         features_model_raw=raw_features,
                         normalization_log=normalization_log,
+                        validation_retry_count=len(validation_retry_reasons),
+                        validation_retry_reasons=validation_retry_reasons,
                     )
                 except ValueError as exc:
+                    validation_retry_reasons.append(str(exc))
                     if attempt < retries - 1:
                         repair_feedback = (
                             f"上一次 JSON 校验失败：{exc}\n"

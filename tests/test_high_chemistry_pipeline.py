@@ -737,6 +737,21 @@ class FinalizationAndPreparationTests(unittest.TestCase):
         # 应正常返回不抛异常
         core.validate_stage1_semantic_consistency(valid_feats)
 
+    def test_enrich_stage1_rating_records_validation_retry_metadata(self) -> None:
+        """测试 enrich_stage1_rating 正确透传并记录语义重试统计元数据。"""
+        rating = {
+            "predicted_accuracy": 75.0,
+            "features": base_features(),
+        }
+        reasons = ["结构语义冲突：reasoning_chain=多层因果 但 step_count=1-2步。"]
+        enriched = core.enrich_stage1_rating(
+            rating,
+            validation_retry_count=1,
+            validation_retry_reasons=reasons,
+        )
+        self.assertEqual(enriched["stage1_validation_retry_count"], 1)
+        self.assertEqual(enriched["stage1_validation_retry_reasons"], reasons)
+
 
 if __name__ == "__main__":
     unittest.main()

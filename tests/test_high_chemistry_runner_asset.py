@@ -22,7 +22,7 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertTrue(RUNNER.exists())
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn("high_chemistry_two_stage_v22_candidate_5", source)
+        self.assertIn("high_chemistry_two_stage_v22_candidate_6", source)
         self.assertIn("ENABLE_STAGE2_AUTO_ADJUST", source)
         self.assertIn("ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER", source)
         self.assertIn(

@@ -1282,6 +1282,8 @@ def enrich_stage1_rating(
     features_model_raw: dict[str, Any] | None = None,
     normalization_log: list[dict[str, Any]] | None = None,
     multiplier_enabled: bool | None = None,
+    validation_retry_count: int = 0,
+    validation_retry_reasons: list[str] | None = None,
 ) -> dict[str, Any]:
     rating = copy.deepcopy(stage1_rating)
     features = rating.get("features")
@@ -1291,6 +1293,8 @@ def enrich_stage1_rating(
     )
     rating["enum_normalization_log"] = copy.deepcopy(normalization_log or [])
     rating["enum_normalization_applied"] = bool(normalization_log)
+    rating["stage1_validation_retry_count"] = int(validation_retry_count)
+    rating["stage1_validation_retry_reasons"] = list(validation_retry_reasons or [])
     try:
         raw_accuracy = float(rating["predicted_accuracy"])
     except (KeyError, TypeError, ValueError) as exc:
