@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -236,18 +237,50 @@ def _extract_output_text(response_json: dict[str, Any]) -> str:
 def _parse_json_object(text: str) -> dict[str, Any]:
     if not text:
         raise ValueError("模型响应为空")
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        parsed = json_repair.repair_json(text, return_objects=True)
-    else:
-        if not isinstance(parsed, dict):
-            raise ValueError("模型响应不是 JSON 对象")
-        return parsed
-    repaired = parsed
-    if not isinstance(repaired, dict):
-        raise ValueError("模型响应不是 JSON 对象")
-    return repaired
+    candidates = [text.strip()]
+    fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.S)
+    if fenced:
+        candidates.append(fenced.group(1))
+    start, end = text.find("{"), text.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(text[start : end + 1])
+
+    last_error: Exception | None = None
+    for candidate in dict.fromkeys(candidates):
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+        else:
+            if isinstance(parsed, dict):
+                return parsed
+            last_error = ValueError("模型响应不是 JSON 对象")
+            continue
+
+        # 化学 LaTeX 常含 \ce、\frac 等。模型偶尔在 JSON 字符串中直接
+        # 输出这些反斜杠，导致严格 JSON 解析失败，并会使 json_repair 把
+        # 后续花括号误判成深层嵌套。仅补齐非法 JSON 转义后重新解析。
+        escaped = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', candidate)
+        if escaped != candidate:
+            try:
+                parsed = json.loads(escaped)
+            except json.JSONDecodeError as exc:
+                last_error = exc
+            else:
+                if isinstance(parsed, dict):
+                    return parsed
+                last_error = ValueError("模型响应不是 JSON 对象")
+                continue
+
+        try:
+            repaired = json_repair.repair_json(escaped, return_objects=True)
+        except Exception as exc:  # json_repair 对异常 LaTeX 嵌套可能失败
+            last_error = exc
+            continue
+        if isinstance(repaired, dict):
+            return repaired
+        last_error = ValueError("模型响应不是 JSON 对象")
+    raise ValueError(f"模型 JSON 解析失败：{last_error}")
 
 
 def _usage(response_json: dict[str, Any]) -> dict[str, int]:
