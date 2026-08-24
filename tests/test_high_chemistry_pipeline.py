@@ -746,7 +746,7 @@ class FinalizationAndPreparationTests(unittest.TestCase):
         self.assertEqual(constraint_4_plus["difficulty_ceiling"], "难度2档")
 
     def test_compressed_high_burden_floor_4_decision_nodes_deduplication(self) -> None:
-        """测试 5 类独立决策节点去重：仅有 model_explicitness+reasoning_chain+model_relation 归并为 1 个节点，不触发 floor4；增加 joint_constraint 归并为 2 个节点，正确触发 floor4。"""
+        """测试 5 类独立决策节点去重：仅有 model_explicitness+reasoning_chain+model_relation 归并为 1 个节点，在简单规律映射下不触发 floor4；增加 joint_constraint 归并为 2 个节点，正确触发 floor4。"""
         feats_single_node = base_features(
             step_count="3-5步",
             model_explicitness="半隐含模型",
@@ -755,6 +755,7 @@ class FinalizationAndPreparationTests(unittest.TestCase):
             calculation_model="常规化学计量",
             information_conversion="直接读取",
             constraint_structure="单一约束",
+            context_load="简单规律映射",
         )
         constraint_single = core.derive_structural_level_constraint(feats_single_node, [])
         self.assertNotIn("compressed_high_burden_floor_4", constraint_single["rule_ids"])
@@ -767,6 +768,7 @@ class FinalizationAndPreparationTests(unittest.TestCase):
             calculation_model="常规化学计量",
             information_conversion="直接读取",
             constraint_structure="多约束联合筛选",
+            context_load="简单规律映射",
         )
         constraint_two = core.derive_structural_level_constraint(feats_two_nodes, [])
         self.assertIn("compressed_high_burden_floor_4", constraint_two["rule_ids"])

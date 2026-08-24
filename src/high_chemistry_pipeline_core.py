@@ -1155,7 +1155,7 @@ def derive_structural_level_constraint(
     model_cluster_relief = (
         is_model_only_cluster
         and features.get("process_structure") == "单阶段"
-        and features.get("context_load") in {"纯包装", "简单规律映射"}
+        and features.get("context_load") == "简单规律映射"
     )
 
     is_compressed_high = (
