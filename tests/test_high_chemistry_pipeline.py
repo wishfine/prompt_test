@@ -213,7 +213,7 @@ class StructuralLevelConstraintTests(unittest.TestCase):
         )
         constraint = core.derive_structural_level_constraint(features, [])
         self.assertEqual(constraint["difficulty_ceiling"], "难度2档")
-        self.assertIn("parallel_light_bundle_ceiling_2", constraint["rule_ids"])
+        self.assertIn("parallel_basic_bundle_strict_ceiling_2", constraint["rule_ids"])
 
     def test_standard_chain_sets_floor_to_level_three(self) -> None:
         features = base_features(
@@ -708,8 +708,8 @@ class FinalizationAndPreparationTests(unittest.TestCase):
         )
         self.assertEqual(enriched["stage1_validation_retry_count"], 1)
 
-    def test_parallel_light_bundle_ceiling_2_rule(self) -> None:
-        """测试 parallel_light_bundle_ceiling_2: 2-3个异质任务命中 ceiling2，4个及以上异质任务不再被强制压为 ceiling2。"""
+    def test_parallel_basic_bundle_strict_ceiling_2_rule(self) -> None:
+        """测试 parallel_basic_bundle_strict_ceiling_2: 1-2步基础并列多任务命中 ceiling2。"""
         feats_2_3 = base_features(
             step_count="1-2步",
             required_task_breadth="2-3个异质必要任务",
@@ -724,10 +724,10 @@ class FinalizationAndPreparationTests(unittest.TestCase):
             experiment_requirement="无",
         )
         constraint_2_3 = core.derive_structural_level_constraint(feats_2_3, [])
-        self.assertIn("parallel_light_bundle_ceiling_2", constraint_2_3["rule_ids"])
+        self.assertIn("parallel_basic_bundle_strict_ceiling_2", constraint_2_3["rule_ids"])
         self.assertEqual(constraint_2_3["difficulty_ceiling"], "难度2档")
 
-        # 4个及以上异质任务绝不命中 parallel_light_bundle_ceiling_2
+        # 4个及以上异质任务同样命中 parallel_basic_bundle_strict_ceiling_2 (当满足严格显性单阶段无干扰条件时)
         feats_4_plus = base_features(
             step_count="1-2步",
             required_task_breadth="4个及以上异质必要任务",
@@ -742,7 +742,8 @@ class FinalizationAndPreparationTests(unittest.TestCase):
             experiment_requirement="无",
         )
         constraint_4_plus = core.derive_structural_level_constraint(feats_4_plus, [])
-        self.assertNotIn("parallel_light_bundle_ceiling_2", constraint_4_plus["rule_ids"])
+        self.assertIn("parallel_basic_bundle_strict_ceiling_2", constraint_4_plus["rule_ids"])
+        self.assertEqual(constraint_4_plus["difficulty_ceiling"], "难度2档")
 
     def test_compressed_high_burden_floor_4_decision_nodes_deduplication(self) -> None:
         """测试 5 类独立决策节点去重：仅有 model_explicitness+reasoning_chain+model_relation 归并为 1 个节点，不触发 floor4；增加 joint_constraint 归并为 2 个节点，正确触发 floor4。"""

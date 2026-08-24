@@ -497,19 +497,16 @@ def _apply_chemistry_multiplier_policy(
     raw_level = map_accuracy_to_level(original_accuracy)
     adjusted_level = map_accuracy_to_level(adjusted)
 
-    feats = features or {}
+    active = set(high_names)
     strong_final = (
         original_accuracy <= 52
-        and high_node_count >= 2
         and (
-            feats.get("step_count") in {"6-8步", "9-12步", "12步以上"}
+            (
+                "高阶实验、合成或分离设计" in active
+                and "多约束联合" in active
+            )
             or full_dependent_organic_route
         )
-        and bool(high_nodes.intersection({
-            "advanced_design",
-            "joint_constraints",
-            "reaction_process_network",
-        }))
     )
     final_guard = (
         raw_level == "难度4档"
@@ -938,7 +935,7 @@ def derive_structural_level_constraint(
         and features.get("reasoning_chain") == "简单因果"
     )
 
-    # ceiling 2: 1-2步显性基础应用 (basic_explicit_application) - 严格限定单一规则任务
+    # ceiling 2: 1-2步显性基础应用 (basic_explicit_application)
     basic_explicit_app = (
         features.get("step_count") == "1-2步"
         and features.get("model_explicitness") == "模型完全显性"
@@ -955,7 +952,7 @@ def derive_structural_level_constraint(
         and features.get("calculation_complexity") in {"直接判断", "简单计算"}
         and features.get("experiment_requirement") in {"无", "基础操作或读数", "直接现象解释"}
         and features.get("route_design_requirement") in {"无", "已知路线补全"}
-        and features.get("required_task_breadth") == "单一规则任务"
+        and features.get("required_task_breadth") != "4个及以上异质必要任务"
         and not high_names
         and not same_system_simple_causal_floor_3
         and not _has_real_dependency(features)
@@ -965,40 +962,42 @@ def derive_structural_level_constraint(
         rule_ids.append("basic_explicit_application_ceiling_2")
         evidence.append("1-2步显性基础应用，无高难无强依赖")
 
-    # ceiling 2: 轻量并列基础任务 (parallel_light_bundle_ceiling_2) - 严格限定轻量2-3个异质任务
-    parallel_light_bundle_ceiling_2 = (
+    # ceiling 2: 严格并列基础多任务 (parallel_basic_bundle_strict)
+    parallel_basic_bundle_strict = (
         features.get("step_count") == "1-2步"
-        and features.get("required_task_breadth") == "2-3个异质必要任务"
-        and features.get("model_explicitness") == "模型完全显性"
-        and features.get("model_relation") == "单一模型"
-        and features.get("reasoning_chain") == "直接套用"
-        and features.get("knowledge_count") in {"1个", "2-3个"}
-        and features.get("knowledge_scope") != "跨模块综合"
+        and features.get("required_task_breadth") in {"2-3个异质必要任务", "4个及以上异质必要任务"}
         and features.get("substance_relation") in {"单一物质", "相互独立"}
         and features.get("reaction_relation") in {"无反应链", "并列独立"}
         and features.get("process_structure") == "单阶段"
         and features.get("subquestion_dependency") != "后问依赖前问"
         and not features.get("shared_model_across_subquestions", False)
-        and features.get("hidden_conditions") == "无"
-        and features.get("critical_condition") in {"无临界", "显性给出临界"}
-        and features.get("classification_discussion") == "无"
-        and features.get("representation_conversion") in {"无转换", "一次常规转换"}
+        and features.get("model_explicitness") == "模型完全显性"
+        and features.get("model_relation") in {"单一模型", "同一模型多状态"}
+        and features.get("reasoning_chain") in {"直接套用", "简单因果"}
         and features.get("information_conversion") in {"无信息转换", "直接读取"}
         and features.get("evidence_relation") in {"直接给定", "单证据对应", "多证据独立"}
+        and features.get("hidden_conditions") == "无"
+        and features.get("critical_condition") in {"无临界", "显性给出临界"}
         and features.get("constraint_structure") in {"无约束", "单一约束", "多约束相互独立"}
         and features.get("calculation_model") in {"无定量计算", "常规化学计量"}
         and features.get("calculation_complexity") in {"直接判断", "简单计算"}
         and features.get("experiment_requirement") in {"无", "基础操作或读数", "直接现象解释"}
         and features.get("route_design_requirement") in {"无", "已知路线补全"}
-        and features.get("context_load") in {"纯包装", "简单规律映射"}
         and features.get("competing_reaction") == "无"
+        and features.get("classification_discussion") == "无"
+        and features.get("representation_conversion") in {"无转换", "一次常规转换"}
+        and features.get("context_load") in {"纯包装", "简单规律映射"}
         and not high_names
-        and not _has_real_dependency(features)
+        and not (
+            features.get("reasoning_chain") == "简单因果"
+            and features.get("evidence_relation") == "多证据独立"
+        )
+        and not same_system_simple_causal_floor_3
     )
-    if parallel_light_bundle_ceiling_2:
+    if parallel_basic_bundle_strict:
         ceiling = min_level(ceiling, "难度2档")
-        rule_ids.append("parallel_light_bundle_ceiling_2")
-        evidence.append("轻量并列基础任务(1-2步/2-3任务/单一模型/直接套用/无隐含与干扰)")
+        rule_ids.append("parallel_basic_bundle_strict_ceiling_2")
+        evidence.append("严格并列基础多任务")
 
     # 5 大独立中等认知负担组 (Grouped Moderate Burdens for Level 3 Protection，杜绝单节点重复计数)
     moderate_model_condition = (
@@ -1041,7 +1040,7 @@ def derive_structural_level_constraint(
     standard_comprehensive_floor_3 = (
         not high_names
         and not basic_explicit_app
-        and not parallel_light_bundle_ceiling_2
+        and not parallel_basic_bundle_strict
         and (
             (
                 features.get("step_count") in {
@@ -1118,54 +1117,49 @@ def derive_structural_level_constraint(
         and has_additional_high_burden
     )
 
-    # 4. 短链高密度综合路径 C: 3-5步及以上 + 5类独立决策节点去重归并 (至少2个独立决策节点)
-    model_reasoning_node = (
-        features.get("model_explicitness") in {"半隐含模型", "隐含模型", "需要自主建模"}
-        or features.get("reasoning_chain") in {"多层因果", "逆向推理或临界分析"}
-        or features.get("model_relation") in {"模型切换", "多模型耦合"}
+    # 4. 短链高密度综合路径 C: 3-5步及以上 + 7大强负担轴 (配合窄去重门)
+    axis_model_ident = features.get("model_explicitness") in {"半隐含模型", "隐含模型", "需要自主建模"}
+    axis_reasoning = features.get("reasoning_chain") in {"多层因果", "逆向推理或临界分析"}
+    axis_model_relation = features.get("model_relation") in {"模型切换", "多模型耦合"}
+    axis_quant = (
+        features.get("calculation_model") in {"平衡常数或Ka/Kb/Ksp", "多模型定量耦合", "多步化学计量"}
+        and features.get("calculation_complexity") in {"多方程联立", "参数或范围计算", "多步计算"}
     )
-    quantitative_or_critical_node = (
-        (
-            features.get("calculation_model") in {"平衡常数或Ka/Kb/Ksp", "多模型定量耦合", "多步化学计量"}
-            and features.get("calculation_complexity") in {"多方程联立", "参数或范围计算", "多步计算"}
-        )
-        or features.get("critical_condition") in {"需要推导过量不足边界", "隐含终点或有效区间"}
-    )
-    information_inference_node = (
+    axis_info = (
         features.get("information_conversion") in {"多源信息联合转换", "流程或图谱反推"}
         or (
             features.get("information_conversion") == "单次关系转换"
             and features.get("evidence_relation") in {"证据链相互支持", "证据冲突需排除"}
         )
     )
-    experiment_or_route_node = (
+    axis_exp = (
         features.get("experiment_requirement") in {"控制变量或异常分析", "方案设计或误差反演"}
         or features.get("route_design_requirement") in {"合成路线设计", "分离提纯方案设计", "路线优化与可行性验证"}
     )
-    joint_constraint_node = (
+    axis_constraint = (
         features.get("constraint_structure") == "多约束联合筛选"
+        or features.get("critical_condition") in {"需要推导过量不足边界", "隐含终点或有效区间"}
     )
 
-    decision_nodes = {
-        name
-        for name, active in {
-            "model_reasoning": model_reasoning_node,
-            "quantitative_or_critical": quantitative_or_critical_node,
-            "information_inference": information_inference_node,
-            "experiment_or_route": experiment_or_route_node,
-            "joint_constraint": joint_constraint_node,
-        }.items()
-        if active
-    }
-
+    axes = [axis_model_ident, axis_reasoning, axis_model_relation, axis_quant, axis_info, axis_exp, axis_constraint]
     compressed_middle_guard = (
         features.get("step_count") == "3-5步"
         and features.get("model_relation") in {"单一模型", "同一模型多状态"}
         and features.get("reasoning_chain") == "简单因果"
         and features.get("calculation_model") == "无定量计算"
     )
+
+    # Cand11 窄去重门: 仅在缺少独立结构支撑时抑制同一模型节点的重复计数
+    non_model_axes_count = sum([axis_quant, axis_info, axis_exp, axis_constraint])
+    is_model_only_cluster = (sum(axes) >= 2) and (non_model_axes_count == 0)
+    model_cluster_relief = (
+        is_model_only_cluster
+        and features.get("process_structure") == "单阶段"
+        and features.get("context_load") in {"纯包装", "简单规律映射"}
+    )
+
     is_compressed_high = (
-        len(decision_nodes) >= 2
+        sum(axes) >= 2
         and features.get("step_count") in {"3-5步", "6-8步", "9-12步", "12步以上"}
         and (
             features.get("model_relation") in {"模型切换", "多模型耦合"}
@@ -1174,14 +1168,24 @@ def derive_structural_level_constraint(
             or features.get("experiment_requirement") not in {"无", "基础操作或读数", "直接现象解释"}
         )
         and not compressed_middle_guard
+        and not model_cluster_relief
     )
 
-    # 5. 异质多载体综合路径 D: 4个及以上异质任务 + 多载体综合 + 3-5步以上 + 至少2个独立决策节点
+    # 5. 异质多载体综合路径 D: 4个及以上异质任务 + 多载体综合 + 至少一个额外真实处理负担 (Cand7 恢复)
     heterogeneous_multicarrier_floor_4 = (
         features.get("required_task_breadth") == "4个及以上异质必要任务"
         and features.get("information_carrier") == "多载体综合"
-        and features.get("step_count") in {"3-5步", "6-8步", "9-12步", "12步以上"}
-        and len(decision_nodes) >= 2
+        and (
+            features.get("calculation_model") != "无定量计算"
+            or features.get("model_relation") != "单一模型"
+            or features.get("information_conversion") != "直接读取"
+            or features.get("representation_conversion") in {
+                "多次同类转换",
+                "多表征连续转换",
+                "逆向表征转换",
+            }
+            or features.get("route_design_requirement") != "无"
+        )
     )
 
     if (
@@ -1202,7 +1206,7 @@ def derive_structural_level_constraint(
             )
         )
         if heterogeneous_multicarrier_floor_4:
-            evidence.append(f"4个以上异质任务+多载体综合+独立决策节点(命中{len(decision_nodes)}个)")
+            evidence.append("4个以上异质任务+多载体综合+处理负担")
         if complex_quantitative:
             evidence.append("复杂定量、参数或范围(高难特征)")
         if model_migration_multistage_strong:
@@ -1210,7 +1214,7 @@ def derive_structural_level_constraint(
         if model_migration_system_coupling_strong:
             evidence.append("长步数(6-8步+)+模型迁移+体系耦合+高层信息/约束/实验负担")
         if is_compressed_high:
-            evidence.append(f"短链高密度综合(命中{len(decision_nodes)}个独立决策节点: {sorted(decision_nodes)})")
+            evidence.append(f"短链高密度综合(命中{sum(axes)}个强负担轴)")
 
     # ceiling 3: 普通常规综合 (严格保护真正显性简单的常规题)
     regular_comprehensive_tight = (
