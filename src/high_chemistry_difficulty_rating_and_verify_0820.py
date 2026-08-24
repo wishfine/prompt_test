@@ -3,10 +3,10 @@
 
 流程：
   1. 模型提取结构化 features，并给出乘数前原始正确率；
-  2. 程序检测高难特征，按数量应用 1.00 / 0.85 / 0.70 乘数；
+  2. 程序按结构证据校准正确率，检测独立高难节点并应用 1.00 / 0.85 / 0.70 乘数；
   3. 程序按连续正确率区间映射第一步五档；
-  4. 第二次模型调用复核 features、正确率、高难触发、重复计数、乘数和档位；
-  5. 程序依据“合理/偏高/偏低”最多调整一档，并标记人工复核项。
+  4. 第二次模型调用只复核 features 与相邻边界；
+  5. 仅当合法 feature 修订导致相邻边界变化时，程序全量重算并最多调整一档。
 
 支持 OpenAI-compatible Responses API、第一阶段前缀缓存、并发、重试、
 JSONL 断点续跑、题干/解析图片输入及 token 统计。不会向模型发送原始
@@ -41,7 +41,6 @@ except ImportError as exc:  # pragma: no cover - 服务器 venv 中执行
 import high_chemistry_pipeline_core_0820 as chemistry_core
 from high_chemistry_pipeline_core_0820 import (
     FinalizationResult,
-    HIGH_DIFFICULTY_FEATURE_NAMES,
     REQUIRED_FEATURE_FIELDS,
     build_stage1_output_schema,
     build_stage2_output_schema,
@@ -359,12 +358,10 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
     required = (
         "difficulty_source",
         "feature_corrections",
-        "missed_features",
         "has_structural_revision",
         "adjacent_boundary_review",
         "confidence",
         "reviewed_original_predicted_accuracy",
-        "reviewed_high_difficulty_features",
         "analysis",
     )
     missing = [field for field in required if field not in result]
@@ -399,24 +396,6 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
             )
             continue
         valid_corrections.append(copy.deepcopy(correction))
-    if not isinstance(result["missed_features"], list):
-        raise ValueError("missed_features 必须为数组")
-    if any(not isinstance(name, str) for name in result["missed_features"]):
-        raise ValueError("missed_features 每项必须为字符串")
-    reviewed = result["reviewed_high_difficulty_features"]
-    if not isinstance(reviewed, list):
-        raise ValueError("reviewed_high_difficulty_features 必须为数组")
-    if any(not isinstance(name, str) for name in reviewed):
-        raise ValueError(
-            "reviewed_high_difficulty_features 每项必须为字符串"
-        )
-    if len(reviewed) != len(set(reviewed)):
-        raise ValueError("reviewed_high_difficulty_features 不得重复")
-    invalid_high = [
-        name for name in reviewed if name not in HIGH_DIFFICULTY_FEATURE_NAMES
-    ]
-    if invalid_high:
-        raise ValueError(f"第二阶段含非法高难特征：{invalid_high}")
     try:
         reviewed_accuracy = float(
             result["reviewed_original_predicted_accuracy"]
@@ -477,25 +456,6 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("confidence 只能是高、中或低")
     normalized["reviewed_original_predicted_accuracy"] = reviewed_accuracy
     validate_structural_revision_evidence(normalized)
-    overlap_review = normalized.get("high_feature_overlap_review")
-    if not isinstance(overlap_review, list):
-        raise ValueError("high_feature_overlap_review 必须为数组")
-    for index, item in enumerate(overlap_review):
-        if not isinstance(item, dict):
-            raise ValueError(f"high_feature_overlap_review[{index}] 必须为对象")
-        missing_overlap = {"features", "resolution", "reason"} - item.keys()
-        if missing_overlap:
-            raise ValueError(
-                f"high_feature_overlap_review[{index}] 缺少字段："
-                f"{sorted(missing_overlap)}"
-            )
-        if not isinstance(item["features"], list) or any(
-            name not in HIGH_DIFFICULTY_FEATURE_NAMES
-            for name in item["features"]
-        ):
-            raise ValueError(
-                f"high_feature_overlap_review[{index}].features 含非法值"
-            )
     input_review = normalized.get("input_sufficiency_review")
     if not isinstance(input_review, dict):
         raise ValueError("input_sufficiency_review 必须为对象")
@@ -910,8 +870,8 @@ async def process_question(
                     ),
                 )
                 return
-            reviewed_high_count = len(
-                verification["reviewed_high_difficulty_features"]
+            reviewed_high_count = int(
+                verification["reviewed_high_difficulty_feature_count"]
             )
             final = finalize_verified_level(
                 current_level=stage1["difficulty_level_step1"],
