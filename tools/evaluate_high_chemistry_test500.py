@@ -89,8 +89,19 @@ def evaluate(
     prediction_values: list[str] = []
     valid = 0
 
+    valid_input_truth: list[str] = []
+    valid_input_preds: list[str] = []
+    valid_input_exact = 0
+    excluded_invalid_input = 0
+
     for qid in matched:
-        truth = labels[qid].get("reviewed_difficulty_level")
+        truth = (
+            labels[qid].get("revalidated_difficulty_level")
+            or labels[qid].get("reviewed_difficulty_level")
+            or labels[qid].get("manual_difficulty_level")
+            or labels[qid].get("difficulty_level")
+            or labels[qid].get("standard_level_name")
+        )
         prediction = predictions[qid].get(prediction_field)
         if truth not in LEVEL_INDEX or prediction not in LEVEL_INDEX:
             continue
@@ -108,19 +119,33 @@ def evaluate(
         over += gap > 0
         under += gap < 0
 
+        input_qual = predictions[qid].get("input_quality") or {}
+        if input_qual.get("evaluation_valid") is False:
+            excluded_invalid_input += 1
+        else:
+            valid_input_truth.append(truth)
+            valid_input_preds.append(prediction)
+            valid_input_exact += (gap == 0)
+
     per_level_accuracy = {}
     for level in LEVELS:
         total = sum(confusion[level].values())
         per_level_accuracy[level] = (
             round(confusion[level][level] / total, 4) if total else None
         )
+    evaluated_valid_count = len(valid_input_truth)
     return {
         "prediction_field": prediction_field,
         "label_count": len(labels),
         "prediction_count": len(predictions),
         "matched_ids": len(matched),
         "evaluated": valid,
+        "evaluated_valid_input_count": evaluated_valid_count,
+        "excluded_invalid_input_count": excluded_invalid_input,
         "exact_match_rate": round(exact / valid, 4) if valid else None,
+        "valid_input_exact_match_rate": (
+            round(valid_input_exact / evaluated_valid_count, 4) if evaluated_valid_count else None
+        ),
         "within_one_level_rate": round(within_one / valid, 4) if valid else None,
         "mae": round(absolute_error / valid, 4) if valid else None,
         "quadratic_weighted_kappa": quadratic_weighted_kappa(

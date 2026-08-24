@@ -225,6 +225,11 @@ def main() -> None:
     total_abs_diff = 0
     severe_disagreement = 0
 
+    valid_input_truth: list[str] = []
+    valid_input_preds: list[str] = []
+    valid_input_exact = 0
+    excluded_invalid_input = 0
+
     for qid in matched_ids:
         t_name = labels[qid]["standard_level_name"]
         t_num = labels[qid]["standard_level"]
@@ -249,8 +254,16 @@ def main() -> None:
         else:
             severe_disagreement += 1
 
+        item_raw = predictions[qid]["item"]
+        input_qual = item_raw.get("input_quality") or {}
+        if input_qual.get("evaluation_valid") is False:
+            excluded_invalid_input += 1
+        else:
+            valid_input_truth.append(t_name)
+            valid_input_preds.append(p_name)
+            valid_input_exact += (abs_diff == 0)
+
         if abs_diff > 0:
-            item_raw = predictions[qid]["item"]
             s1_info = item_raw.get("difficulty_rating_stage1") or {}
             features = s1_info.get("features") or {}
             mismatches.append({
@@ -278,6 +291,9 @@ def main() -> None:
     mae = round(total_abs_diff / valid_count, 4) if valid_count else 0.0
     qwk = quadratic_weighted_kappa(truth_values, pred_values)
 
+    valid_eval_count = len(valid_input_truth)
+    valid_acc = round(valid_input_exact / valid_eval_count, 4) if valid_eval_count else None
+
     per_level_metrics: dict[str, dict[str, Any]] = {}
     for lvl in LEVELS:
         tp = confusion[lvl][lvl]
@@ -303,6 +319,9 @@ def main() -> None:
     print(f"完全一致: {exact_correct}")
     print(f"Accuracy（合法预测）: {acc:.2%}")
     print(f"Strict Accuracy（失败也计错）: {exact_correct / len(predictions):.2%}" if predictions else "None")
+    if excluded_invalid_input > 0:
+        print(f"有效输入题数: {valid_eval_count}, 无效输入排除数: {excluded_invalid_input}")
+        print(f"Valid Input Accuracy: {valid_acc:.2%}" if valid_acc is not None else "None")
     print(f"相差不超过一档: {within_one_acc:.2%}")
     print(f"MAE: {mae}")
     print(f"Quadratic Weighted Kappa (QWK): {qwk}")
@@ -318,10 +337,13 @@ def main() -> None:
         "dataset_summary": {
             "total_predictions": len(predictions),
             "matched_labels": valid_count,
+            "evaluated_valid_input_count": valid_eval_count,
+            "excluded_invalid_input_count": excluded_invalid_input,
             "level_source": args.level_source,
         },
         "metrics": {
             "accuracy": acc,
+            "valid_input_accuracy": valid_acc,
             "within_one_accuracy": within_one_acc,
             "mae": mae,
             "qwk": qwk,

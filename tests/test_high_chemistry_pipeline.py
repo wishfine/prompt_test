@@ -583,8 +583,8 @@ class FinalizationAndPreparationTests(unittest.TestCase):
             ["1", "2"],
         )
         self.assertTrue(prepared.input_quality["has_analysis"])
-        self.assertEqual(prepared.input_quality["input_sufficiency"], "信息不足")
-        self.assertFalse(prepared.input_quality["evaluation_valid"])
+        self.assertEqual(prepared.input_quality["input_sufficiency"], "充分")
+        self.assertTrue(prepared.input_quality["evaluation_valid"])
 
     def test_stage2_is_audit_only_by_default(self) -> None:
         result = core.finalize_level(
@@ -696,66 +696,17 @@ class FinalizationAndPreparationTests(unittest.TestCase):
         self.assertEqual(rev2["adjusted_difficulty_level"], "难度3档")
         self.assertFalse(rev2["three_to_two_basicization_supported"])
 
-    def test_validate_stage1_semantic_consistency(self) -> None:
-        """测试 Candidate 5 第一阶段结构语义自洽性校验 (4大逻辑冲突拦截)。"""
-        # 1. 多层因果 + 1-2步 -> ValueError
-        feats1 = base_features(reasoning_chain="多层因果", step_count="1-2步")
-        with self.assertRaises(ValueError) as cm1:
-            core.validate_stage1_semantic_consistency(feats1)
-        self.assertIn("reasoning_chain=多层因果 但 step_count=1-2步", str(cm1.exception))
-
-        # 2. 直接套用 + 3步及以上 -> ValueError
-        feats2_a = base_features(reasoning_chain="直接套用", step_count="3-5步")
-        with self.assertRaises(ValueError) as cm2_a:
-            core.validate_stage1_semantic_consistency(feats2_a)
-        self.assertIn("reasoning_chain=直接套用", str(cm2_a.exception))
-
-        feats2_b = base_features(reasoning_chain="直接套用", step_count="6-8步")
-        with self.assertRaises(ValueError) as cm2_b:
-            core.validate_stage1_semantic_consistency(feats2_b)
-        self.assertIn("reasoning_chain=直接套用", str(cm2_b.exception))
-
-        # 3. 多问递进任务链 + 无后问依赖前问且无共享模型 -> ValueError
-        feats3 = base_features(
-            required_task_breadth="多问递进任务链",
-            subquestion_dependency="无多问",
-            shared_model_across_subquestions=False,
-        )
-        with self.assertRaises(ValueError) as cm3:
-            core.validate_stage1_semantic_consistency(feats3)
-        self.assertIn("required_task_breadth=多问递进任务链，但没有答案依赖或共享模型", str(cm3.exception))
-
-        # 4. 强多阶段流程 + 1-2步 -> ValueError
-        feats4 = base_features(process_structure="多阶段强依赖", step_count="1-2步")
-        with self.assertRaises(ValueError) as cm4:
-            core.validate_stage1_semantic_consistency(feats4)
-        self.assertIn("process_structure 为强多阶段结构，但 step_count=1-2步", str(cm4.exception))
-
-        # 合法通过测试
-        valid_feats = base_features(
-            reasoning_chain="简单因果",
-            step_count="1-2步",
-            required_task_breadth="2-3个异质必要任务",
-            subquestion_dependency="无多问",
-            process_structure="单阶段",
-        )
-        # 应正常返回不抛异常
-        core.validate_stage1_semantic_consistency(valid_feats)
-
-    def test_enrich_stage1_rating_records_validation_retry_metadata(self) -> None:
-        """测试 enrich_stage1_rating 正确透传并记录语义重试统计元数据。"""
+    def test_enrich_stage1_rating_records_validation_retry_count(self) -> None:
+        """测试 enrich_stage1_rating 正确透传并记录重试统计元数据。"""
         rating = {
             "predicted_accuracy": 75.0,
             "features": base_features(),
         }
-        reasons = ["结构语义冲突：reasoning_chain=多层因果 但 step_count=1-2步。"]
         enriched = core.enrich_stage1_rating(
             rating,
             validation_retry_count=1,
-            validation_retry_reasons=reasons,
         )
         self.assertEqual(enriched["stage1_validation_retry_count"], 1)
-        self.assertEqual(enriched["stage1_validation_retry_reasons"], reasons)
 
     def test_parallel_light_bundle_ceiling_2_rule(self) -> None:
         """测试 parallel_light_bundle_ceiling_2: 2-3个异质任务命中 ceiling2，4个及以上异质任务不再被强制压为 ceiling2。"""

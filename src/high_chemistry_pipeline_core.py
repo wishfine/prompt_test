@@ -223,40 +223,6 @@ def build_stage1_output_schema() -> dict[str, Any]:
     }
 
 
-def build_stage1_semantic_repair_schema(conflict_fields: list[str]) -> dict[str, Any]:
-    """为定向语义冲突修复生成轻量 strict schema，仅包含冲突字段、reason 与 predicted_accuracy。"""
-    properties: dict[str, Any] = {}
-    for field in conflict_fields:
-        if field == "shared_model_across_subquestions":
-            properties[field] = {"type": "boolean"}
-        elif field in FEATURE_OPTIONS:
-            properties[field] = {"type": "string", "enum": sorted(FEATURE_OPTIONS[field])}
-        elif field == "chemistry_methods":
-            properties[field] = {
-                "type": "array",
-                "items": {"type": "string", "enum": sorted(CHEMISTRY_METHODS)},
-            }
-        elif field == "knowledge_points":
-            properties[field] = {
-                "type": "array",
-                "items": {"type": "string"},
-                "minItems": 1,
-            }
-        elif field in {"knowledge_L1", "knowledge_L2"}:
-            valid_opts = KNOWLEDGE_L1 if field == "knowledge_L1" else KNOWLEDGE_L2
-            properties[field] = {
-                "type": "array",
-                "items": {"type": "string", "enum": sorted(valid_opts)},
-                "minItems": 1,
-            }
-    properties["reason"] = {"type": "string"}
-    properties["predicted_accuracy"] = {"type": "number"}
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": list(conflict_fields) + ["reason", "predicted_accuracy"],
-        "additionalProperties": False,
-    }
 
 
 STAGE2_CORRECTABLE_FEATURE_FIELDS = (
@@ -525,7 +491,7 @@ def _apply_chemistry_multiplier_policy(
         if multiplier_enabled
         else []
     )
-    triggered = bool(matched_combo) and high_node_count >= 2
+    triggered = bool(matched_combo) and high_node_count >= 3
     applied = candidate if triggered else 1.0
     adjusted = round(original_accuracy * applied, 1)
     raw_level = map_accuracy_to_level(original_accuracy)
@@ -885,23 +851,11 @@ def _has_real_dependency(features: dict[str, Any]) -> bool:
     )
 
 
-def derive_structural_level_constraint(
+def _is_direct_prototype(
     features: dict[str, Any],
     high_names: list[str],
-) -> StructuralLevelConstraint:
-    """由冻结的化学结构特征确定性派生难度上下限约束。
-
-    签名严禁传入 predicted_accuracy / original_accuracy，杜绝用分数决定结构。
-    """
-    floor = "难度1档"
-    ceiling = "难度5档"
-    rule_ids: list[str] = []
-    evidence: list[str] = []
-
-    # -------------------------------------------------------------
-    # 1 ↔ 2 档结构约束
-    # -------------------------------------------------------------
-    direct_prototype = (
+) -> bool:
+    return (
         features.get("primary_problem_structure") == "概念辨析"
         and features.get("knowledge_count") == "1个"
         and features.get("knowledge_scope") == "单知识点"
@@ -921,6 +875,25 @@ def derive_structural_level_constraint(
         and features.get("calculation_model") == "无定量计算"
         and not high_names
     )
+
+
+def derive_structural_level_constraint(
+    features: dict[str, Any],
+    high_names: list[str],
+) -> dict[str, Any]:
+    """基于确定性结构特征推导档位上下限约束。
+
+    签名严禁传入 predicted_accuracy / original_accuracy，杜绝用分数决定结构。
+    """
+    floor = "难度1档"
+    ceiling = "难度5档"
+    rule_ids: list[str] = []
+    evidence: list[str] = []
+
+    # -------------------------------------------------------------
+    # 1 ↔ 2 档结构约束
+    # -------------------------------------------------------------
+    direct_prototype = _is_direct_prototype(features, high_names)
     if direct_prototype:
         return {
             "difficulty_floor": "难度1档",
@@ -965,7 +938,7 @@ def derive_structural_level_constraint(
         and features.get("reasoning_chain") == "简单因果"
     )
 
-    # ceiling 2: 1-2步显性基础应用 (basic_explicit_application)
+    # ceiling 2: 1-2步显性基础应用 (basic_explicit_application) - 严格限定单一规则任务
     basic_explicit_app = (
         features.get("step_count") == "1-2步"
         and features.get("model_explicitness") == "模型完全显性"
@@ -982,7 +955,7 @@ def derive_structural_level_constraint(
         and features.get("calculation_complexity") in {"直接判断", "简单计算"}
         and features.get("experiment_requirement") in {"无", "基础操作或读数", "直接现象解释"}
         and features.get("route_design_requirement") in {"无", "已知路线补全"}
-        and features.get("required_task_breadth") != "4个及以上异质必要任务"
+        and features.get("required_task_breadth") == "单一规则任务"
         and not high_names
         and not same_system_simple_causal_floor_3
         and not _has_real_dependency(features)
@@ -992,7 +965,7 @@ def derive_structural_level_constraint(
         rule_ids.append("basic_explicit_application_ceiling_2")
         evidence.append("1-2步显性基础应用，无高难无强依赖")
 
-    # ceiling 2: 轻量并列基础任务 (parallel_light_bundle_ceiling_2)
+    # ceiling 2: 轻量并列基础任务 (parallel_light_bundle_ceiling_2) - 严格限定轻量2-3个异质任务
     parallel_light_bundle_ceiling_2 = (
         features.get("step_count") == "1-2步"
         and features.get("required_task_breadth") == "2-3个异质必要任务"
@@ -1008,6 +981,8 @@ def derive_structural_level_constraint(
         and not features.get("shared_model_across_subquestions", False)
         and features.get("hidden_conditions") == "无"
         and features.get("critical_condition") in {"无临界", "显性给出临界"}
+        and features.get("classification_discussion") == "无"
+        and features.get("representation_conversion") in {"无转换", "一次常规转换"}
         and features.get("information_conversion") in {"无信息转换", "直接读取"}
         and features.get("evidence_relation") in {"直接给定", "单证据对应", "多证据独立"}
         and features.get("constraint_structure") in {"无约束", "单一约束", "多约束相互独立"}
@@ -1015,6 +990,7 @@ def derive_structural_level_constraint(
         and features.get("calculation_complexity") in {"直接判断", "简单计算"}
         and features.get("experiment_requirement") in {"无", "基础操作或读数", "直接现象解释"}
         and features.get("route_design_requirement") in {"无", "已知路线补全"}
+        and features.get("context_load") in {"纯包装", "简单规律映射"}
         and features.get("competing_reaction") == "无"
         and not high_names
         and not _has_real_dependency(features)
@@ -1342,7 +1318,6 @@ def enrich_stage1_rating(
     normalization_log: list[dict[str, Any]] | None = None,
     multiplier_enabled: bool | None = None,
     validation_retry_count: int = 0,
-    validation_retry_reasons: list[str] | None = None,
 ) -> dict[str, Any]:
     rating = copy.deepcopy(stage1_rating)
     features = rating.get("features")
@@ -1353,7 +1328,6 @@ def enrich_stage1_rating(
     rating["enum_normalization_log"] = copy.deepcopy(normalization_log or [])
     rating["enum_normalization_applied"] = bool(normalization_log)
     rating["stage1_validation_retry_count"] = int(validation_retry_count)
-    rating["stage1_validation_retry_reasons"] = list(validation_retry_reasons or [])
     try:
         raw_accuracy = float(rating["predicted_accuracy"])
     except (KeyError, TypeError, ValueError) as exc:
@@ -1384,25 +1358,9 @@ def enrich_stage1_rating(
     model_raw_accuracy = raw_accuracy
     high = detect_high_difficulty_features(features)
 
-    # 极强结构原型直接校准 (direct_prototype_score_floor)
-    direct_prototype = (
-        features.get("knowledge_scope") == "单知识点"
-        and features.get("substance_count") == "1种"
-        and features.get("reaction_count") in {"0-1个", "无反应"}
-        and features.get("step_count") == "1-2步"
-        and features.get("required_task_breadth") == "单一规则任务"
-        and features.get("model_explicitness") == "模型完全显性"
-        and features.get("model_relation") == "单一模型"
-        and features.get("reasoning_chain") == "直接套用"
-        and features.get("representation_conversion") == "无转换"
-        and features.get("information_conversion") in {"无信息转换", "直接读取"}
-        and features.get("calculation_model") == "无定量计算"
-        and features.get("experiment_requirement") == "无"
-        and features.get("hidden_conditions") == "无"
-        and not high.names
-    )
+    # 极简直接套用结构原型分数下限校准 (88分)
     score_calibration_actions: list[dict[str, Any]] = []
-    if direct_prototype and raw_accuracy < 88.0:
+    if _is_direct_prototype(features, high.names) and raw_accuracy < 88.0:
         score_calibration_actions.append({
             "rule": "direct_prototype_score_floor",
             "from": raw_accuracy,
@@ -1481,74 +1439,6 @@ def enrich_stage1_rating(
     rating["full_dependent_organic_route_detected"] = _is_full_dependent_organic_route(features)
     return rating
 
-class Stage1SemanticConsistencyError(ValueError):
-    """第一阶段特征语义冲突异常，携带冲突的字段列表以支持定向修复。"""
-
-    def __init__(self, message: str, conflict_fields: list[str] | None = None):
-        super().__init__(message)
-        self.conflict_fields = list(conflict_fields or [])
-
-
-def validate_stage1_semantic_consistency(
-    features: dict[str, Any],
-) -> None:
-    """校验第一阶段关键特征之间的结构语义自洽性，冲突时抛出 Stage1SemanticConsistencyError 以触发定向修复重试。"""
-    step_count = features.get("step_count")
-    reasoning = features.get("reasoning_chain")
-    breadth = features.get("required_task_breadth")
-    dependency = features.get("subquestion_dependency")
-    shared = features.get("shared_model_across_subquestions")
-    process = features.get("process_structure")
-
-    # 1. 多层因果不可能只有1-2步最长链
-    if (
-        reasoning == "多层因果"
-        and step_count == "1-2步"
-    ):
-        raise Stage1SemanticConsistencyError(
-            "结构语义冲突：reasoning_chain=多层因果 但 step_count=1-2步。请重新还原最长连续依赖链。",
-            ["step_count", "reasoning_chain"],
-        )
-
-    # 2. 直接套用不能同时声称存在长连续链或多步连续链 (3步及以上)
-    if (
-        reasoning == "直接套用"
-        and step_count in {
-            "3-5步",
-            "6-8步",
-            "9-12步",
-            "12步以上",
-        }
-    ):
-        raise Stage1SemanticConsistencyError(
-            "结构语义冲突：reasoning_chain=直接套用表示最长连续链只有一个核心化学决策，"
-            "但 step_count 表示存在至少3个连续有效化学决策。"
-            "请基于同一条最长连续依赖链重新判断 step_count 与 reasoning_chain。",
-            ["step_count", "reasoning_chain"],
-        )
-
-    # 3. 多问递进任务链必须存在答案依赖或共享题干特有模型
-    if (
-        breadth == "多问递进任务链"
-        and dependency != "后问依赖前问"
-        and shared is not True
-    ):
-        raise Stage1SemanticConsistencyError(
-            "结构语义冲突：required_task_breadth=多问递进任务链，"
-            "但没有答案依赖或共享模型。",
-            ["required_task_breadth", "subquestion_dependency", "shared_model_across_subquestions"],
-        )
-
-    # 4. 强多阶段流程不能只有1-2步最长链
-    if (
-        process in {"多阶段强依赖", "循环或回流流程"}
-        and step_count == "1-2步"
-    ):
-        raise Stage1SemanticConsistencyError(
-            "结构语义冲突：process_structure 为强多阶段结构，"
-            "但 step_count=1-2步。",
-            ["process_structure", "step_count"],
-        )
 
 
 def normalize_stage1_rating(
@@ -2004,12 +1894,13 @@ def prepare_question(source_question: dict[str, Any], image_mode: str = "auto") 
         *[str(item.get("stem") or "") + str(item.get("options") or "") for item in subquestions],
     ]).strip()
 
-    has_visual_pattern = bool(any(pat in text for pat in VISUAL_DEPENDENCY_PATTERNS)) or bool(any(re.search(pat, text) for pat in TEXT_HOLE_PATTERNS))
     stem_urls = _image_urls(question, ("stem_image_url", "stem_pic_url"))
     analysis_urls = _image_urls(question, ("analysis_image_url", "analysis_pic_url"))
     all_urls = list(dict.fromkeys(stem_urls + analysis_urls))
 
-    image_required = bool(stem_urls and has_visual_pattern) or (not text) or has_visual_pattern
+    explicit_visual_reference = bool(stem_urls) and any(pat in text for pat in VISUAL_DEPENDENCY_PATTERNS)
+    text_hole = bool(stem_urls) and any(bool(re.search(pat, text)) for pat in TEXT_HOLE_PATTERNS)
+    image_required = (not text) or explicit_visual_reference or text_hole
 
     if image_mode == "all":
         selected = all_urls

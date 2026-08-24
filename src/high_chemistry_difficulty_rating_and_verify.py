@@ -44,9 +44,7 @@ from high_chemistry_pipeline_core import (
     FinalizationResult,
     HIGH_DIFFICULTY_FEATURE_NAMES,
     REQUIRED_FEATURE_FIELDS,
-    Stage1SemanticConsistencyError,
     build_stage1_output_schema,
-    build_stage1_semantic_repair_schema,
     build_stage2_output_schema,
     enrich_stage1_rating,
     finalize_level as _chemistry_finalize_level,
@@ -721,7 +719,6 @@ async def call_stage1(
     total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     last_error = ""
     repair_feedback: str | None = None
-    validation_retry_reasons: list[str] = []
     for attempt in range(retries):
         use_cache = bool(cache_id and repair_feedback is None)
         if repair_feedback is not None:
@@ -781,11 +778,9 @@ async def call_stage1(
                         normalized,
                         features_model_raw=raw_features,
                         normalization_log=normalization_log,
-                        validation_retry_count=len(validation_retry_reasons),
-                        validation_retry_reasons=validation_retry_reasons,
+                        validation_retry_count=attempt,
                     )
                 except ValueError as exc:
-                    validation_retry_reasons.append(str(exc))
                     if attempt < retries - 1:
                         repair_feedback = (
                             f"上一次 JSON 校验失败：{exc}\n"
