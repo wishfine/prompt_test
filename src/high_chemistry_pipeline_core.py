@@ -807,6 +807,31 @@ def detect_high_difficulty_features(features: dict[str, Any]) -> HighDifficultyD
     )
 
 
+def _has_real_dependency(features: dict[str, Any]) -> bool:
+    """判断题目是否具有跨任务/反应/小问/流程的真实关联依赖关系。"""
+    return bool(
+        features.get("reaction_relation") in {
+            "显性顺序衔接",
+            "前后反应强依赖",
+            "多路径反应网络",
+        }
+        or features.get("subquestion_dependency") == "后问依赖前问"
+        or (
+            features.get("shared_model_across_subquestions") is True
+            and features.get("process_structure") != "单阶段"
+        )
+        or features.get("substance_relation") in {
+            "前后转化依赖",
+            "组成—性质—反应网络",
+        }
+        or features.get("process_structure") in {
+            "多阶段显性流程",
+            "多阶段强依赖",
+            "循环或回流流程",
+        }
+    )
+
+
 def derive_structural_level_constraint(
     features: dict[str, Any],
     high_names: list[str],
@@ -870,28 +895,21 @@ def derive_structural_level_constraint(
     # -------------------------------------------------------------
     # 2 ↔ 3 档结构约束
     # -------------------------------------------------------------
-    # floor 3 窄保护候选：双中等负担组合 (paired_moderate_floor_3: 1-2步非概念+简单因果+常规表征/信息载体读取)
-    paired_moderate_floor_3 = (
+    # floor 3 稳定保护：同一反应体系简单因果多任务 (same_system_simple_causal_floor_3)
+    same_system_simple_causal_floor_3 = (
         not high_names
         and features.get("step_count") == "1-2步"
         and features.get("required_task_breadth") in {
             "2-3个异质必要任务",
             "4个及以上异质必要任务",
         }
-        and features.get("primary_problem_structure") != "概念辨析"
-        and features.get("model_explicitness") == "模型完全显性"
+        and features.get("substance_relation") == "同一反应体系"
+        and features.get("process_structure") == "单阶段"
+        and features.get("model_relation") in {
+            "单一模型",
+            "同一模型多状态",
+        }
         and features.get("reasoning_chain") == "简单因果"
-        and (
-            features.get("representation_conversion") == "一次常规转换"
-            or (
-                features.get("information_carrier") in {
-                    "单一图表",
-                    "实验装置",
-                    "工艺流程图",
-                }
-                and features.get("information_conversion") == "直接读取"
-            )
-        )
     )
 
     # ceiling 2: 1-2步显性基础应用 (basic_explicit_application)
@@ -913,7 +931,8 @@ def derive_structural_level_constraint(
         and features.get("route_design_requirement") in {"无", "已知路线补全"}
         and features.get("required_task_breadth") != "4个及以上异质必要任务"
         and not high_names
-        and not paired_moderate_floor_3
+        and not same_system_simple_causal_floor_3
+        and not _has_real_dependency(features)
     )
     if basic_explicit_app:
         ceiling = min_level(ceiling, "难度2档")
@@ -949,7 +968,7 @@ def derive_structural_level_constraint(
             features.get("reasoning_chain") == "简单因果"
             and features.get("evidence_relation") == "多证据独立"
         )
-        and not paired_moderate_floor_3
+        and not same_system_simple_causal_floor_3
     )
     if parallel_basic_bundle_strict:
         ceiling = min_level(ceiling, "难度2档")
@@ -1019,20 +1038,14 @@ def derive_structural_level_constraint(
         rule_ids.append("standard_comprehensive_floor_3")
         evidence.append(f"标准常规综合题正向保护(独立中等负担组数={moderate_group_count})")
 
-    # floor 3: 双中等负担组合正向保护 (paired_moderate_floor_3)
-    if paired_moderate_floor_3:
+    # floor 3: 同一反应体系简单因果多任务正向保护 (same_system_simple_causal_floor_3)
+    if same_system_simple_causal_floor_3:
         floor = max_level(floor, "难度3档")
-        rule_ids.append("paired_moderate_floor_3")
-        evidence.append("双中等负担组合(1-2步非概念+简单因果+常规表征/信息载体读取)")
+        rule_ids.append("same_system_simple_causal_floor_3")
+        evidence.append("同一反应体系+简单因果+多异质任务(1-2步)")
 
     # floor 3: 真实关联依赖链 (standard_chain, 收紧真实依赖)
-    has_real_dependency = (
-        features.get("reaction_relation") in {"显性顺序衔接", "前后反应强依赖", "多路径反应网络"}
-        or features.get("subquestion_dependency") == "后问依赖前问"
-        or (features.get("shared_model_across_subquestions") is True and features.get("process_structure") != "单阶段")
-        or features.get("substance_relation") in {"前后转化依赖", "组成—性质—反应网络"}
-        or features.get("process_structure") in {"多阶段显性流程", "多阶段强依赖", "循环或回流流程"}
-    )
+    has_real_dependency = _has_real_dependency(features)
     standard_chain_tight = (
         features.get("step_count") in {"3-5步", "6-8步", "9-12步", "12步以上"}
         and has_real_dependency
@@ -1119,18 +1132,42 @@ def derive_structural_level_constraint(
         and not compressed_middle_guard
     )
 
+    # 5. 异质多载体综合路径 D: 4个及以上异质任务 + 多载体综合 + 至少一个额外处理负担
+    heterogeneous_multicarrier_floor_4 = (
+        features.get("required_task_breadth") == "4个及以上异质必要任务"
+        and features.get("information_carrier") == "多载体综合"
+        and (
+            features.get("calculation_model") != "无定量计算"
+            or features.get("model_relation") != "单一模型"
+            or features.get("information_conversion") != "直接读取"
+            or features.get("representation_conversion") in {
+                "多次同类转换",
+                "多表征连续转换",
+                "逆向表征转换",
+            }
+            or features.get("route_design_requirement") != "无"
+        )
+    )
+
     if (
         complex_quantitative
         or model_migration_multistage_strong
         or model_migration_system_coupling_strong
         or is_compressed_high
+        or heterogeneous_multicarrier_floor_4
     ):
         floor = max_level(floor, "难度4档")
         rule_ids.append(
-            "compressed_high_burden_floor_4"
-            if is_compressed_high and not (complex_quantitative or model_migration_multistage_strong or model_migration_system_coupling_strong)
-            else "hard_structural_cluster_floor_4"
+            "heterogeneous_multicarrier_floor_4"
+            if heterogeneous_multicarrier_floor_4 and not (complex_quantitative or model_migration_multistage_strong or model_migration_system_coupling_strong or is_compressed_high)
+            else (
+                "compressed_high_burden_floor_4"
+                if is_compressed_high and not (complex_quantitative or model_migration_multistage_strong or model_migration_system_coupling_strong)
+                else "hard_structural_cluster_floor_4"
+            )
         )
+        if heterogeneous_multicarrier_floor_4:
+            evidence.append("4个以上异质任务+多载体综合+额外处理负担")
         if complex_quantitative:
             evidence.append("复杂定量、参数或范围(高难特征)")
         if model_migration_multistage_strong:
@@ -1154,7 +1191,7 @@ def derive_structural_level_constraint(
         and features.get("experiment_requirement") not in {"控制变量或异常分析", "方案设计或误差反演"}
         and features.get("route_design_requirement") not in {"合成路线设计", "分离提纯方案设计", "路线优化与可行性验证"}
         and features.get("constraint_structure") != "多约束联合筛选"
-        and not (complex_quantitative or model_migration_multistage_strong or model_migration_system_coupling_strong or is_compressed_high)
+        and not (complex_quantitative or model_migration_multistage_strong or model_migration_system_coupling_strong or is_compressed_high or heterogeneous_multicarrier_floor_4)
     )
     if regular_comprehensive_tight:
         ceiling = min_level(ceiling, "难度3档")
@@ -1576,7 +1613,7 @@ def recalculate_verification(
             for rule in {
                 "standard_comprehensive_floor_3",
                 "standard_chain_floor_3",
-                "paired_moderate_floor_3",
+                "same_system_simple_causal_floor_3",
             }
         )
     )
@@ -1602,6 +1639,7 @@ def recalculate_verification(
         )
         and corrected_non_breadth_group_count >= 2
         and corrected_features.get("reasoning_chain") == "直接套用"
+        and not _has_real_dependency(corrected_features)
         and not blocks_three_to_two_floor
     )
 

@@ -603,24 +603,41 @@ class FinalizationAndPreparationTests(unittest.TestCase):
             input_sufficiency="充分",
             auto_adjustment_enabled=True,
         )
-    def test_paired_moderate_floor_3_rule(self) -> None:
-        """测试 paired_moderate_floor_3 (1-2步非概念+简单因果+常规表征/信息载体读取) 提升为 3 档 floor 并不被 ceiling2 压制。"""
+    def test_same_system_simple_causal_floor_3_rule(self) -> None:
+        """测试 same_system_simple_causal_floor_3 (同一反应体系+简单因果+多异质任务 1-2步) 提升为 3 档 floor 并不被 ceiling2 压制。"""
         feats = base_features(
             step_count="1-2步",
             required_task_breadth="4个及以上异质必要任务",
-            primary_problem_structure="无机推断",
+            substance_relation="同一反应体系",
+            process_structure="单阶段",
             model_explicitness="模型完全显性",
+            model_relation="单一模型",
             reasoning_chain="简单因果",
-            representation_conversion="一次常规转换",
         )
         constraint = core.derive_structural_level_constraint(feats, [])
         self.assertEqual(constraint["difficulty_floor"], "难度3档")
-        self.assertIn("paired_moderate_floor_3", constraint["rule_ids"])
+        self.assertIn("same_system_simple_causal_floor_3", constraint["rule_ids"])
         self.assertNotIn("basic_explicit_application_ceiling_2", constraint["rule_ids"])
         self.assertNotIn("parallel_basic_bundle_strict_ceiling_2", constraint["rule_ids"])
 
-    def test_stage2_direction_gates_candidate_3(self) -> None:
-        """测试 Candidate 3 Stage 2 方向门槛：3->2 要求 2+ non-breadth 结构组修正且直接套用；4->3 仅在依赖链保留但消除4档时允许。"""
+    def test_heterogeneous_multicarrier_floor_4_rule(self) -> None:
+        """测试 heterogeneous_multicarrier_floor_4 (4+异质任务+多载体综合+额外处理负担) 提升为 4 档 floor 并解除 ceiling3。"""
+        feats = base_features(
+            step_count="1-2步",
+            required_task_breadth="4个及以上异质必要任务",
+            information_carrier="多载体综合",
+            calculation_model="常规化学计量",
+            model_explicitness="模型完全显性",
+            reasoning_chain="直接套用",
+            information_conversion="直接读取",
+        )
+        constraint = core.derive_structural_level_constraint(feats, [])
+        self.assertEqual(constraint["difficulty_floor"], "难度4档")
+        self.assertIn("heterogeneous_multicarrier_floor_4", constraint["rule_ids"])
+        self.assertNotIn("regular_comprehensive_ceiling_3", constraint["rule_ids"])
+
+    def test_stage2_direction_gates_candidate_4(self) -> None:
+        """测试 Candidate 4 Stage 2 方向门槛：3->2 要求 2+ non-breadth 结构组修正、直接套用且无真实依赖链；4->3 仅在依赖链保留但消除4档时允许。"""
         # Case 1: 3 -> 2 只改了 required_task_breadth -> 不通过 3->2 gate
         orig_feats = base_features(
             step_count="1-2步",
@@ -648,6 +665,36 @@ class FinalizationAndPreparationTests(unittest.TestCase):
         self.assertFalse(rev["auto_adjustment_eligible"])
         self.assertEqual(rev["adjusted_difficulty_level"], "难度3档")
         self.assertFalse(rev["three_to_two_basicization_supported"])
+
+        # Case 2: 3 -> 2 虽然有两组修正但保留了 reaction_relation="前后反应强依赖" -> 被 _has_real_dependency 拦截
+        orig_feats2 = base_features(
+            step_count="1-2步",
+            required_task_breadth="2-3个异质必要任务",
+            model_explicitness="半隐含模型",
+            reasoning_chain="简单因果",
+            reaction_relation="前后反应强依赖",
+        )
+        rev2 = core.recalculate_verification(
+            current_level="难度3档",
+            original_features=orig_feats2,
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=65.0,
+            allow_auto_adjustment=True,
+            verification={
+                "confidence": "高",
+                "adjacent_boundary_review": {"verdict": "应更简单一档"},
+                "input_sufficiency_review": {"status": "充分"},
+                "feature_corrections": [
+                    {"field": "model_explicitness", "from": "半隐含模型", "to": "模型完全显性", "reason": "模型显性"},
+                    {"field": "reasoning_chain", "from": "简单因果", "to": "直接套用", "reason": "直接套用"},
+                ],
+                "reviewed_original_predicted_accuracy": 86.0,
+            },
+        )
+        self.assertFalse(rev2["auto_adjustment_eligible"])
+        self.assertEqual(rev2["adjusted_difficulty_level"], "难度3档")
+        self.assertFalse(rev2["three_to_two_basicization_supported"])
 
 
 if __name__ == "__main__":
