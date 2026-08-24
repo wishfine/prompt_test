@@ -46,6 +46,47 @@ PROGRAM_DERIVED_FEATURE_FIELDS = {
     "knowledge_scope",
 }
 
+STAGE2_CORRECTION_GROUPS: dict[str, set[str]] = {
+    "dependency": {
+        "step_count",
+        "subquestion_dependency",
+        "shared_model_across_subquestions",
+        "reaction_count",
+        "reaction_relation",
+        "process_structure",
+        "substance_relation",
+    },
+    "model_condition": {
+        "model_explicitness",
+        "model_relation",
+        "reasoning_chain",
+        "hidden_conditions",
+    },
+    "evidence_constraint": {
+        "competing_reaction",
+        "evidence_relation",
+        "critical_condition",
+        "classification_discussion",
+        "constraint_structure",
+    },
+    "quantitative": {
+        "calculation_model",
+        "calculation_complexity",
+        "equation_structure",
+        "parameter_operation",
+    },
+    "information": {
+        "information_carrier",
+        "information_conversion",
+        "representation_conversion",
+        "context_load",
+    },
+    "experiment_route": {
+        "experiment_requirement",
+        "route_design_requirement",
+    },
+}
+
 KNOWLEDGE_L1 = {
     "化学基本概念",
     "元素化学",
@@ -829,6 +870,30 @@ def derive_structural_level_constraint(
     # -------------------------------------------------------------
     # 2 ↔ 3 档结构约束
     # -------------------------------------------------------------
+    # floor 3 窄保护候选：双中等负担组合 (paired_moderate_floor_3: 1-2步非概念+简单因果+常规表征/信息载体读取)
+    paired_moderate_floor_3 = (
+        not high_names
+        and features.get("step_count") == "1-2步"
+        and features.get("required_task_breadth") in {
+            "2-3个异质必要任务",
+            "4个及以上异质必要任务",
+        }
+        and features.get("primary_problem_structure") != "概念辨析"
+        and features.get("model_explicitness") == "模型完全显性"
+        and features.get("reasoning_chain") == "简单因果"
+        and (
+            features.get("representation_conversion") == "一次常规转换"
+            or (
+                features.get("information_carrier") in {
+                    "单一图表",
+                    "实验装置",
+                    "工艺流程图",
+                }
+                and features.get("information_conversion") == "直接读取"
+            )
+        )
+    )
+
     # ceiling 2: 1-2步显性基础应用 (basic_explicit_application)
     basic_explicit_app = (
         features.get("step_count") == "1-2步"
@@ -848,6 +913,7 @@ def derive_structural_level_constraint(
         and features.get("route_design_requirement") in {"无", "已知路线补全"}
         and features.get("required_task_breadth") != "4个及以上异质必要任务"
         and not high_names
+        and not paired_moderate_floor_3
     )
     if basic_explicit_app:
         ceiling = min_level(ceiling, "难度2档")
@@ -883,6 +949,7 @@ def derive_structural_level_constraint(
             features.get("reasoning_chain") == "简单因果"
             and features.get("evidence_relation") == "多证据独立"
         )
+        and not paired_moderate_floor_3
     )
     if parallel_basic_bundle_strict:
         ceiling = min_level(ceiling, "难度2档")
@@ -951,6 +1018,12 @@ def derive_structural_level_constraint(
         floor = max_level(floor, "难度3档")
         rule_ids.append("standard_comprehensive_floor_3")
         evidence.append(f"标准常规综合题正向保护(独立中等负担组数={moderate_group_count})")
+
+    # floor 3: 双中等负担组合正向保护 (paired_moderate_floor_3)
+    if paired_moderate_floor_3:
+        floor = max_level(floor, "难度3档")
+        rule_ids.append("paired_moderate_floor_3")
+        evidence.append("双中等负担组合(1-2步非概念+简单因果+常规表征/信息载体读取)")
 
     # floor 3: 真实关联依赖链 (standard_chain, 收紧真实依赖)
     has_real_dependency = (
@@ -1503,9 +1576,53 @@ def recalculate_verification(
             for rule in {
                 "standard_comprehensive_floor_3",
                 "standard_chain_floor_3",
+                "paired_moderate_floor_3",
             }
         )
     )
+
+    # 统计被合法修正的 non-breadth 独立结构组数
+    corrected_non_breadth_groups = set()
+    for corr in applied:
+        corr_field = str(corr.get("field") or "")
+        for group_name, field_set in STAGE2_CORRECTION_GROUPS.items():
+            if corr_field in field_set:
+                corrected_non_breadth_groups.add(group_name)
+    corrected_non_breadth_group_count = len(corrected_non_breadth_groups)
+
+    # 3 -> 2 基础化正向授权门槛 (three_to_two_basicization_supported)
+    three_to_two_basicization_supported = (
+        current_level == "难度3档"
+        and reviewed_target_level == "难度2档"
+        and (
+            "basic_explicit_application_ceiling_2"
+            in reviewed_constraint.get("rule_ids", [])
+            or "parallel_basic_bundle_strict_ceiling_2"
+            in reviewed_constraint.get("rule_ids", [])
+        )
+        and corrected_non_breadth_group_count >= 2
+        and corrected_features.get("reasoning_chain") == "直接套用"
+        and not blocks_three_to_two_floor
+    )
+
+    # 4 -> 3 拔高负担消除授权门槛 (four_to_three_supported)
+    four_to_three_supported = (
+        current_level == "难度4档"
+        and reviewed_target_level == "难度3档"
+        and "standard_chain_floor_3" in original_constraint.get("rule_ids", [])
+        and "compressed_high_burden_floor_4" in original_constraint.get("rule_ids", [])
+        and "standard_chain_floor_3" in reviewed_constraint.get("rule_ids", [])
+        and "compressed_high_burden_floor_4" not in reviewed_constraint.get("rule_ids", [])
+        and "hard_structural_cluster_floor_4" not in reviewed_constraint.get("rule_ids", [])
+    )
+
+    if current_level == "难度3档" and reviewed_target_level == "难度2档":
+        direction_gate = three_to_two_basicization_supported
+    elif current_level == "难度4档" and reviewed_target_level == "难度3档":
+        direction_gate = four_to_three_supported
+    else:
+        direction_gate = True
+
     auto_adjustment_eligible = (
         allow_auto_adjustment
         and structural_revision_supported
@@ -1515,7 +1632,7 @@ def recalculate_verification(
         and input_review.get("status") != "信息不足"
         and not unresolved_overlap
         and not blocks_two_to_one
-        and not blocks_three_to_two_floor
+        and direction_gate
         and not constraint_conflict
         and not severe_disagreement
     )
@@ -1575,6 +1692,14 @@ def recalculate_verification(
             "reviewed_direction": reviewed_direction,
             "auto_downgrade_two_to_one_blocked": blocks_two_to_one,
             "auto_downgrade_three_to_two_blocked": blocks_three_to_two_floor,
+            "stage2_corrected_non_breadth_group_count": (
+                corrected_non_breadth_group_count
+            ),
+            "three_to_two_basicization_supported": (
+                three_to_two_basicization_supported
+            ),
+            "four_to_three_supported": four_to_three_supported,
+            "stage2_direction_gate_passed": direction_gate,
             "boundary_verdict_consistent": boundary_verdict_consistent,
             "auto_adjustment_eligible": auto_adjustment_eligible,
             "review_action": (

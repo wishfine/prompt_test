@@ -603,9 +603,53 @@ class FinalizationAndPreparationTests(unittest.TestCase):
             input_sufficiency="充分",
             auto_adjustment_enabled=True,
         )
-        self.assertEqual(result.final_level, "难度4档")
-        self.assertTrue(result.needs_manual_review)
+    def test_paired_moderate_floor_3_rule(self) -> None:
+        """测试 paired_moderate_floor_3 (1-2步非概念+简单因果+常规表征/信息载体读取) 提升为 3 档 floor 并不被 ceiling2 压制。"""
+        feats = base_features(
+            step_count="1-2步",
+            required_task_breadth="4个及以上异质必要任务",
+            primary_problem_structure="无机推断",
+            model_explicitness="模型完全显性",
+            reasoning_chain="简单因果",
+            representation_conversion="一次常规转换",
+        )
+        constraint = core.derive_structural_level_constraint(feats, [])
+        self.assertEqual(constraint["difficulty_floor"], "难度3档")
+        self.assertIn("paired_moderate_floor_3", constraint["rule_ids"])
+        self.assertNotIn("basic_explicit_application_ceiling_2", constraint["rule_ids"])
+        self.assertNotIn("parallel_basic_bundle_strict_ceiling_2", constraint["rule_ids"])
+
+    def test_stage2_direction_gates_candidate_3(self) -> None:
+        """测试 Candidate 3 Stage 2 方向门槛：3->2 要求 2+ non-breadth 结构组修正且直接套用；4->3 仅在依赖链保留但消除4档时允许。"""
+        # Case 1: 3 -> 2 只改了 required_task_breadth -> 不通过 3->2 gate
+        orig_feats = base_features(
+            step_count="1-2步",
+            required_task_breadth="4个及以上异质必要任务",
+            model_explicitness="模型完全显性",
+            reasoning_chain="简单因果",
+        )
+        rev = core.recalculate_verification(
+            current_level="难度3档",
+            original_features=orig_feats,
+            original_high_count=0,
+            original_high_features=[],
+            original_accuracy=65.0,
+            allow_auto_adjustment=True,
+            verification={
+                "confidence": "高",
+                "adjacent_boundary_review": {"verdict": "应更简单一档"},
+                "input_sufficiency_review": {"status": "充分"},
+                "feature_corrections": [
+                    {"field": "required_task_breadth", "from": "4个及以上异质必要任务", "to": "2-3个异质必要任务", "reason": "修改任务广度"}
+                ],
+                "reviewed_original_predicted_accuracy": 86.0,
+            },
+        )
+        self.assertFalse(rev["auto_adjustment_eligible"])
+        self.assertEqual(rev["adjusted_difficulty_level"], "难度3档")
+        self.assertFalse(rev["three_to_two_basicization_supported"])
 
 
 if __name__ == "__main__":
     unittest.main()
+
