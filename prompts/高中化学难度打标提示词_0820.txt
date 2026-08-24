@@ -453,7 +453,7 @@ reaction_relation 只描述化学反应节点之间的关系；process_structure
 
 - features：包含第四节规定的全部字段，每个枚举字段只能放一个合法值，不得用斜杠或“或”拼接多个值；
 - reason：用2—4句先写“有效化学决策链：……”并给出数量，再说明主要难度来源、小问依赖或共享模型、与上下相邻边界的距离，以及具体原始正确率的证据；
-- boundary_85_review：必须包含 decision、decisive_chemical_task、why_not_other_side；它只记录85边界的判断依据，不是新的 feature、档位或乘数条件；
+- boundary_85_review：必须包含 decision、decisive_chemical_task、why_not_other_side；它只记录85边界的判断依据，不是新的 feature、档位或后续处理条件；
 - predicted_accuracy：0—100的连续数值，必须针对当前题目独立确定。Prompt 不提供数值示例，避免将格式示例误当成评分锚点。
 """
 
