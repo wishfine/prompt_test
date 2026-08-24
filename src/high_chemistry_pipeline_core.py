@@ -879,6 +879,10 @@ def derive_structural_level_constraint(
         and features.get("representation_conversion") in {"无转换", "一次常规转换"}
         and features.get("context_load") in {"纯包装", "简单规律映射"}
         and not high_names
+        and not (
+            features.get("reasoning_chain") == "简单因果"
+            and features.get("evidence_relation") == "多证据独立"
+        )
     )
     if parallel_basic_bundle_strict:
         ceiling = min_level(ceiling, "难度2档")
@@ -1024,6 +1028,12 @@ def derive_structural_level_constraint(
         or features.get("critical_condition") in {"需要推导过量不足边界", "隐含终点或有效区间"}
     )
     axes = [axis_model_ident, axis_reasoning, axis_model_relation, axis_quant, axis_info, axis_exp, axis_constraint]
+    compressed_middle_guard = (
+        features.get("step_count") == "3-5步"
+        and features.get("model_relation") in {"单一模型", "同一模型多状态"}
+        and features.get("reasoning_chain") == "简单因果"
+        and features.get("calculation_model") == "无定量计算"
+    )
     is_compressed_high = (
         sum(axes) >= 2
         and features.get("step_count") in {"3-5步", "6-8步", "9-12步", "12步以上"}
@@ -1033,6 +1043,7 @@ def derive_structural_level_constraint(
             or features.get("calculation_model") not in {"无定量计算", "常规化学计量"}
             or features.get("experiment_requirement") not in {"无", "基础操作或读数", "直接现象解释"}
         )
+        and not compressed_middle_guard
     )
 
     if (
@@ -1481,6 +1492,20 @@ def recalculate_verification(
         current_level == "难度2档"
         and reviewed_target_level == "难度1档"
     )
+    original_constraint = derive_structural_level_constraint(
+        original_features, original_high_features
+    )
+    blocks_three_to_two_floor = (
+        current_level == "难度3档"
+        and reviewed_target_level == "难度2档"
+        and any(
+            rule in original_constraint.get("rule_ids", [])
+            for rule in {
+                "standard_comprehensive_floor_3",
+                "standard_chain_floor_3",
+            }
+        )
+    )
     auto_adjustment_eligible = (
         allow_auto_adjustment
         and structural_revision_supported
@@ -1490,6 +1515,7 @@ def recalculate_verification(
         and input_review.get("status") != "信息不足"
         and not unresolved_overlap
         and not blocks_two_to_one
+        and not blocks_three_to_two_floor
         and not constraint_conflict
         and not severe_disagreement
     )
@@ -1548,6 +1574,7 @@ def recalculate_verification(
             "reviewed_difficulty_level": reviewed_level,
             "reviewed_direction": reviewed_direction,
             "auto_downgrade_two_to_one_blocked": blocks_two_to_one,
+            "auto_downgrade_three_to_two_blocked": blocks_three_to_two_floor,
             "boundary_verdict_consistent": boundary_verdict_consistent,
             "auto_adjustment_eligible": auto_adjustment_eligible,
             "review_action": (
