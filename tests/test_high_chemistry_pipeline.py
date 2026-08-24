@@ -203,7 +203,7 @@ class StructuralLevelConstraintTests(unittest.TestCase):
             substance_relation="相互独立",
             reaction_relation="无反应链",
             process_structure="单阶段",
-            step_count="3-5步",
+            step_count="1-2步",
             model_explicitness="模型完全显性",
             reasoning_chain="简单因果",
             information_conversion="无信息转换",
@@ -751,6 +751,40 @@ class FinalizationAndPreparationTests(unittest.TestCase):
         )
         self.assertEqual(enriched["stage1_validation_retry_count"], 1)
         self.assertEqual(enriched["stage1_validation_retry_reasons"], reasons)
+
+    def test_parallel_basic_bundle_strict_requires_one_to_two_steps(self) -> None:
+        """测试 parallel_basic_bundle_strict 严格限定 step_count=='1-2步'，3-5步及以上题不被误压成 ceiling2。"""
+        feats_1_2 = base_features(
+            step_count="1-2步",
+            required_task_breadth="4个及以上异质必要任务",
+            substance_relation="相互独立",
+            reaction_relation="无反应链",
+            process_structure="单阶段",
+            model_explicitness="模型完全显性",
+            model_relation="单一模型",
+            reasoning_chain="直接套用",
+            information_conversion="无信息转换",
+            evidence_relation="直接给定",
+        )
+        constraint_1_2 = core.derive_structural_level_constraint(feats_1_2, [])
+        self.assertIn("parallel_basic_bundle_strict_ceiling_2", constraint_1_2["rule_ids"])
+        self.assertEqual(constraint_1_2["difficulty_ceiling"], "难度2档")
+
+        # 3-5 步虽然其他特征并列，但绝不命中 parallel_basic_bundle_strict
+        feats_3_5 = base_features(
+            step_count="3-5步",
+            required_task_breadth="4个及以上异质必要任务",
+            substance_relation="相互独立",
+            reaction_relation="无反应链",
+            process_structure="单阶段",
+            model_explicitness="模型完全显性",
+            model_relation="单一模型",
+            reasoning_chain="直接套用",
+            information_conversion="无信息转换",
+            evidence_relation="直接给定",
+        )
+        constraint_3_5 = core.derive_structural_level_constraint(feats_3_5, [])
+        self.assertNotIn("parallel_basic_bundle_strict_ceiling_2", constraint_3_5["rule_ids"])
 
 
 if __name__ == "__main__":

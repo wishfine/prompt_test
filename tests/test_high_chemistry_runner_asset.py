@@ -22,7 +22,7 @@ class HighChemistryAssetTests(unittest.TestCase):
         self.assertTrue(RUNNER.exists())
         source = RUNNER.read_text(encoding="utf-8")
         compile(source, str(RUNNER), "exec")
-        self.assertIn("high_chemistry_two_stage_v22_candidate_6", source)
+        self.assertIn("high_chemistry_two_stage_v22_candidate_7", source)
         self.assertIn("ENABLE_STAGE2_AUTO_ADJUST", source)
         self.assertIn("ENABLE_CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER", source)
         self.assertIn(
@@ -155,8 +155,8 @@ class HighChemistryAssetTests(unittest.TestCase):
         for obsolete in ("75 分边界", "55 分边界", "35 分边界"):
             self.assertNotIn(obsolete, stage1)
         for required in (
-            "基础应用与常规综合的区别",
-            "局部认知负担和相互依赖",
+            "局部基础应用区",
+            "常规综合区",
             "长链路径",
             "高密度短链路径",
         ):

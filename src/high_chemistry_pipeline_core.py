@@ -941,7 +941,8 @@ def derive_structural_level_constraint(
 
     # ceiling 2: 严格并列基础多任务 (parallel_basic_bundle_strict，不含 error_risk 伪硬门槛)
     parallel_basic_bundle_strict = (
-        features.get("required_task_breadth") in {"2-3个异质必要任务", "4个及以上异质必要任务"}
+        features.get("step_count") == "1-2步"
+        and features.get("required_task_breadth") in {"2-3个异质必要任务", "4个及以上异质必要任务"}
         and features.get("substance_relation") in {"单一物质", "相互独立"}
         and features.get("reaction_relation") in {"无反应链", "并列独立"}
         and features.get("process_structure") == "单阶段"
