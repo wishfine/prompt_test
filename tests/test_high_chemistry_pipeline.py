@@ -791,6 +791,14 @@ class FinalizationAndPreparationTests(unittest.TestCase):
         constraint_3_5 = core.derive_structural_level_constraint(feats_3_5, [])
         self.assertNotIn("parallel_basic_bundle_strict_ceiling_2", constraint_3_5["rule_ids"])
 
+    def test_build_stage1_semantic_repair_schema(self) -> None:
+        """测试 build_stage1_semantic_repair_schema 仅包含冲突字段与预测分数相关字段。"""
+        schema = core.build_stage1_semantic_repair_schema(["step_count", "reasoning_chain"])
+        self.assertEqual(schema["type"], "object")
+        self.assertEqual(set(schema["required"]), {"step_count", "reasoning_chain", "reason", "predicted_accuracy"})
+        self.assertEqual(set(schema["properties"].keys()), {"step_count", "reasoning_chain", "reason", "predicted_accuracy"})
+        self.assertFalse(schema["additionalProperties"])
+
 
 if __name__ == "__main__":
     unittest.main()

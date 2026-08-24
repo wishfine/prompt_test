@@ -223,6 +223,42 @@ def build_stage1_output_schema() -> dict[str, Any]:
     }
 
 
+def build_stage1_semantic_repair_schema(conflict_fields: list[str]) -> dict[str, Any]:
+    """为定向语义冲突修复生成轻量 strict schema，仅包含冲突字段、reason 与 predicted_accuracy。"""
+    properties: dict[str, Any] = {}
+    for field in conflict_fields:
+        if field == "shared_model_across_subquestions":
+            properties[field] = {"type": "boolean"}
+        elif field in FEATURE_OPTIONS:
+            properties[field] = {"type": "string", "enum": sorted(FEATURE_OPTIONS[field])}
+        elif field == "chemistry_methods":
+            properties[field] = {
+                "type": "array",
+                "items": {"type": "string", "enum": sorted(CHEMISTRY_METHODS)},
+            }
+        elif field == "knowledge_points":
+            properties[field] = {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+            }
+        elif field in {"knowledge_L1", "knowledge_L2"}:
+            valid_opts = KNOWLEDGE_L1 if field == "knowledge_L1" else KNOWLEDGE_L2
+            properties[field] = {
+                "type": "array",
+                "items": {"type": "string", "enum": sorted(valid_opts)},
+                "minItems": 1,
+            }
+    properties["reason"] = {"type": "string"}
+    properties["predicted_accuracy"] = {"type": "number"}
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(conflict_fields) + ["reason", "predicted_accuracy"],
+        "additionalProperties": False,
+    }
+
+
 STAGE2_CORRECTABLE_FEATURE_FIELDS = (
     "substance_count",
     "substance_relation",
@@ -1392,10 +1428,18 @@ def enrich_stage1_rating(
     rating["full_dependent_organic_route_detected"] = _is_full_dependent_organic_route(features)
     return rating
 
+class Stage1SemanticConsistencyError(ValueError):
+    """第一阶段特征语义冲突异常，携带冲突的字段列表以支持定向修复。"""
+
+    def __init__(self, message: str, conflict_fields: list[str] | None = None):
+        super().__init__(message)
+        self.conflict_fields = list(conflict_fields or [])
+
+
 def validate_stage1_semantic_consistency(
     features: dict[str, Any],
 ) -> None:
-    """校验第一阶段关键特征之间的结构语义自洽性，冲突时抛出 ValueError 以触发模型重试。"""
+    """校验第一阶段关键特征之间的结构语义自洽性，冲突时抛出 Stage1SemanticConsistencyError 以触发定向修复重试。"""
     step_count = features.get("step_count")
     reasoning = features.get("reasoning_chain")
     breadth = features.get("required_task_breadth")
@@ -1408,9 +1452,9 @@ def validate_stage1_semantic_consistency(
         reasoning == "多层因果"
         and step_count == "1-2步"
     ):
-        raise ValueError(
-            "结构语义冲突：reasoning_chain=多层因果 "
-            "但 step_count=1-2步。请重新还原最长连续依赖链。"
+        raise Stage1SemanticConsistencyError(
+            "结构语义冲突：reasoning_chain=多层因果 但 step_count=1-2步。请重新还原最长连续依赖链。",
+            ["step_count", "reasoning_chain"],
         )
 
     # 2. 直接套用不能同时声称存在长连续链或多步连续链 (3步及以上)
@@ -1423,10 +1467,11 @@ def validate_stage1_semantic_consistency(
             "12步以上",
         }
     ):
-        raise ValueError(
+        raise Stage1SemanticConsistencyError(
             "结构语义冲突：reasoning_chain=直接套用表示最长连续链只有一个核心化学决策，"
             "但 step_count 表示存在至少3个连续有效化学决策。"
-            "请基于同一条最长连续依赖链重新判断 step_count 与 reasoning_chain。"
+            "请基于同一条最长连续依赖链重新判断 step_count 与 reasoning_chain。",
+            ["step_count", "reasoning_chain"],
         )
 
     # 3. 多问递进任务链必须存在答案依赖或共享题干特有模型
@@ -1435,9 +1480,10 @@ def validate_stage1_semantic_consistency(
         and dependency != "后问依赖前问"
         and shared is not True
     ):
-        raise ValueError(
+        raise Stage1SemanticConsistencyError(
             "结构语义冲突：required_task_breadth=多问递进任务链，"
-            "但没有答案依赖或共享模型。"
+            "但没有答案依赖或共享模型。",
+            ["required_task_breadth", "subquestion_dependency", "shared_model_across_subquestions"],
         )
 
     # 4. 强多阶段流程不能只有1-2步最长链
@@ -1445,9 +1491,10 @@ def validate_stage1_semantic_consistency(
         process in {"多阶段强依赖", "循环或回流流程"}
         and step_count == "1-2步"
     ):
-        raise ValueError(
+        raise Stage1SemanticConsistencyError(
             "结构语义冲突：process_structure 为强多阶段结构，"
-            "但 step_count=1-2步。"
+            "但 step_count=1-2步。",
+            ["process_structure", "step_count"],
         )
 
 

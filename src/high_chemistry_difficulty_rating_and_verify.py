@@ -44,7 +44,9 @@ from high_chemistry_pipeline_core import (
     FinalizationResult,
     HIGH_DIFFICULTY_FEATURE_NAMES,
     REQUIRED_FEATURE_FIELDS,
+    Stage1SemanticConsistencyError,
     build_stage1_output_schema,
+    build_stage1_semantic_repair_schema,
     build_stage2_output_schema,
     enrich_stage1_rating,
     finalize_level as _chemistry_finalize_level,
@@ -78,9 +80,9 @@ DEFAULT_PROMPT = ROOT / "prompts" / "高中化学难度打标提示词.txt"
 DEFAULT_OUTPUT = ROOT / "outputs" / "model_runs" / "high_chemistry_two_stage.jsonl"
 DEFAULT_ERRORS = ROOT / "outputs" / "model_runs" / "high_chemistry_two_stage_errors.jsonl"
 DEFAULT_CACHE = ROOT / "outputs" / "cache" / "high_chemistry_stage1_prefix_cache.json"
-PIPELINE_VERSION = "high_chemistry_two_stage_v22_candidate_8"
-PROMPT_VERSION = "high_chemistry_prompt_v22_candidate_8"
-STRUCTURAL_CONSTRAINT_VERSION = "structural_constraint_v22_candidate_8"
+PIPELINE_VERSION = "high_chemistry_two_stage_v22_candidate_9"
+PROMPT_VERSION = "high_chemistry_prompt_v22_candidate_9"
+STRUCTURAL_CONSTRAINT_VERSION = "structural_constraint_v22_candidate_9"
 PROMPT_SHA256 = ""
 CORE_SHA256 = hashlib.sha256(
     (ROOT / "src" / "high_chemistry_pipeline_core.py").read_bytes()
@@ -720,9 +722,24 @@ async def call_stage1(
     last_error = ""
     repair_feedback: str | None = None
     validation_retry_reasons: list[str] = []
+    conflict_fields_to_repair: list[str] | None = None
+    saved_base_features: dict[str, Any] | None = None
+
     for attempt in range(retries):
-        use_cache = bool(cache_id and repair_feedback is None)
-        if repair_feedback is not None:
+        is_targeted_repair = bool(conflict_fields_to_repair and saved_base_features)
+        use_cache = bool(cache_id and repair_feedback is None and not is_targeted_repair)
+
+        if is_targeted_repair:
+            prompt_text = (
+                FEATURE_EXTRACTION_PROMPT_PREFIX
+                + "\n\n"
+                + dynamic_text
+                + "\n\n【定向语义修复要求】\n"
+                + repair_feedback
+            )
+            current_schema = build_stage1_semantic_repair_schema(conflict_fields_to_repair)
+            current_schema_name = "high_chemistry_stage1_semantic_repair"
+        elif repair_feedback is not None:
             prompt_text = (
                 FEATURE_EXTRACTION_PROMPT_PREFIX
                 + "\n\n"
@@ -732,12 +749,17 @@ async def call_stage1(
                 + "\n请重新输出完整合法 JSON。不得省略任何必需 "
                 "features 或 predicted_accuracy。"
             )
+            current_schema = build_stage1_output_schema()
+            current_schema_name = "high_chemistry_stage1_rating"
         else:
             prompt_text = (
                 dynamic_text
                 if use_cache
                 else FEATURE_EXTRACTION_PROMPT_PREFIX + "\n\n" + dynamic_text
             )
+            current_schema = build_stage1_output_schema()
+            current_schema_name = "high_chemistry_stage1_rating"
+
         payload: dict[str, Any] = {
             "model": MODEL_NAME,
             "input": [
@@ -751,9 +773,9 @@ async def call_stage1(
             "text": {
                 "format": {
                     "type": "json_schema",
-                    "name": "high_chemistry_stage1_rating",
+                    "name": current_schema_name,
                     "strict": True,
-                    "schema": build_stage1_output_schema(),
+                    "schema": current_schema,
                 }
             },
         }
@@ -767,9 +789,21 @@ async def call_stage1(
                 current_usage = _usage(body)
                 for key in total_usage:
                     total_usage[key] += current_usage[key]
-                parsed = _restrict_stage1_model_output(
-                    _parse_json_object(_extract_output_text(body))
-                )
+                raw_json = _parse_json_object(_extract_output_text(body))
+
+                if is_targeted_repair:
+                    patched_features = copy.deepcopy(saved_base_features)
+                    for fld in conflict_fields_to_repair:
+                        if fld in raw_json:
+                            patched_features[fld] = raw_json[fld]
+                    parsed = {
+                        "features": patched_features,
+                        "reason": raw_json.get("reason", ""),
+                        "predicted_accuracy": raw_json.get("predicted_accuracy"),
+                    }
+                else:
+                    parsed = _restrict_stage1_model_output(raw_json)
+
                 try:
                     raw_features = copy.deepcopy(parsed.get("features"))
                     normalized, normalization_log = normalize_stage1_rating(
@@ -782,9 +816,24 @@ async def call_stage1(
                         validation_retry_count=len(validation_retry_reasons),
                         validation_retry_reasons=validation_retry_reasons,
                     )
+                except Stage1SemanticConsistencyError as exc:
+                    validation_retry_reasons.append(str(exc))
+                    if attempt < retries - 1:
+                        conflict_fields_to_repair = exc.conflict_fields
+                        saved_base_features = copy.deepcopy(parsed.get("features") or raw_features)
+                        repair_feedback = (
+                            f"检测到的唯一结构冲突是：{exc}\n\n"
+                            f"请仅基于原题中普通考生最短充分解法的同一条最长连续依赖链，重新判断并输出冲突字段：{', '.join(exc.conflict_fields)}。\n"
+                            "除上述字段及由其决定的 reason、predicted_accuracy 外，上一次已确定的其他 features（如 model_relation、model_explicitness、task_breadth、evidence 等）将全部严格冻结保持不变。"
+                        )
+                        last_error = str(exc)
+                        continue
+                    raise
                 except ValueError as exc:
                     validation_retry_reasons.append(str(exc))
                     if attempt < retries - 1:
+                        conflict_fields_to_repair = None
+                        saved_base_features = None
                         repair_feedback = (
                             f"上一次 JSON 校验失败：{exc}\n"
                             "上一次输出如下：\n"
