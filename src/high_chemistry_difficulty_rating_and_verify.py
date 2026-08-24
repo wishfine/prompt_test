@@ -78,9 +78,9 @@ DEFAULT_PROMPT = ROOT / "prompts" / "高中化学难度打标提示词.txt"
 DEFAULT_OUTPUT = ROOT / "outputs" / "model_runs" / "high_chemistry_two_stage.jsonl"
 DEFAULT_ERRORS = ROOT / "outputs" / "model_runs" / "high_chemistry_two_stage_errors.jsonl"
 DEFAULT_CACHE = ROOT / "outputs" / "cache" / "high_chemistry_stage1_prefix_cache.json"
-PIPELINE_VERSION = "high_chemistry_two_stage_v22_candidate_7"
-PROMPT_VERSION = "high_chemistry_prompt_v22_candidate_7"
-STRUCTURAL_CONSTRAINT_VERSION = "structural_constraint_v22_candidate_7"
+PIPELINE_VERSION = "high_chemistry_two_stage_v22_candidate_8"
+PROMPT_VERSION = "high_chemistry_prompt_v22_candidate_8"
+STRUCTURAL_CONSTRAINT_VERSION = "structural_constraint_v22_candidate_8"
 PROMPT_SHA256 = ""
 CORE_SHA256 = hashlib.sha256(
     (ROOT / "src" / "high_chemistry_pipeline_core.py").read_bytes()

@@ -704,11 +704,16 @@ class FinalizationAndPreparationTests(unittest.TestCase):
             core.validate_stage1_semantic_consistency(feats1)
         self.assertIn("reasoning_chain=多层因果 但 step_count=1-2步", str(cm1.exception))
 
-        # 2. 直接套用 + 6-8步 -> ValueError
-        feats2 = base_features(reasoning_chain="直接套用", step_count="6-8步")
-        with self.assertRaises(ValueError) as cm2:
-            core.validate_stage1_semantic_consistency(feats2)
-        self.assertIn("reasoning_chain=直接套用 但 step_count 为6步以上", str(cm2.exception))
+        # 2. 直接套用 + 3步及以上 -> ValueError
+        feats2_a = base_features(reasoning_chain="直接套用", step_count="3-5步")
+        with self.assertRaises(ValueError) as cm2_a:
+            core.validate_stage1_semantic_consistency(feats2_a)
+        self.assertIn("reasoning_chain=直接套用", str(cm2_a.exception))
+
+        feats2_b = base_features(reasoning_chain="直接套用", step_count="6-8步")
+        with self.assertRaises(ValueError) as cm2_b:
+            core.validate_stage1_semantic_consistency(feats2_b)
+        self.assertIn("reasoning_chain=直接套用", str(cm2_b.exception))
 
         # 3. 多问递进任务链 + 无后问依赖前问且无共享模型 -> ValueError
         feats3 = base_features(

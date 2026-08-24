@@ -1413,18 +1413,20 @@ def validate_stage1_semantic_consistency(
             "但 step_count=1-2步。请重新还原最长连续依赖链。"
         )
 
-    # 2. 直接套用不能同时声称存在长连续链
+    # 2. 直接套用不能同时声称存在长连续链或多步连续链 (3步及以上)
     if (
         reasoning == "直接套用"
         and step_count in {
+            "3-5步",
             "6-8步",
             "9-12步",
             "12步以上",
         }
     ):
         raise ValueError(
-            "结构语义冲突：reasoning_chain=直接套用 "
-            "但 step_count 为6步以上。"
+            "结构语义冲突：reasoning_chain=直接套用表示最长连续链只有一个核心化学决策，"
+            "但 step_count 表示存在至少3个连续有效化学决策。"
+            "请基于同一条最长连续依赖链重新判断 step_count 与 reasoning_chain。"
         )
 
     # 3. 多问递进任务链必须存在答案依赖或共享题干特有模型
