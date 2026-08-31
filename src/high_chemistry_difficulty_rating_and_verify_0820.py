@@ -1080,7 +1080,7 @@ def build_parser() -> argparse.ArgumentParser:
         "-r",
         "--retries",
         type=int,
-        default=4,
+        default=1,
         help="每个阶段的总尝试次数；1 表示失败后不重试",
     )
     parser.add_argument("--seed", type=int, default=None)

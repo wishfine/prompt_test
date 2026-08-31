@@ -56,6 +56,10 @@ class ResponseCompletionTest(unittest.TestCase):
         self.assertEqual(runtime.STAGE1_MAX_OUTPUT_TOKENS, 8000)
         self.assertEqual(runtime.STAGE2_MAX_OUTPUT_TOKENS, 5000)
 
+    def test_runtime_defaults_to_one_total_attempt(self) -> None:
+        args = runtime.build_parser().parse_args([])
+        self.assertEqual(args.retries, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
