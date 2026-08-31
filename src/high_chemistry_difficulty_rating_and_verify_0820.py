@@ -82,6 +82,8 @@ SUBJECT_DISPLAY_NAME = "高中化学"
 PROGRESS_DESCRIPTION = "High Chemistry Pipeline"
 
 CACHE_EXPIRE_SECONDS = 5 * 24 * 3600
+STAGE1_MAX_OUTPUT_TOKENS = 8000
+STAGE2_MAX_OUTPUT_TOKENS = 5000
 FILE_LOCK = asyncio.Lock()
 CACHE_LOCK = asyncio.Lock()
 CACHE_CREATE_LOCK = asyncio.Lock()
@@ -290,6 +292,26 @@ def _usage(response_json: dict[str, Any]) -> dict[str, int]:
         "output_tokens": int(usage.get("output_tokens") or 0),
         "total_tokens": int(usage.get("total_tokens") or 0),
     }
+
+
+def _response_completion_error(
+    response_json: dict[str, Any], stage_name: str
+) -> str | None:
+    """Return a retryable error when the Responses API did not finish output."""
+    status = str(response_json.get("status") or "").strip()
+    if not status or status == "completed":
+        return None
+
+    details = response_json.get("incomplete_details")
+    if isinstance(details, dict):
+        reason = str(details.get("reason") or "未知原因")
+    else:
+        reason = str(details or "未知原因")
+    output_tokens = _usage(response_json)["output_tokens"]
+    return (
+        f"{stage_name}模型响应未完成：status={status}，reason={reason}，"
+        f"output_tokens={output_tokens}"
+    )
 
 
 async def _post_response(
@@ -683,7 +705,7 @@ async def call_stage1(
                 }
             ],
             "thinking": {"type": "disabled"},
-            "max_output_tokens": 4000,
+            "max_output_tokens": STAGE1_MAX_OUTPUT_TOKENS,
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -703,6 +725,10 @@ async def call_stage1(
                 current_usage = _usage(body)
                 for key in total_usage:
                     total_usage[key] += current_usage[key]
+                completion_error = _response_completion_error(body, "第一阶段")
+                if completion_error:
+                    last_error = completion_error
+                    continue
                 parsed = _restrict_stage1_model_output(
                     _parse_json_object(_extract_output_text(body))
                 )
@@ -783,7 +809,7 @@ async def call_stage2(
                 }
             ],
             "thinking": {"type": "disabled"},
-            "max_output_tokens": 2500,
+            "max_output_tokens": STAGE2_MAX_OUTPUT_TOKENS,
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -801,6 +827,10 @@ async def call_stage2(
                 current_usage = _usage(body)
                 for key in total_usage:
                     total_usage[key] += current_usage[key]
+                completion_error = _response_completion_error(body, "第二阶段")
+                if completion_error:
+                    last_error = completion_error
+                    continue
                 parsed = _parse_json_object(_extract_output_text(body))
                 validated = validate_verification(parsed)
                 return (
@@ -1046,7 +1076,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="按原始旧标签1—5档各抽取指定题数；标签仅用于抽样，不发送给模型",
     )
     parser.add_argument("-t", "--timeout", type=int, default=300)
-    parser.add_argument("-r", "--retries", type=int, default=4)
+    parser.add_argument(
+        "-r",
+        "--retries",
+        type=int,
+        default=4,
+        help="每个阶段的总尝试次数；1 表示失败后不重试",
+    )
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument(
