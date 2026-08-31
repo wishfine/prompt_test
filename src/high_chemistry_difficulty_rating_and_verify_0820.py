@@ -3,10 +3,10 @@
 
 流程：
   1. 模型提取结构化 features，并给出乘数前原始正确率；
-  2. 程序按结构证据校准正确率，检测独立高难节点并应用 1.00 / 0.85 / 0.70 乘数；
+  2. 程序检测高难特征，按数量应用 1.00 / 0.85 / 0.70 乘数；
   3. 程序按连续正确率区间映射第一步五档；
-  4. 第二次模型调用只复核 features 与相邻边界；
-  5. 仅当合法 feature 修订导致相邻边界变化时，程序全量重算并最多调整一档。
+  4. 第二次模型调用复核 features、正确率、高难触发、重复计数、乘数和档位；
+  5. 程序依据“合理/偏高/偏低”最多调整一档，并标记人工复核项。
 
 支持 OpenAI-compatible Responses API、第一阶段前缀缓存、并发、重试、
 JSONL 断点续跑、题干/解析图片输入及 token 统计。不会向模型发送原始
@@ -22,7 +22,6 @@ import hashlib
 import json
 import os
 import random
-import re
 import time
 from pathlib import Path
 from typing import Any
@@ -42,6 +41,7 @@ except ImportError as exc:  # pragma: no cover - 服务器 venv 中执行
 import high_chemistry_pipeline_core_0820 as chemistry_core
 from high_chemistry_pipeline_core_0820 import (
     FinalizationResult,
+    HIGH_DIFFICULTY_FEATURE_NAMES,
     REQUIRED_FEATURE_FIELDS,
     build_stage1_output_schema,
     build_stage2_output_schema,
@@ -82,8 +82,6 @@ SUBJECT_DISPLAY_NAME = "高中化学"
 PROGRESS_DESCRIPTION = "High Chemistry Pipeline"
 
 CACHE_EXPIRE_SECONDS = 5 * 24 * 3600
-STAGE1_MAX_OUTPUT_TOKENS = 8000
-STAGE2_MAX_OUTPUT_TOKENS = 5000
 FILE_LOCK = asyncio.Lock()
 CACHE_LOCK = asyncio.Lock()
 CACHE_CREATE_LOCK = asyncio.Lock()
@@ -239,50 +237,10 @@ def _extract_output_text(response_json: dict[str, Any]) -> str:
 def _parse_json_object(text: str) -> dict[str, Any]:
     if not text:
         raise ValueError("模型响应为空")
-    candidates = [text.strip()]
-    fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.S)
-    if fenced:
-        candidates.append(fenced.group(1))
-    start, end = text.find("{"), text.rfind("}")
-    if start >= 0 and end > start:
-        candidates.append(text[start : end + 1])
-
-    last_error: Exception | None = None
-    for candidate in dict.fromkeys(candidates):
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError as exc:
-            last_error = exc
-        else:
-            if isinstance(parsed, dict):
-                return parsed
-            last_error = ValueError("模型响应不是 JSON 对象")
-            continue
-
-        # 化学 LaTeX 常含 \ce、\frac 等。模型偶尔在 JSON 字符串中直接
-        # 输出这些反斜杠，导致严格 JSON 解析失败，并会使 json_repair 把
-        # 后续花括号误判成深层嵌套。仅补齐非法 JSON 转义后重新解析。
-        escaped = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', candidate)
-        if escaped != candidate:
-            try:
-                parsed = json.loads(escaped)
-            except json.JSONDecodeError as exc:
-                last_error = exc
-            else:
-                if isinstance(parsed, dict):
-                    return parsed
-                last_error = ValueError("模型响应不是 JSON 对象")
-                continue
-
-        try:
-            repaired = json_repair.repair_json(escaped, return_objects=True)
-        except Exception as exc:  # json_repair 对异常 LaTeX 嵌套可能失败
-            last_error = exc
-            continue
-        if isinstance(repaired, dict):
-            return repaired
-        last_error = ValueError("模型响应不是 JSON 对象")
-    raise ValueError(f"模型 JSON 解析失败：{last_error}")
+    repaired = json_repair.repair_json(text, return_objects=True)
+    if not isinstance(repaired, dict):
+        raise ValueError("模型响应不是 JSON 对象")
+    return repaired
 
 
 def _usage(response_json: dict[str, Any]) -> dict[str, int]:
@@ -292,26 +250,6 @@ def _usage(response_json: dict[str, Any]) -> dict[str, int]:
         "output_tokens": int(usage.get("output_tokens") or 0),
         "total_tokens": int(usage.get("total_tokens") or 0),
     }
-
-
-def _response_completion_error(
-    response_json: dict[str, Any], stage_name: str
-) -> str | None:
-    """Return a retryable error when the Responses API did not finish output."""
-    status = str(response_json.get("status") or "").strip()
-    if not status or status == "completed":
-        return None
-
-    details = response_json.get("incomplete_details")
-    if isinstance(details, dict):
-        reason = str(details.get("reason") or "未知原因")
-    else:
-        reason = str(details or "未知原因")
-    output_tokens = _usage(response_json)["output_tokens"]
-    return (
-        f"{stage_name}模型响应未完成：status={status}，reason={reason}，"
-        f"output_tokens={output_tokens}"
-    )
 
 
 async def _post_response(
@@ -421,10 +359,12 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
     required = (
         "difficulty_source",
         "feature_corrections",
+        "missed_features",
         "has_structural_revision",
         "adjacent_boundary_review",
         "confidence",
         "reviewed_original_predicted_accuracy",
+        "reviewed_high_difficulty_features",
         "analysis",
     )
     missing = [field for field in required if field not in result]
@@ -459,6 +399,24 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
             )
             continue
         valid_corrections.append(copy.deepcopy(correction))
+    if not isinstance(result["missed_features"], list):
+        raise ValueError("missed_features 必须为数组")
+    if any(not isinstance(name, str) for name in result["missed_features"]):
+        raise ValueError("missed_features 每项必须为字符串")
+    reviewed = result["reviewed_high_difficulty_features"]
+    if not isinstance(reviewed, list):
+        raise ValueError("reviewed_high_difficulty_features 必须为数组")
+    if any(not isinstance(name, str) for name in reviewed):
+        raise ValueError(
+            "reviewed_high_difficulty_features 每项必须为字符串"
+        )
+    if len(reviewed) != len(set(reviewed)):
+        raise ValueError("reviewed_high_difficulty_features 不得重复")
+    invalid_high = [
+        name for name in reviewed if name not in HIGH_DIFFICULTY_FEATURE_NAMES
+    ]
+    if invalid_high:
+        raise ValueError(f"第二阶段含非法高难特征：{invalid_high}")
     try:
         reviewed_accuracy = float(
             result["reviewed_original_predicted_accuracy"]
@@ -475,14 +433,6 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
     normalized["verification_normalization_log"] = normalization_log
     if not isinstance(result["has_structural_revision"], bool):
         raise ValueError("has_structural_revision 必须为布尔值")
-    if result["has_structural_revision"] and not valid_corrections:
-        normalized["has_structural_revision"] = False
-        normalization_log.append(
-            {
-                "action": "downgrade_empty_structural_revision",
-                "reason": "未提供可执行的 feature_corrections，按无结构修订处理",
-            }
-        )
     boundary_review = result["adjacent_boundary_review"]
     if not isinstance(boundary_review, dict):
         raise ValueError("adjacent_boundary_review 必须为对象")
@@ -527,6 +477,25 @@ def validate_verification(result: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("confidence 只能是高、中或低")
     normalized["reviewed_original_predicted_accuracy"] = reviewed_accuracy
     validate_structural_revision_evidence(normalized)
+    overlap_review = normalized.get("high_feature_overlap_review")
+    if not isinstance(overlap_review, list):
+        raise ValueError("high_feature_overlap_review 必须为数组")
+    for index, item in enumerate(overlap_review):
+        if not isinstance(item, dict):
+            raise ValueError(f"high_feature_overlap_review[{index}] 必须为对象")
+        missing_overlap = {"features", "resolution", "reason"} - item.keys()
+        if missing_overlap:
+            raise ValueError(
+                f"high_feature_overlap_review[{index}] 缺少字段："
+                f"{sorted(missing_overlap)}"
+            )
+        if not isinstance(item["features"], list) or any(
+            name not in HIGH_DIFFICULTY_FEATURE_NAMES
+            for name in item["features"]
+        ):
+            raise ValueError(
+                f"high_feature_overlap_review[{index}].features 含非法值"
+            )
     input_review = normalized.get("input_sufficiency_review")
     if not isinstance(input_review, dict):
         raise ValueError("input_sufficiency_review 必须为对象")
@@ -705,7 +674,7 @@ async def call_stage1(
                 }
             ],
             "thinking": {"type": "disabled"},
-            "max_output_tokens": STAGE1_MAX_OUTPUT_TOKENS,
+            "max_output_tokens": 4000,
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -725,10 +694,6 @@ async def call_stage1(
                 current_usage = _usage(body)
                 for key in total_usage:
                     total_usage[key] += current_usage[key]
-                completion_error = _response_completion_error(body, "第一阶段")
-                if completion_error:
-                    last_error = completion_error
-                    continue
                 parsed = _restrict_stage1_model_output(
                     _parse_json_object(_extract_output_text(body))
                 )
@@ -809,7 +774,7 @@ async def call_stage2(
                 }
             ],
             "thinking": {"type": "disabled"},
-            "max_output_tokens": STAGE2_MAX_OUTPUT_TOKENS,
+            "max_output_tokens": 2500,
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -827,10 +792,6 @@ async def call_stage2(
                 current_usage = _usage(body)
                 for key in total_usage:
                     total_usage[key] += current_usage[key]
-                completion_error = _response_completion_error(body, "第二阶段")
-                if completion_error:
-                    last_error = completion_error
-                    continue
                 parsed = _parse_json_object(_extract_output_text(body))
                 validated = validate_verification(parsed)
                 return (
@@ -949,8 +910,8 @@ async def process_question(
                     ),
                 )
                 return
-            reviewed_high_count = int(
-                verification["reviewed_high_difficulty_feature_count"]
+            reviewed_high_count = len(
+                verification["reviewed_high_difficulty_features"]
             )
             final = finalize_verified_level(
                 current_level=stage1["difficulty_level_step1"],
@@ -1076,13 +1037,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="按原始旧标签1—5档各抽取指定题数；标签仅用于抽样，不发送给模型",
     )
     parser.add_argument("-t", "--timeout", type=int, default=300)
-    parser.add_argument(
-        "-r",
-        "--retries",
-        type=int,
-        default=1,
-        help="每个阶段的总尝试次数；1 表示失败后不重试",
-    )
+    parser.add_argument("-r", "--retries", type=int, default=4)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument(

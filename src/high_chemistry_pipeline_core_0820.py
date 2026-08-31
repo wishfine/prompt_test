@@ -123,6 +123,7 @@ HIGH_DIFFICULTY_FEATURE_NAMES = (
     "高阶实验、合成或分离设计",
 )
 
+
 def build_stage1_output_schema() -> dict[str, Any]:
     """由本模块的规范枚举生成第一阶段严格输出 Schema。"""
     feature_properties: dict[str, Any] = {
@@ -154,10 +155,10 @@ def build_stage1_output_schema() -> dict[str, Any]:
                 "required": list(REQUIRED_FEATURE_FIELDS),
                 "additionalProperties": False,
             },
-            "predicted_accuracy": {"type": "number"},
             "reason": {"type": "string"},
+            "predicted_accuracy": {"type": "number"},
         },
-        "required": ["features", "predicted_accuracy", "reason"],
+        "required": ["features", "reason", "predicted_accuracy"],
         "additionalProperties": False,
     }
 
@@ -186,6 +187,30 @@ def build_stage2_output_schema() -> dict[str, Any]:
                         "evidence": {"type": "string"},
                     },
                     "required": ["field", "from", "to", "evidence"],
+                    "additionalProperties": False,
+                },
+            },
+            "missed_features": {"type": "array", "items": {"type": "string"}},
+            "reviewed_high_difficulty_features": {
+                "type": "array",
+                "items": {"type": "string", "enum": list(HIGH_DIFFICULTY_FEATURE_NAMES)},
+            },
+            "high_feature_overlap_review": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "features": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": list(HIGH_DIFFICULTY_FEATURE_NAMES),
+                            },
+                        },
+                        "resolution": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["features", "resolution", "reason"],
                     "additionalProperties": False,
                 },
             },
@@ -230,13 +255,21 @@ def build_stage2_output_schema() -> dict[str, Any]:
             "analysis": {"type": "string"},
         },
         "required": [
-            "difficulty_source", "feature_corrections", "has_structural_revision",
-            "adjacent_boundary_review",
+            "difficulty_source", "feature_corrections", "missed_features",
+            "reviewed_high_difficulty_features", "high_feature_overlap_review",
+            "has_structural_revision", "adjacent_boundary_review",
             "reviewed_original_predicted_accuracy", "confidence",
             "input_sufficiency_review", "analysis",
         ],
         "additionalProperties": False,
     }
+
+MULTIPLIER_TRIGGER_COMBOS = (
+    frozenset({"多反应或多阶段强耦合", "多约束联合", "高层级信息转换"}),
+    frozenset({"多模型或多平衡耦合", "多约束联合", "高层级信息转换"}),
+    frozenset({"竞争反应与副反应判断", "隐含临界或过量不足", "复杂分类讨论"}),
+    frozenset({"高阶实验、合成或分离设计", "多约束联合", "多反应或多阶段强耦合"}),
+)
 
 QUESTION_MODEL_FIELDS = (
     "parent_id", "question_id", "stem", "options", "analysis", "structure_type",
@@ -251,15 +284,6 @@ class HighDifficultyDetection:
     evidence: list[dict[str, Any]]
     possible_overlap_groups: list[list[str]]
     suppressed_overlaps: list[dict[str, Any]]
-
-
-LEVEL4_EVIDENCE_GROUP_NAMES = (
-    "信息反推",
-    "联合条件",
-    "复杂定量",
-    "反应或模型复杂化",
-    "高阶实验或路线",
-)
 
 
 @dataclass(frozen=True)
@@ -307,6 +331,14 @@ def multiplier_for_high_count(high_count: int) -> float:
     return 1.0
 
 
+def _matched_multiplier_trigger_combo(names: list[str]) -> list[str]:
+    active = set(names)
+    for combo in MULTIPLIER_TRIGGER_COMBOS:
+        if combo.issubset(active):
+            return [name for name in HIGH_DIFFICULTY_FEATURE_NAMES if name in combo]
+    return []
+
+
 def _is_full_dependent_organic_route(features: dict[str, Any]) -> bool:
     """识别“结构反推—中间体—路线设计”不可拆开的有机全链。
 
@@ -333,35 +365,30 @@ def _is_full_dependent_organic_route(features: dict[str, Any]) -> bool:
 def _apply_chemistry_multiplier_policy(
     *,
     original_accuracy: float,
-    features: dict[str, Any],
-    high_evidence: list[dict[str, Any]],
+    high_names: list[str],
     multiplier_enabled: bool,
     full_dependent_organic_route: bool = False,
 ) -> dict[str, Any]:
-    independent_nodes = list(dict.fromkeys(
-        str(item.get("decision_node"))
-        for item in high_evidence
-        if isinstance(item, dict) and item.get("decision_node")
-    ))
-    effective_count = len(independent_nodes)
-    candidate = multiplier_for_high_count(effective_count)
-    triggered = multiplier_enabled and effective_count >= 3
+    candidate = multiplier_for_high_count(len(high_names))
+    matched_combo = (
+        _matched_multiplier_trigger_combo(high_names)
+        if multiplier_enabled
+        else []
+    )
+    triggered = bool(matched_combo)
     applied = candidate if triggered else 1.0
     adjusted = round(original_accuracy * applied, 1)
     raw_level = map_accuracy_to_level(original_accuracy)
     adjusted_level = map_accuracy_to_level(adjusted)
+    active = set(high_names)
     strong_final = (
         original_accuracy <= 52
-        and effective_count >= 2
         and (
-            full_dependent_organic_route
-            or (
-                features.get("process_structure") == "多阶段强依赖"
-                and (
-                    features.get("subquestion_dependency") == "后问依赖前问"
-                    or features.get("shared_model_across_subquestions") is True
-                )
+            (
+                "高阶实验、合成或分离设计" in active
+                and "多约束联合" in active
             )
+            or full_dependent_organic_route
         )
     )
     final_guard = (
@@ -374,82 +401,140 @@ def _apply_chemistry_multiplier_policy(
     return {
         "multiplier_candidate": candidate,
         "multiplier_triggered": triggered,
-        "multiplier_trigger_nodes": independent_nodes,
-        "effective_high_difficulty_feature_count": effective_count,
+        "multiplier_trigger_combo": matched_combo,
         "multiplier_applied": applied,
         "multiplier_final_level_guard_applied": final_guard,
         "adjusted_accuracy": adjusted,
     }
 
 
-def detect_level4_evidence_groups(features: dict[str, Any]) -> dict[str, bool]:
-    """用与 Prompt 对齐的五类可观察结构证据校准 3/4 边界。"""
-    information_inference = (
-        features.get("information_conversion")
+def _chemistry_58_boundary_promotion_candidate(
+    *,
+    current_level: str,
+    original_accuracy: float,
+    features: dict[str, Any],
+) -> bool:
+    if current_level != "难度3档":
+        return False
+    near_58_boundary = 58 <= original_accuracy <= 62
+    information_chain = near_58_boundary and (
+        features.get("reasoning_chain") == "多层因果"
+        and features.get("information_conversion")
         in {"多源信息联合转换", "流程或图谱反推"}
-        and (
-            features.get("evidence_relation")
-            in {"证据链相互支持", "证据冲突需排除"}
-            or features.get("reasoning_chain")
-            in {"多层因果", "逆向推理或临界分析"}
-        )
-    ) or (
-        features.get("representation_conversion")
-        in {"多表征连续转换", "逆向表征转换"}
-        and features.get("reasoning_chain")
-        in {"多层因果", "逆向推理或临界分析"}
     )
-    joint_conditions = (
-        features.get("constraint_structure") == "多约束联合筛选"
-        and (
-            features.get("hidden_conditions") != "无"
-            or features.get("critical_condition") != "无临界"
-            or features.get("competing_reaction") != "无"
-            or features.get("reasoning_chain")
-            in {"多层因果", "逆向推理或临界分析"}
+    dependent_model_chain = near_58_boundary and (
+        (
+            features.get("subquestion_dependency") == "后问依赖前问"
+            or features.get("shared_model_across_subquestions") is True
         )
+        and features.get("model_relation") in {"模型切换", "多模型耦合"}
+        and features.get("process_structure")
+        in {"多阶段强依赖", "多阶段显性流程"}
     )
-    complex_quantitative = (
-        features.get("calculation_complexity")
-        in {"多方程联立", "参数或范围计算"}
-        and (
-            features.get("equation_structure")
-            in {"2-3个方程联立", "4个以上方程或不等式组"}
-            or features.get("parameter_operation") in {"双参数", "多参数"}
-            or features.get("calculation_model")
-            in {"浓度或气体综合", "平衡常数或Ka/Kb/Ksp", "多模型定量耦合"}
+    representation_chain_evidence = (
+        (
+            features.get("substance_relation") == "同一反应体系"
+            and features.get("reaction_count") in {"2-3个", "4-6个", "7个及以上"}
         )
+        or features.get("calculation_model")
+        in {"平衡常数或Ka/Kb/Ksp", "多模型定量耦合"}
+        or features.get("information_conversion")
+        in {"多源信息联合转换", "流程或图谱反推"}
     )
-    reaction_model_complexity = (
-        features.get("model_relation") in {"模型切换", "多模型耦合"}
-        and (
+    representation_chain = (
+        58 <= original_accuracy <= 68
+        and features.get("reasoning_chain") == "多层因果"
+        and features.get("representation_conversion") == "一次常规转换"
+        and representation_chain_evidence
+    )
+    return information_chain or dependent_model_chain or representation_chain
+
+
+def _structural_cluster_signals(features: dict[str, Any]) -> list[str]:
+    """返回可审计的中高档结构类别；不使用题长、选项数或普通活跃特征。"""
+    signals = [
+        (
+            "体系耦合",
+            features.get("substance_relation")
+            in {"前后转化依赖", "组成—性质—反应网络"},
+        ),
+        (
+            "反应链",
+            features.get("reaction_relation")
+            in {"前后反应强依赖", "多路径反应网络"},
+        ),
+        (
+            "多阶段流程",
             features.get("process_structure")
-            in {"多阶段显性流程", "多阶段强依赖", "循环或回流流程"}
-            or features.get("substance_relation")
-            in {"前后转化依赖", "组成—性质—反应网络"}
-            or features.get("reaction_relation")
-            in {"前后反应强依赖", "多路径反应网络"}
-        )
+            in {"多阶段显性流程", "多阶段强依赖", "循环或回流流程"},
+        ),
+        (
+            "模型迁移",
+            features.get("model_relation") in {"模型切换", "多模型耦合"},
+        ),
+        (
+            "高层表征转换",
+            features.get("representation_conversion")
+            in {"多次同类转换", "多表征连续转换", "逆向表征转换"},
+        ),
+        (
+            "证据链",
+            features.get("evidence_relation")
+            in {"证据链相互支持", "证据冲突需排除"},
+        ),
+        (
+            "隐含边界",
+            features.get("hidden_conditions") == "多个隐含条件"
+            or features.get("critical_condition")
+            in {"需要推导过量不足边界", "隐含终点或有效区间"},
+        ),
+        (
+            "联合约束",
+            features.get("constraint_structure") == "多约束联合筛选",
+        ),
+        (
+            "复杂定量",
+            features.get("calculation_model")
+            in {"平衡常数或Ka/Kb/Ksp", "多模型定量耦合"}
+            or features.get("calculation_complexity")
+            in {"多方程联立", "参数或范围计算"},
+        ),
+        (
+            "高阶实验或路线",
+            features.get("experiment_requirement")
+            in {"控制变量或异常分析", "方案设计或误差反演"}
+            or features.get("route_design_requirement")
+            in {"合成路线设计", "分离提纯方案设计", "路线优化与可行性验证"},
+        ),
+    ]
+    return [name for name, matched in signals if matched]
+
+
+def _chemistry_structural_cluster_promotion_candidate(
+    *,
+    current_level: str,
+    original_accuracy: float,
+    features: dict[str, Any],
+) -> tuple[bool, list[str]]:
+    """用多个中等强度结构识别3→4边界，避免单字段宽泛升档。"""
+    signals = _structural_cluster_signals(features)
+    active = set(signals)
+    if current_level != "难度3档" or not 58 <= original_accuracy <= 68:
+        return False, signals
+
+    model_with_multistage = {"模型迁移", "多阶段流程"}.issubset(active)
+    complex_quantitative = "复杂定量" in active
+    model_with_coupling = {"模型迁移", "体系耦合"}.issubset(active)
+    dense_reaction_cluster = (
+        {"体系耦合", "反应链"}.issubset(active) and len(active) >= 5
     )
-    advanced_experiment_route = (
-        features.get("experiment_requirement")
-        in {"控制变量或异常分析", "方案设计或误差反演"}
-        or features.get("route_design_requirement")
-        in {"合成路线设计", "分离提纯方案设计", "路线优化与可行性验证"}
-    ) and (
-        features.get("reasoning_chain")
-        in {"多层因果", "逆向推理或临界分析"}
-        or features.get("constraint_structure") == "多约束联合筛选"
-        or features.get("evidence_relation")
-        in {"证据链相互支持", "证据冲突需排除"}
+    return (
+        model_with_multistage
+        or complex_quantitative
+        or model_with_coupling
+        or dense_reaction_cluster,
+        signals,
     )
-    return {
-        "信息反推": information_inference,
-        "联合条件": joint_conditions,
-        "复杂定量": complex_quantitative,
-        "反应或模型复杂化": reaction_model_complexity,
-        "高阶实验或路线": advanced_experiment_route,
-    }
 
 
 def _ensure_unique_strings(value: Any, field: str, *, nonempty: bool) -> list[str]:
@@ -507,10 +592,17 @@ def validate_structural_revision_evidence(verification: dict[str, Any]) -> None:
     corrections = verification.get("feature_corrections")
     has_correction = isinstance(corrections, list) and bool(corrections)
 
-    if not has_correction:
+    missed = verification.get("missed_features")
+    has_real_omission = isinstance(missed, list) and any(
+        isinstance(item, str)
+        and item.strip()
+        and item.strip().lower() not in {"无", "无遗漏", "none", "n/a"}
+        for item in missed
+    )
+    if not has_correction and not has_real_omission:
         raise ValueError(
             "has_structural_revision=true 时必须提供具体 feature 结构修订："
-            "feature_corrections 不得为空"
+            "feature_corrections 不得为空，或 missed_features 必须包含真实遗漏特征"
         )
 
 
@@ -743,38 +835,38 @@ def detect_high_difficulty_features(features: dict[str, Any]) -> HighDifficultyD
     )
 
 
-def _apply_structural_accuracy_calibration(
+def _apply_stage1_structural_level_guards(
     *,
-    model_accuracy: float,
+    level: str,
+    original_accuracy: float,
     features: dict[str, Any],
-) -> tuple[float, list[dict[str, Any]], dict[str, bool]]:
-    """只用分数校准处理已验证的相邻边界偏差，不直接覆盖档位。"""
+    high_names: list[str],
+) -> tuple[str, list[dict[str, Any]]]:
+    """回收已验证的相邻档位标尺偏差；每题至多调整一档。"""
     actions: list[dict[str, Any]] = []
-    calibrated = model_accuracy
-    level = map_accuracy_to_level(model_accuracy)
-    level4_groups = detect_level4_evidence_groups(features)
+    final_level = level
 
     if (
         level == "难度1档"
         and features.get("required_task_breadth")
         in {"2-3个异质必要任务", "4个及以上异质必要任务", "多问递进任务链"}
     ):
-        calibrated = min(model_accuracy, 87.9)
+        final_level = "难度2档"
         actions.append({
-            "rule": "multiple_required_tasks_accuracy_cap",
-            "from_accuracy": model_accuracy,
-            "to_accuracy": calibrated,
+            "rule": "multiple_required_tasks_level_one_floor",
+            "from": level,
+            "to": final_level,
             "evidence": [features.get("required_task_breadth")],
         })
     elif (
         level == "难度1档"
         and features.get("calculation_model") == "常规化学计量"
     ):
-        calibrated = min(model_accuracy, 87.9)
+        final_level = "难度2档"
         actions.append({
-            "rule": "standard_stoichiometry_accuracy_cap",
-            "from_accuracy": model_accuracy,
-            "to_accuracy": calibrated,
+            "rule": "standard_stoichiometry_level_one_floor",
+            "from": level,
+            "to": final_level,
             "evidence": ["常规化学计量"],
         })
     elif (
@@ -783,60 +875,46 @@ def _apply_structural_accuracy_calibration(
         and features.get("knowledge_count") == "4个及以上"
         and features.get("substance_relation") == "相互独立"
     ):
-        calibrated = min(model_accuracy, 87.9)
+        final_level = "难度2档"
         actions.append({
-            "rule": "independent_multi_concept_accuracy_cap",
-            "from_accuracy": model_accuracy,
-            "to_accuracy": calibrated,
+            "rule": "independent_multi_concept_level_one_floor",
+            "from": level,
+            "to": final_level,
             "evidence": ["概念辨析", "4个及以上独立知识点", "相互独立"],
         })
     elif (
         level == "难度3档"
-        and 80 <= model_accuracy <= 83
+        and 80 <= original_accuracy <= 83
         and features.get("primary_problem_structure") == "概念辨析"
         and features.get("step_count") == "1-2步"
         and features.get("substance_relation") == "相互独立"
         and features.get("process_structure") == "单阶段"
         and features.get("representation_conversion") == "无转换"
-        and not any(level4_groups.values())
+        and not high_names
     ):
-        calibrated = max(model_accuracy, 85.0)
+        final_level = "难度2档"
         actions.append({
-            "rule": "low_structure_independent_concept_accuracy_floor",
-            "from_accuracy": model_accuracy,
-            "to_accuracy": calibrated,
+            "rule": "low_structure_independent_concept_recovery",
+            "from": level,
+            "to": final_level,
             "evidence": ["1-2步", "相互独立", "无转换", "无高难结构"],
         })
     elif (
         level == "难度2档"
-        and 85 <= model_accuracy < 88
+        and 85 <= original_accuracy < 88
         and features.get("step_count") == "3-5步"
         and features.get("substance_count") == "2-3种"
         and features.get("substance_relation") == "同一反应体系"
         and features.get("calculation_model") == "常规化学计量"
     ):
-        calibrated = min(model_accuracy, 84.9)
+        final_level = "难度3档"
         actions.append({
-            "rule": "standard_stoichiometry_chain_accuracy_cap",
-            "from_accuracy": model_accuracy,
-            "to_accuracy": calibrated,
+            "rule": "standard_stoichiometry_chain_level_two_floor",
+            "from": level,
+            "to": final_level,
             "evidence": ["3-5步", "同一反应体系", "常规化学计量"],
         })
-    elif (
-        level == "难度3档"
-        and 58 <= model_accuracy < 85
-        and any(level4_groups.values())
-    ):
-        calibrated = min(model_accuracy, 57.9)
-        actions.append({
-            "rule": "level4_structure_accuracy_cap",
-            "from_accuracy": model_accuracy,
-            "to_accuracy": calibrated,
-            "evidence": [
-                name for name, matched in level4_groups.items() if matched
-            ],
-        })
-    return calibrated, actions, level4_groups
+    return final_level, actions
 
 
 def enrich_stage1_rating(
@@ -860,6 +938,7 @@ def enrich_stage1_rating(
         raise ValueError("第一阶段 predicted_accuracy 缺失或不是数值") from exc
     if not 0 <= raw_accuracy <= 100:
         raise ValueError("第一阶段 predicted_accuracy 必须在 0 到 100 之间")
+
     distinct_points = list(dict.fromkeys(str(value).strip() for value in features["knowledge_points"]))
     features["knowledge_points"] = distinct_points
     features["knowledge_count"] = "1个" if len(distinct_points) == 1 else ("2-3个" if len(distinct_points) <= 3 else "4个及以上")
@@ -882,12 +961,6 @@ def enrich_stage1_rating(
     else:
         features["knowledge_scope"] = "单知识点"
 
-    calibrated_accuracy, calibration_actions, level4_groups = (
-        _apply_structural_accuracy_calibration(
-            model_accuracy=raw_accuracy,
-            features=features,
-        )
-    )
     high = detect_high_difficulty_features(features)
     active = detect_active_features(features)
     high_count = len(high.names)
@@ -897,20 +970,15 @@ def enrich_stage1_rating(
         else bool(multiplier_enabled)
     )
     multiplier_policy = _apply_chemistry_multiplier_policy(
-        original_accuracy=calibrated_accuracy,
-        features=features,
-        high_evidence=high.evidence,
+        original_accuracy=raw_accuracy,
+        high_names=high.names,
         multiplier_enabled=enabled,
         full_dependent_organic_route=_is_full_dependent_organic_route(features),
     )
     multiplier_candidate = multiplier_policy["multiplier_candidate"]
     multiplier = multiplier_policy["multiplier_applied"]
     adjusted = multiplier_policy["adjusted_accuracy"]
-    rating["model_original_predicted_accuracy"] = raw_accuracy
     rating["original_predicted_accuracy"] = raw_accuracy
-    rating["structurally_calibrated_accuracy"] = calibrated_accuracy
-    rating["level4_evidence_groups"] = level4_groups
-    rating["structural_accuracy_calibration_actions"] = calibration_actions
     rating["active_features"] = active
     rating["active_feature_count"] = len(active)
     rating["high_difficulty_features"] = high.names
@@ -918,19 +986,25 @@ def enrich_stage1_rating(
     rating["possible_high_feature_overlaps"] = high.possible_overlap_groups
     rating["suppressed_high_feature_overlaps"] = high.suppressed_overlaps
     rating["high_difficulty_feature_count"] = high_count
-    rating["effective_high_difficulty_feature_count"] = multiplier_policy[
-        "effective_high_difficulty_feature_count"
-    ]
     rating["high_difficulty_multiplier_enabled"] = enabled
     rating["multiplier_candidate"] = multiplier_candidate
     rating["multiplier_triggered"] = multiplier_policy["multiplier_triggered"]
-    rating["multiplier_trigger_nodes"] = multiplier_policy["multiplier_trigger_nodes"]
+    rating["multiplier_trigger_combo"] = multiplier_policy["multiplier_trigger_combo"]
     rating["multiplier_final_level_guard_applied"] = multiplier_policy[
         "multiplier_final_level_guard_applied"
     ]
     rating["multiplier_applied"] = multiplier
     rating["predicted_accuracy"] = adjusted
-    rating["difficulty_level_step1"] = map_accuracy_to_level(adjusted)
+    raw_step1_level = map_accuracy_to_level(adjusted)
+    guarded_level, guard_actions = _apply_stage1_structural_level_guards(
+        level=raw_step1_level,
+        original_accuracy=raw_accuracy,
+        features=features,
+        high_names=high.names,
+    )
+    rating["difficulty_level_step1_before_structural_guards"] = raw_step1_level
+    rating["stage1_structural_guard_actions"] = guard_actions
+    rating["difficulty_level_step1"] = guarded_level
     rating["full_dependent_organic_route_detected"] = _is_full_dependent_organic_route(features)
     return rating
 
@@ -979,24 +1053,6 @@ def normalize_stage1_rating(
     elif shared in {"否", "false", "False", 0}:
         features["shared_model_across_subquestions"] = False
         log.append({"field": "shared_model_across_subquestions", "from": shared, "to": False})
-
-    # JSON 字符串中把斜杠二次转义不改变任何化学语义；仅在去转义后
-    # 恰好命中该字段的合法枚举时才修复，避免模糊映射。
-    for field, options in FEATURE_OPTIONS.items():
-        value = features.get(field)
-        if not isinstance(value, str) or "\\/" not in value:
-            continue
-        unescaped = value.replace("\\/", "/")
-        if unescaped in options:
-            features[field] = unescaped
-            log.append(
-                {
-                    "field": field,
-                    "from": value,
-                    "to": unescaped,
-                    "reason": "JSON 斜杠二次转义的精确还原",
-                }
-            )
 
     # L1 是 L2 的确定性父级，不应让模型重复填写造成整题失败。
     # 只有当 L2 本身完整合法时才自动派生；非法或缺失 L2 仍交给校验报错。
@@ -1089,12 +1145,6 @@ def recalculate_verification(
         if structural_revision_supported
         else float(original_accuracy)
     )
-    calibrated_accuracy, calibration_actions, level4_groups = (
-        _apply_structural_accuracy_calibration(
-            model_accuracy=reviewed_accuracy,
-            features=corrected_features,
-        )
-    )
     reviewed_count = len(high.names)
     enabled = (
         CHEMISTRY_HIGH_DIFFICULTY_MULTIPLIER_ENABLED
@@ -1102,9 +1152,8 @@ def recalculate_verification(
         else bool(multiplier_enabled)
     )
     multiplier_policy = _apply_chemistry_multiplier_policy(
-        original_accuracy=calibrated_accuracy,
-        features=corrected_features,
-        high_evidence=high.evidence,
+        original_accuracy=reviewed_accuracy,
+        high_names=high.names,
         multiplier_enabled=enabled,
         full_dependent_organic_route=_is_full_dependent_organic_route(
             corrected_features
@@ -1118,7 +1167,26 @@ def recalculate_verification(
     boundary_verdict = boundary.get("verdict", "维持")
     current_index = LEVEL_INDEX[current_level]
     reviewed_index = LEVEL_INDEX[reviewed_level]
-    if reviewed_index == current_index:
+    boundary_promotion_candidate = _chemistry_58_boundary_promotion_candidate(
+        current_level=current_level,
+        original_accuracy=reviewed_accuracy,
+        features=corrected_features,
+    )
+    structural_cluster_candidate, structural_cluster_signals = (
+        _chemistry_structural_cluster_promotion_candidate(
+            current_level=current_level,
+            original_accuracy=reviewed_accuracy,
+            features=corrected_features,
+        )
+    )
+    any_boundary_promotion_candidate = (
+        boundary_promotion_candidate or structural_cluster_candidate
+    )
+    if any_boundary_promotion_candidate and reviewed_index == current_index:
+        reviewed_direction = "应更难一档"
+        proposed_reasonableness = "偏低"
+        reviewed_target_level = "难度4档"
+    elif reviewed_index == current_index:
         reviewed_direction = "维持"
         proposed_reasonableness = "合理"
         reviewed_target_level = reviewed_level
@@ -1147,18 +1215,27 @@ def recalculate_verification(
     )
     multiplier_reasonable = True
     input_review = reviewed.get("input_sufficiency_review") or {}
-    boundary_verdict_consistent = boundary_verdict == reviewed_direction
+    unresolved_overlap = bool(reviewed.get("high_feature_overlap_review")) and any(
+        str(item.get("resolution") or "") in {"无法确定", "需人工"}
+        for item in reviewed.get("high_feature_overlap_review") or []
+        if isinstance(item, dict)
+    )
+    boundary_verdict_consistent = (
+        any_boundary_promotion_candidate
+        or boundary_verdict == reviewed_direction
+    )
     blocks_two_to_one = (
         current_level == "难度2档"
         and reviewed_target_level == "难度1档"
     )
     auto_adjustment_eligible = (
         allow_auto_adjustment
-        and structural_revision_supported
+        and (structural_revision_supported or any_boundary_promotion_candidate)
         and reviewed.get("confidence") == "高"
         and reviewed_direction != "维持"
         and boundary_verdict_consistent
         and input_review.get("status") != "信息不足"
+        and not unresolved_overlap
         and not blocks_two_to_one
     )
     reasonableness = (
@@ -1179,20 +1256,20 @@ def recalculate_verification(
             "feature_corrections_applied": applied,
             "feature_corrections_rejected": rejected,
             "reviewed_features": corrected_features,
+            "reviewed_high_difficulty_features_model": copy.deepcopy(
+                reviewed.get("reviewed_high_difficulty_features") or []
+            ),
             "reviewed_high_difficulty_features": high.names,
             "reviewed_high_difficulty_feature_evidence": high.evidence,
             "reviewed_suppressed_high_feature_overlaps": high.suppressed_overlaps,
             "reviewed_high_difficulty_feature_count": reviewed_count,
-            "reviewed_effective_high_difficulty_feature_count": multiplier_policy[
-                "effective_high_difficulty_feature_count"
-            ],
             "reviewed_full_dependent_organic_route_detected": (
                 _is_full_dependent_organic_route(corrected_features)
             ),
             "reviewed_high_difficulty_multiplier_enabled": enabled,
             "reviewed_multiplier_candidate": multiplier_candidate,
             "reviewed_multiplier_triggered": multiplier_policy["multiplier_triggered"],
-            "reviewed_multiplier_trigger_nodes": multiplier_policy["multiplier_trigger_nodes"],
+            "reviewed_multiplier_trigger_combo": multiplier_policy["multiplier_trigger_combo"],
             "reviewed_multiplier_final_level_guard_applied": multiplier_policy[
                 "multiplier_final_level_guard_applied"
             ],
@@ -1201,12 +1278,16 @@ def recalculate_verification(
                 model_reviewed_accuracy
             ),
             "reviewed_original_predicted_accuracy": reviewed_accuracy,
-            "reviewed_structurally_calibrated_accuracy": calibrated_accuracy,
             "reviewed_predicted_accuracy": adjusted_accuracy,
             "reviewed_difficulty_level": reviewed_level,
             "reviewed_direction": reviewed_direction,
-            "reviewed_level4_evidence_groups": level4_groups,
-            "reviewed_structural_accuracy_calibration_actions": calibration_actions,
+            "chemistry_58_boundary_promotion_candidate": (
+                boundary_promotion_candidate
+            ),
+            "chemistry_structural_cluster_promotion_candidate": (
+                structural_cluster_candidate
+            ),
+            "chemistry_structural_cluster_signals": structural_cluster_signals,
             "auto_downgrade_two_to_one_blocked": blocks_two_to_one,
             "boundary_verdict_consistent": boundary_verdict_consistent,
             "auto_adjustment_eligible": auto_adjustment_eligible,
