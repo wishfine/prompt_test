@@ -387,19 +387,17 @@ def detect_level4_evidence_groups(features: dict[str, Any]) -> dict[str, bool]:
     information_inference = (
         features.get("information_conversion")
         in {"多源信息联合转换", "流程或图谱反推"}
-        and features.get("evidence_relation")
-        in {"证据链相互支持", "证据冲突需排除"}
+        and (
+            features.get("evidence_relation")
+            in {"证据链相互支持", "证据冲突需排除"}
+            or features.get("reasoning_chain")
+            in {"多层因果", "逆向推理或临界分析"}
+        )
+    ) or (
+        features.get("representation_conversion")
+        in {"多表征连续转换", "逆向表征转换"}
         and features.get("reasoning_chain")
         in {"多层因果", "逆向推理或临界分析"}
-    ) or (
-        features.get("reasoning_chain") == "多层因果"
-        and features.get("representation_conversion") == "一次常规转换"
-        and (
-            features.get("substance_relation") == "同一反应体系"
-            and features.get("reaction_count") in {"2-3个", "4-6个", "7个及以上"}
-            or features.get("calculation_model")
-            in {"平衡常数或Ka/Kb/Ksp", "多模型定量耦合"}
-        )
     )
     joint_conditions = (
         features.get("constraint_structure") == "多约束联合筛选"
@@ -407,15 +405,20 @@ def detect_level4_evidence_groups(features: dict[str, Any]) -> dict[str, bool]:
             features.get("hidden_conditions") != "无"
             or features.get("critical_condition") != "无临界"
             or features.get("competing_reaction") != "无"
+            or features.get("reasoning_chain")
+            in {"多层因果", "逆向推理或临界分析"}
         )
     )
     complex_quantitative = (
-        features.get("calculation_model")
-        in {"平衡常数或Ka/Kb/Ksp", "多模型定量耦合"}
-        and features.get("calculation_complexity")
+        features.get("calculation_complexity")
         in {"多方程联立", "参数或范围计算"}
-        and features.get("equation_structure")
-        in {"2-3个方程联立", "4个以上方程或不等式组"}
+        and (
+            features.get("equation_structure")
+            in {"2-3个方程联立", "4个以上方程或不等式组"}
+            or features.get("parameter_operation") in {"双参数", "多参数"}
+            or features.get("calculation_model")
+            in {"浓度或气体综合", "平衡常数或Ka/Kb/Ksp", "多模型定量耦合"}
+        )
     )
     reaction_model_complexity = (
         features.get("model_relation") in {"模型切换", "多模型耦合"}
@@ -433,7 +436,13 @@ def detect_level4_evidence_groups(features: dict[str, Any]) -> dict[str, bool]:
         in {"控制变量或异常分析", "方案设计或误差反演"}
         or features.get("route_design_requirement")
         in {"合成路线设计", "分离提纯方案设计", "路线优化与可行性验证"}
-    ) and features.get("reasoning_chain") in {"多层因果", "逆向推理或临界分析"}
+    ) and (
+        features.get("reasoning_chain")
+        in {"多层因果", "逆向推理或临界分析"}
+        or features.get("constraint_structure") == "多约束联合筛选"
+        or features.get("evidence_relation")
+        in {"证据链相互支持", "证据冲突需排除"}
+    )
     return {
         "信息反推": information_inference,
         "联合条件": joint_conditions,
@@ -815,7 +824,7 @@ def _apply_structural_accuracy_calibration(
         })
     elif (
         level == "难度3档"
-        and 58 <= model_accuracy <= 68
+        and 58 <= model_accuracy < 85
         and any(level4_groups.values())
     ):
         calibrated = min(model_accuracy, 57.9)
