@@ -584,6 +584,69 @@ def validate_feature_schema(features: dict[str, Any]) -> None:
             raise ValueError(f"{field} 非法值 {features[field]!r}；允许值：{sorted(options)}")
 
 
+def detect_stage1_score_feature_conflicts(
+    stage1_rating: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """检测明确的第一阶段结构—分数矛盾，不直接修改任一侧。"""
+    features = stage1_rating.get("features")
+    if not isinstance(features, dict):
+        return []
+    try:
+        accuracy = float(stage1_rating["predicted_accuracy"])
+    except (KeyError, TypeError, ValueError):
+        return []
+
+    high_count = len(detect_high_difficulty_features(features).names)
+    common_direct = (
+        features.get("step_count") == "1-2步"
+        and features.get("model_explicitness") == "模型完全显性"
+        and features.get("reasoning_chain") in {"直接套用", "简单因果"}
+        and features.get("representation_conversion") in {"无转换", "一次常规转换"}
+        and features.get("calculation_complexity") in {"直接判断", "简单计算"}
+        and features.get("process_structure") == "单阶段"
+        and features.get("subquestion_dependency") in {"无多问", "相互独立"}
+        and features.get("shared_model_across_subquestions") is False
+        and features.get("constraint_structure")
+        in {"无约束", "单一约束", "多约束相互独立"}
+        and high_count == 0
+    )
+    single_rule_direct = (
+        common_direct
+        and features.get("required_task_breadth") == "单一规则任务"
+        and features.get("model_relation") == "单一模型"
+        and features.get("reasoning_chain") == "直接套用"
+        and features.get("representation_conversion") == "无转换"
+        and features.get("calculation_model") == "无定量计算"
+        and features.get("calculation_complexity") == "直接判断"
+    )
+
+    if single_rule_direct and accuracy < 88:
+        return [{
+            "boundary": "88边界",
+            "problem": "features 表示单一规则、直接显性的送分结构，但 predicted_accuracy 低于88",
+            "evidence": [
+                "step_count=1-2步",
+                "required_task_breadth=单一规则任务",
+                "model_explicitness=模型完全显性",
+                "reasoning_chain=直接套用",
+                "无表征转换、无定量计算、无高难特征",
+            ],
+        }]
+    if common_direct and accuracy < 85:
+        return [{
+            "boundary": "85边界",
+            "problem": "features 表示可直接开始的独立基础应用，但 predicted_accuracy 低于85",
+            "evidence": [
+                f"step_count={features.get('step_count')}",
+                f"required_task_breadth={features.get('required_task_breadth')}",
+                f"model_explicitness={features.get('model_explicitness')}",
+                f"reasoning_chain={features.get('reasoning_chain')}",
+                "无串行依赖、无联合约束、无高难特征",
+            ],
+        }]
+    return []
+
+
 def validate_structural_revision_evidence(verification: dict[str, Any]) -> None:
     """结构修订必须对应可审计的 feature 变化，禁止只改分析措辞。"""
     if verification.get("has_structural_revision") is not True:

@@ -45,6 +45,7 @@ from high_chemistry_pipeline_core_0820 import (
     REQUIRED_FEATURE_FIELDS,
     build_stage1_output_schema,
     build_stage2_output_schema,
+    detect_stage1_score_feature_conflicts,
     enrich_stage1_rating,
     finalize_level as _chemistry_finalize_level,
     normalize_stage1_rating,
@@ -647,14 +648,17 @@ async def call_stage1(
     total_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     last_error = ""
     repair_feedback: str | None = None
-    for attempt in range(retries):
+    score_feature_repair_attempted = False
+    initial_score_feature_issues: list[dict[str, Any]] = []
+    max_attempts = max(1, int(retries) + 1)
+    for attempt in range(max_attempts):
         use_cache = bool(cache_id and repair_feedback is None)
         if repair_feedback is not None:
             prompt_text = (
                 FEATURE_EXTRACTION_PROMPT_PREFIX
                 + "\n\n"
                 + dynamic_text
-                + "\n\n【格式修复要求】\n"
+                + "\n\n【输出修复要求】\n"
                 + repair_feedback
                 + "\n请重新输出完整合法 JSON。不得省略任何必需 "
                 "features 或 predicted_accuracy。"
@@ -702,13 +706,47 @@ async def call_stage1(
                     normalized, normalization_log = normalize_stage1_rating(
                         parsed
                     )
+                    score_feature_issues = detect_stage1_score_feature_conflicts(
+                        normalized
+                    )
+                    if (
+                        score_feature_issues
+                        and not score_feature_repair_attempted
+                        and attempt < max_attempts - 1
+                    ):
+                        score_feature_repair_attempted = True
+                        initial_score_feature_issues = copy.deepcopy(
+                            score_feature_issues
+                        )
+                        repair_feedback = (
+                            "上一次输出存在明确的 features—分数边界矛盾：\n"
+                            + _json_block(score_feature_issues)
+                            + "\n请重新核对真实作答过程，并选择与题目事实一致的修正方向：\n"
+                            "1. 若题目确有额外规则、关系建立、信息转换、联合条件或串行计算，"
+                            "请修正对应 features 和 reason；\n"
+                            "2. 若现有 features 准确，即任务确实直接、显性、可独立开始，"
+                            "请修正 predicted_accuracy 使其符合相邻边界。\n"
+                            "不得只修改 reason，也不得机械抬分。上一次输出如下：\n"
+                            + _json_block(parsed)
+                        )
+                        last_error = "第一阶段 features—分数边界矛盾"
+                        continue
                     enriched = enrich_stage1_rating(
                         normalized,
                         features_model_raw=raw_features,
                         normalization_log=normalization_log,
                     )
+                    enriched["score_feature_consistency_repair_attempted"] = (
+                        score_feature_repair_attempted
+                    )
+                    enriched["score_feature_consistency_initial_issues"] = (
+                        initial_score_feature_issues
+                    )
+                    enriched["score_feature_consistency_warning"] = (
+                        score_feature_issues
+                    )
                 except ValueError as exc:
-                    if attempt < retries - 1:
+                    if attempt < max_attempts - 1:
                         repair_feedback = (
                             f"上一次 JSON 校验失败：{exc}\n"
                             "上一次输出如下：\n"
@@ -739,7 +777,7 @@ async def call_stage1(
                 break
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
             last_error = str(exc)
-        if attempt < retries - 1:
+        if attempt < max_attempts - 1:
             await asyncio.sleep(2**attempt + random.random())
     raise RuntimeError(f"第一阶段请求失败：{last_error}")
 
