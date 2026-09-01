@@ -600,9 +600,15 @@ def detect_stage1_score_feature_conflicts(
     common_direct = (
         features.get("step_count") == "1-2步"
         and features.get("model_explicitness") == "模型完全显性"
-        and features.get("reasoning_chain") in {"直接套用", "简单因果"}
-        and features.get("representation_conversion") in {"无转换", "一次常规转换"}
-        and features.get("calculation_complexity") in {"直接判断", "简单计算"}
+        and features.get("model_relation") == "单一模型"
+        and features.get("reasoning_chain") == "直接套用"
+        and features.get("representation_conversion") == "无转换"
+        and features.get("evidence_relation") in {"直接给定", "单证据对应"}
+        and features.get("calculation_model") == "无定量计算"
+        and features.get("calculation_complexity") == "直接判断"
+        and features.get("information_conversion") in {"无信息转换", "直接读取"}
+        and features.get("experiment_requirement") == "无"
+        and features.get("route_design_requirement") == "无"
         and features.get("process_structure") == "单阶段"
         and features.get("subquestion_dependency") in {"无多问", "相互独立"}
         and features.get("shared_model_across_subquestions") is False
@@ -613,11 +619,11 @@ def detect_stage1_score_feature_conflicts(
     single_rule_direct = (
         common_direct
         and features.get("required_task_breadth") == "单一规则任务"
-        and features.get("model_relation") == "单一模型"
-        and features.get("reasoning_chain") == "直接套用"
-        and features.get("representation_conversion") == "无转换"
-        and features.get("calculation_model") == "无定量计算"
-        and features.get("calculation_complexity") == "直接判断"
+    )
+    independent_basic = (
+        common_direct
+        and features.get("required_task_breadth")
+        in {"2-3个异质必要任务", "4个及以上异质必要任务"}
     )
 
     if single_rule_direct and accuracy < 88:
@@ -631,8 +637,9 @@ def detect_stage1_score_feature_conflicts(
                 "reasoning_chain=直接套用",
                 "无表征转换、无定量计算、无高难特征",
             ],
+            "repairable": False,
         }]
-    if common_direct and accuracy < 85:
+    if independent_basic and accuracy < 85:
         return [{
             "boundary": "85边界",
             "problem": "features 表示可直接开始的独立基础应用，但 predicted_accuracy 低于85",
@@ -643,8 +650,21 @@ def detect_stage1_score_feature_conflicts(
                 f"reasoning_chain={features.get('reasoning_chain')}",
                 "无串行依赖、无联合约束、无高难特征",
             ],
+            "repairable": True,
         }]
     return []
+
+
+def score_feature_repair_crosses_boundary(
+    initial_issues: list[dict[str, Any]],
+    repaired_accuracy: float,
+) -> bool:
+    """85边界修复不得越过88边界进入1档。"""
+    return repaired_accuracy >= 88 and any(
+        issue.get("boundary") == "85边界"
+        and issue.get("repairable") is True
+        for issue in initial_issues
+    )
 
 
 def validate_structural_revision_evidence(verification: dict[str, Any]) -> None:

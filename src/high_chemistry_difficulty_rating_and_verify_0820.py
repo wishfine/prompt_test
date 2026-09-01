@@ -51,6 +51,7 @@ from high_chemistry_pipeline_core_0820 import (
     normalize_stage1_rating,
     prepare_question,
     recalculate_verification,
+    score_feature_repair_crosses_boundary,
     validate_structural_revision_evidence,
 )
 
@@ -650,6 +651,11 @@ async def call_stage1(
     repair_feedback: str | None = None
     score_feature_repair_attempted = False
     initial_score_feature_issues: list[dict[str, Any]] = []
+    initial_score_feature_rating: dict[str, Any] | None = None
+    initial_score_feature_raw_features: dict[str, Any] | None = None
+    repair_model_accuracy: float | None = None
+    repair_changed_feature_fields: list[str] = []
+    repair_resolution = "not_needed"
     max_attempts = max(1, int(retries) + 1)
     for attempt in range(max_attempts):
         use_cache = bool(cache_id and repair_feedback is None)
@@ -690,7 +696,9 @@ async def call_stage1(
         }
         if use_cache:
             payload["previous_response_id"] = cache_id
-        if TEMPERATURE is not None:
+        if repair_feedback is not None and "lite" not in MODEL_NAME.lower():
+            payload["temperature"] = 0.0
+        elif TEMPERATURE is not None:
             payload["temperature"] = TEMPERATURE
         try:
             status, body, error_text = await _post_response(session, payload, timeout)
@@ -709,8 +717,13 @@ async def call_stage1(
                     score_feature_issues = detect_stage1_score_feature_conflicts(
                         normalized
                     )
+                    repairable_issues = [
+                        issue
+                        for issue in score_feature_issues
+                        if issue.get("repairable") is True
+                    ]
                     if (
-                        score_feature_issues
+                        repairable_issues
                         and not score_feature_repair_attempted
                         and attempt < max_attempts - 1
                     ):
@@ -718,19 +731,83 @@ async def call_stage1(
                         initial_score_feature_issues = copy.deepcopy(
                             score_feature_issues
                         )
+                        initial_score_feature_rating = copy.deepcopy(normalized)
+                        initial_score_feature_raw_features = copy.deepcopy(
+                            raw_features
+                        )
                         repair_feedback = (
                             "上一次输出存在明确的 features—分数边界矛盾：\n"
                             + _json_block(score_feature_issues)
                             + "\n请重新核对真实作答过程，并选择与题目事实一致的修正方向：\n"
                             "1. 若题目确有额外规则、关系建立、信息转换、联合条件或串行计算，"
                             "请修正对应 features 和 reason；\n"
-                            "2. 若现有 features 准确，即任务确实直接、显性、可独立开始，"
-                            "请修正 predicted_accuracy 使其符合相邻边界。\n"
-                            "不得只修改 reason，也不得机械抬分。上一次输出如下：\n"
+                            "2. 若现有 features 准确，即多个必要判断确实都可直接、显性、独立开始，"
+                            "请将 predicted_accuracy 修正到85—88区间，不得进入88及以上。\n"
+                            "保持与本次矛盾无关的 features 不变；不得只修改 reason，"
+                            "也不得机械抬分。上一次输出如下：\n"
                             + _json_block(parsed)
                         )
                         last_error = "第一阶段 features—分数边界矛盾"
                         continue
+                    if score_feature_repair_attempted:
+                        repair_model_accuracy = float(
+                            normalized["predicted_accuracy"]
+                        )
+                        if initial_score_feature_rating is None:
+                            raise RuntimeError("缺少一致性修复前的结构快照")
+                        initial_features = initial_score_feature_rating["features"]
+                        repaired_features = normalized["features"]
+                        repair_changed_feature_fields = sorted(
+                            field
+                            for field in set(initial_features) | set(repaired_features)
+                            if initial_features.get(field)
+                            != repaired_features.get(field)
+                        )
+                        if score_feature_repair_crosses_boundary(
+                            initial_score_feature_issues,
+                            repair_model_accuracy,
+                        ):
+                            normalized = copy.deepcopy(
+                                initial_score_feature_rating
+                            )
+                            raw_features = copy.deepcopy(
+                                initial_score_feature_raw_features
+                            )
+                            score_feature_issues = copy.deepcopy(
+                                initial_score_feature_issues
+                            )
+                            score_feature_issues.append({
+                                "boundary": "85边界",
+                                "problem": "85边界修复结果越过88边界，已回退修复前输出",
+                                "evidence": [
+                                    f"repaired_predicted_accuracy={repair_model_accuracy}",
+                                    "85边界修复只允许进入85—88区间",
+                                ],
+                                "repairable": False,
+                            })
+                            repair_resolution = "invalid_cross_boundary"
+                        elif score_feature_issues:
+                            repair_resolution = "unresolved"
+                        else:
+                            score_changed = (
+                                repair_model_accuracy
+                                != float(
+                                    initial_score_feature_rating[
+                                        "predicted_accuracy"
+                                    ]
+                                )
+                            )
+                            features_changed = bool(
+                                repair_changed_feature_fields
+                            )
+                            if score_changed and features_changed:
+                                repair_resolution = "mixed_revision"
+                            elif features_changed:
+                                repair_resolution = "feature_revision"
+                            elif score_changed:
+                                repair_resolution = "score_only"
+                            else:
+                                repair_resolution = "unresolved"
                     enriched = enrich_stage1_rating(
                         normalized,
                         features_model_raw=raw_features,
@@ -744,6 +821,20 @@ async def call_stage1(
                     )
                     enriched["score_feature_consistency_warning"] = (
                         score_feature_issues
+                    )
+                    enriched["score_feature_consistency_initial_accuracy"] = (
+                        initial_score_feature_rating.get("predicted_accuracy")
+                        if initial_score_feature_rating is not None
+                        else None
+                    )
+                    enriched["score_feature_consistency_repaired_accuracy_model_raw"] = (
+                        repair_model_accuracy
+                    )
+                    enriched["score_feature_consistency_changed_feature_fields"] = (
+                        repair_changed_feature_fields
+                    )
+                    enriched["score_feature_consistency_repair_resolution"] = (
+                        repair_resolution
                     )
                 except ValueError as exc:
                     if attempt < max_attempts - 1:
