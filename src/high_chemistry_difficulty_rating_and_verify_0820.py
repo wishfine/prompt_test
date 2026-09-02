@@ -736,18 +736,19 @@ async def call_stage1(
                             raw_features
                         )
                         repair_feedback = (
-                            "上一次输出存在明确的 features—分数边界矛盾：\n"
+                            "上一次输出存在明确的化学证据—分数边界矛盾：\n"
                             + _json_block(score_feature_issues)
-                            + "\n请重新核对真实作答过程，并选择与题目事实一致的修正方向：\n"
-                            "1. 若题目确有额外规则、关系建立、信息转换、联合条件或串行计算，"
-                            "请修正对应 features 和 reason；\n"
-                            "2. 若现有 features 准确，即多个必要判断确实都可直接、显性、独立开始，"
-                            "请将 predicted_accuracy 修正到85—88区间，不得进入88及以上。\n"
-                            "保持与本次矛盾无关的 features 不变；不得只修改 reason，"
-                            "也不得机械抬分。上一次输出如下：\n"
+                            + "\n本次修复的目标是提高难度分数准确性，不是把文字改得与原分数表面一致。"
+                            "请先根据题干和解析重新还原主作答链，再判断矛盾来自哪一侧：\n"
+                            "1. 若原features和reason中的化学证据准确，而数字落错边界，请依据完整证据重新估计predicted_accuracy；\n"
+                            "2. 若原数字更符合真实作答负担，请用题干中的具体化学动作修正错误features和reason；\n"
+                            "3. 不得只删除或改写reason中的边界表述来迎合原分数，也不得机械夹到边界值。\n"
+                            "保持与本次矛盾无关的features不变。修复后的reason必须说明主作答链、"
+                            "较简单边界为何不成立、较困难边界为何尚未达到，然后再给出连续分数。"
+                            "上一次输出如下：\n"
                             + _json_block(parsed)
                         )
-                        last_error = "第一阶段 features—分数边界矛盾"
+                        last_error = "第一阶段化学证据—分数边界矛盾"
                         continue
                     if score_feature_repair_attempted:
                         repair_model_accuracy = float(
@@ -757,6 +758,10 @@ async def call_stage1(
                             raise RuntimeError("缺少一致性修复前的结构快照")
                         initial_features = initial_score_feature_rating["features"]
                         repaired_features = normalized["features"]
+                        initial_reason = str(
+                            initial_score_feature_rating.get("reason") or ""
+                        )
+                        repaired_reason = str(normalized.get("reason") or "")
                         repair_changed_feature_fields = sorted(
                             field
                             for field in set(initial_features) | set(repaired_features)
@@ -787,7 +792,16 @@ async def call_stage1(
                             })
                             repair_resolution = "invalid_cross_boundary"
                         elif score_feature_issues:
-                            repair_resolution = "unresolved"
+                            normalized = copy.deepcopy(
+                                initial_score_feature_rating
+                            )
+                            raw_features = copy.deepcopy(
+                                initial_score_feature_raw_features
+                            )
+                            score_feature_issues = copy.deepcopy(
+                                initial_score_feature_issues
+                            )
+                            repair_resolution = "unresolved_reverted"
                         else:
                             score_changed = (
                                 repair_model_accuracy
@@ -800,7 +814,23 @@ async def call_stage1(
                             features_changed = bool(
                                 repair_changed_feature_fields
                             )
-                            if score_changed and features_changed:
+                            reason_only_changed = (
+                                repaired_reason != initial_reason
+                                and not score_changed
+                                and not features_changed
+                            )
+                            if reason_only_changed:
+                                normalized = copy.deepcopy(
+                                    initial_score_feature_rating
+                                )
+                                raw_features = copy.deepcopy(
+                                    initial_score_feature_raw_features
+                                )
+                                score_feature_issues = copy.deepcopy(
+                                    initial_score_feature_issues
+                                )
+                                repair_resolution = "reason_only_rejected"
+                            elif score_changed and features_changed:
                                 repair_resolution = "mixed_revision"
                             elif features_changed:
                                 repair_resolution = "feature_revision"
@@ -903,7 +933,7 @@ async def call_stage2(
                 }
             ],
             "thinking": {"type": "disabled"},
-            "max_output_tokens": 2500,
+            "max_output_tokens": 4000,
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -922,7 +952,18 @@ async def call_stage2(
                 for key in total_usage:
                     total_usage[key] += current_usage[key]
                 parsed = _parse_json_object(_extract_output_text(body))
-                validated = validate_verification(parsed)
+                try:
+                    validated = validate_verification(parsed)
+                except ValueError as exc:
+                    if "第二阶段缺少字段：" not in str(exc):
+                        raise
+                    recovered = chemistry_core.build_neutral_stage2_verification(
+                        stage1,
+                        validation_error=str(exc),
+                    )
+                    validated = validate_verification(recovered)
+                    validated["stage2_output_recovered"] = True
+                    validated["stage2_recovery_reason"] = str(exc)
                 return (
                     recalculate_verification(
                         current_level=stage1["difficulty_level_step1"],

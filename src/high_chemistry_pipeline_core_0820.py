@@ -580,14 +580,14 @@ def validate_feature_schema(features: dict[str, Any]) -> None:
     if not isinstance(features["shared_model_across_subquestions"], bool):
         raise ValueError("shared_model_across_subquestions 必须为布尔值")
     for field, options in FEATURE_OPTIONS.items():
-        if features[field] not in options:
+        if not isinstance(features[field], str) or features[field] not in options:
             raise ValueError(f"{field} 非法值 {features[field]!r}；允许值：{sorted(options)}")
 
 
 def detect_stage1_score_feature_conflicts(
     stage1_rating: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """检测明确的第一阶段结构—分数矛盾，不直接修改任一侧。"""
+    """检测明确的第一阶段证据—分数矛盾，不直接修改任一侧。"""
     features = stage1_rating.get("features")
     if not isinstance(features, dict):
         return []
@@ -626,8 +626,9 @@ def detect_stage1_score_feature_conflicts(
         in {"2-3个异质必要任务", "4个及以上异质必要任务"}
     )
 
+    issues: list[dict[str, Any]] = []
     if single_rule_direct and accuracy < 88:
-        return [{
+        issues.append({
             "boundary": "88边界",
             "problem": "features 表示单一规则、直接显性的送分结构，但 predicted_accuracy 低于88",
             "evidence": [
@@ -638,9 +639,9 @@ def detect_stage1_score_feature_conflicts(
                 "无表征转换、无定量计算、无高难特征",
             ],
             "repairable": False,
-        }]
+        })
     if independent_basic and accuracy < 85:
-        return [{
+        issues.append({
             "boundary": "85边界",
             "problem": "features 表示可直接开始的独立基础应用，但 predicted_accuracy 低于85",
             "evidence": [
@@ -651,8 +652,71 @@ def detect_stage1_score_feature_conflicts(
                 "无串行依赖、无联合约束、无高难特征",
             ],
             "repairable": True,
-        }]
-    return []
+        })
+
+    reason = str(stage1_rating.get("reason") or "")
+    compact_reason = re.sub(r"\s+", "", reason)
+
+    def has_unnegated(pattern: str) -> bool:
+        for match in re.finditer(pattern, compact_reason):
+            prefix = compact_reason[max(0, match.start() - 8):match.start()]
+            if not re.search(
+                r"(?:未达到|达不到|不能达到|无法达到|不属于|未进入|不应进入)$",
+                prefix,
+            ):
+                return True
+        return False
+
+    explicit_bands = []
+    band_patterns = (
+        ("88及以上", 88.0, 100.0, r"(?:88分?及以上|不低于88|正确率(?:达到|为)88%以上)"),
+        ("85—88", 85.0, 88.0, r"(?:85(?:分)?[—–~～-]88|85至88)(?:分|%|区间)?"),
+        ("58—85", 58.0, 85.0, r"(?:58(?:分)?[—–~～-]85|58至85)(?:分|%|区间)?"),
+        ("38—58", 38.0, 58.0, r"(?:38(?:分)?[—–~～-]58|38至58)(?:分|%|区间)?"),
+        ("低于38", 0.0, 38.0, r"(?:低于|小于)38(?:分|%|区间)?"),
+    )
+    for name, lower, upper, pattern in band_patterns:
+        if has_unnegated(pattern):
+            explicit_bands.append((name, lower, upper))
+    # 只有 reason 明确落在唯一分数区间时才据此触发复核；若同时讨论
+    # 多个相邻边界，不能把正常的边界比较误判成最终结论。
+    if len(explicit_bands) == 1:
+        name, lower, upper = explicit_bands[0]
+        in_band = lower <= accuracy <= upper if name == "88及以上" else lower <= accuracy < upper
+        if not in_band:
+            issues.append({
+                "boundary": "reason—分数一致性",
+                "problem": (
+                    f"reason 明确将题目置于{name}区间，但 predicted_accuracy={accuracy:g} 不在该区间"
+                ),
+                "evidence": [
+                    f"reason_explicit_band={name}",
+                    f"predicted_accuracy={accuracy:g}",
+                ],
+                "repairable": True,
+            })
+
+    directional_claims = (
+        ("reason 明确认为不应低于58", accuracy < 58, r"(?:未进入|不属于)58分?以下|(?:高于|不低于)58分?"),
+        ("reason 明确认为不应低于85", accuracy < 85, r"(?:未进入|不属于)85分?以下|(?:高于|不低于)85分?"),
+    )
+    for problem, contradicted, pattern in directional_claims:
+        if contradicted and re.search(pattern, compact_reason):
+            issues.append({
+                "boundary": "reason—分数一致性",
+                "problem": f"{problem}，但 predicted_accuracy={accuracy:g}",
+                "evidence": [f"predicted_accuracy={accuracy:g}", "reason含明确的相邻边界排除结论"],
+                "repairable": True,
+            })
+
+    deduplicated: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for issue in issues:
+        key = (str(issue.get("boundary")), str(issue.get("problem")))
+        if key not in seen:
+            seen.add(key)
+            deduplicated.append(issue)
+    return deduplicated
 
 
 def score_feature_repair_crosses_boundary(
@@ -1092,6 +1156,62 @@ def enrich_stage1_rating(
     return rating
 
 
+def _unwrap_scalar_wrapper(value: Any) -> tuple[Any, bool]:
+    """解开严格 JSON 输出偶发生成的单值对象包装，不猜测歧义对象。"""
+    if not isinstance(value, dict):
+        return value, False
+    candidate = value.get("value")
+    if isinstance(candidate, (str, bool, int, float)):
+        return candidate, True
+    if len(value) == 1:
+        candidate = next(iter(value.values()))
+        if isinstance(candidate, (str, bool, int, float)):
+            return candidate, True
+    return value, False
+
+
+def build_neutral_stage2_verification(
+    stage1: dict[str, Any],
+    *,
+    validation_error: str,
+) -> dict[str, Any]:
+    """Stage2 响应缺字段时生成可审计的维持结论，不采纳局部修正。"""
+    level = str(stage1["difficulty_level_step1"])
+    boundaries = {
+        "难度1档": ["88边界"],
+        "难度2档": ["88边界", "85边界"],
+        "难度3档": ["85边界", "58边界"],
+        "难度4档": ["58边界", "38边界"],
+        "难度5档": ["38边界"],
+    }.get(level, ["85边界"])
+    return {
+        "difficulty_source": "第二阶段输出不完整，未采纳局部复核内容，保持第一阶段结论",
+        "feature_corrections": [],
+        "missed_features": [],
+        "reviewed_high_difficulty_features": copy.deepcopy(
+            stage1.get("high_difficulty_features") or []
+        ),
+        "high_feature_overlap_review": [],
+        "has_structural_revision": False,
+        "adjacent_boundary_review": {
+            "boundaries_checked": boundaries,
+            "verdict": "维持",
+            "decisive_evidence": ["第二阶段未返回完整必填字段，不能安全授权结构修正或改分"],
+        },
+        "reviewed_original_predicted_accuracy": float(
+            stage1["original_predicted_accuracy"]
+        ),
+        "confidence": "低",
+        "input_sufficiency_review": {
+            "status": "充分",
+            "missing_information": [],
+        },
+        "analysis": "第二阶段响应字段不完整。为避免使用局部JSON造成错误修正，本次忽略全部局部复核内容，并按第一阶段features、原始正确率和高难特征维持结果。",
+        "stage2_output_recovered": True,
+        "stage2_recovery_reason": validation_error,
+    }
+
+
 def normalize_stage1_rating(
     stage1_rating: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -1103,6 +1223,18 @@ def normalize_stage1_rating(
     if not isinstance(features, dict):
         raise ValueError("第一阶段缺少 features 对象")
     log: list[dict[str, Any]] = []
+
+    for field in FEATURE_OPTIONS:
+        raw_value = features.get(field)
+        unwrapped, changed = _unwrap_scalar_wrapper(raw_value)
+        if changed:
+            features[field] = unwrapped
+            log.append({
+                "field": field,
+                "from": copy.deepcopy(raw_value),
+                "to": copy.deepcopy(unwrapped),
+                "reason": "单值对象包装确定性解包",
+            })
 
     # 与原方案一致：知识点、二级模块和方法的完全重复不改变题目结构，
     # 在 schema 校验前确定性去重，避免模型重复列举导致整题失败。
@@ -1129,11 +1261,20 @@ def normalize_stage1_rating(
                 }
             )
 
-    shared = features.get("shared_model_across_subquestions")
-    if shared in {"是", "true", "True", 1}:
+    raw_shared = features.get("shared_model_across_subquestions")
+    shared, shared_unwrapped = _unwrap_scalar_wrapper(raw_shared)
+    if shared_unwrapped:
+        features["shared_model_across_subquestions"] = shared
+        log.append({
+            "field": "shared_model_across_subquestions",
+            "from": copy.deepcopy(raw_shared),
+            "to": copy.deepcopy(shared),
+            "reason": "单值对象包装确定性解包",
+        })
+    if shared in ("是", "true", "True", 1):
         features["shared_model_across_subquestions"] = True
         log.append({"field": "shared_model_across_subquestions", "from": shared, "to": True})
-    elif shared in {"否", "false", "False", 0}:
+    elif shared in ("否", "false", "False", 0):
         features["shared_model_across_subquestions"] = False
         log.append({"field": "shared_model_across_subquestions", "from": shared, "to": False})
 
@@ -1143,7 +1284,10 @@ def normalize_stage1_rating(
     if (
         isinstance(knowledge_l2, list)
         and knowledge_l2
-        and all(value in KNOWLEDGE_L2_TO_L1 for value in knowledge_l2)
+        and all(
+            isinstance(value, str) and value in KNOWLEDGE_L2_TO_L1
+            for value in knowledge_l2
+        )
     ):
         derived_l1 = list(
             dict.fromkeys(KNOWLEDGE_L2_TO_L1[value] for value in knowledge_l2)

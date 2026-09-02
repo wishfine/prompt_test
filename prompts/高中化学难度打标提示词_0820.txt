@@ -368,6 +368,8 @@ reaction_relation 只描述化学反应节点之间的关系；process_structure
 
 不得把边界值、整数中点或示例值当作模板分数。结构相近的题可以同分，但只有上述五方面证据也相近时才合理；不得为了制造差异加入随机小数。
 
+reason中的边界结论和predicted_accuracy必须来自同一次化学证据判断。若reason认为题目位于某一分数区间，或明确排除了某个相邻区间，predicted_accuracy必须与该结论一致；出现不一致时，应重新判断是化学结构证据有误还是数字估计有误，不得只改写reason来迁就原分数，也不得把分数机械夹到边界值。
+
 “容易混淆”和 error_risk 只能在相邻小范围内微调，不得单独将正确率压过一个主边界。
 ================================================================================
 ## 七、输出 JSON
@@ -419,6 +421,7 @@ VERIFICATION_PROMPT_PREFIX = r"""
 - has_structural_revision=true 只表示 features 确实发生结构性修订。允许在 missed_features 中记录真实遗漏，但只有把遗漏落实为合法 feature_corrections 后，才允许据此改变 reviewed_original_predicted_accuracy；只记录遗漏或重新解释同一组 features 时，不授权改分，不得只修改文字表述。
 
 只能输出完整合法 JSON。
+各说明字段保持简洁，不得复述题干、第一阶段完整features或整套规则；优先确保所有必填字段完整输出。
 """
 
 
