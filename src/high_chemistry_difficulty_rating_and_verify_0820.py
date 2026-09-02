@@ -653,9 +653,45 @@ async def call_stage1(
     initial_score_feature_issues: list[dict[str, Any]] = []
     initial_score_feature_rating: dict[str, Any] | None = None
     initial_score_feature_raw_features: dict[str, Any] | None = None
+    initial_score_feature_normalization_log: list[dict[str, Any]] = []
     repair_model_accuracy: float | None = None
     repair_changed_feature_fields: list[str] = []
     repair_resolution = "not_needed"
+
+    def revert_failed_consistency_repair(problem: str) -> dict[str, Any]:
+        if initial_score_feature_rating is None:
+            raise RuntimeError("缺少一致性修复前的有效输出")
+        fallback_issues = copy.deepcopy(initial_score_feature_issues)
+        fallback_issues.append({
+            "boundary": "一致性修复响应",
+            "problem": "一致性修复未产生有效完整输出，已回退首次有效输出",
+            "evidence": [problem],
+            "repairable": False,
+        })
+        enriched = enrich_stage1_rating(
+            copy.deepcopy(initial_score_feature_rating),
+            features_model_raw=copy.deepcopy(
+                initial_score_feature_raw_features
+            ),
+            normalization_log=copy.deepcopy(
+                initial_score_feature_normalization_log
+            ),
+        )
+        enriched["score_feature_consistency_repair_attempted"] = True
+        enriched["score_feature_consistency_initial_issues"] = copy.deepcopy(
+            initial_score_feature_issues
+        )
+        enriched["score_feature_consistency_warning"] = fallback_issues
+        enriched["score_feature_consistency_initial_accuracy"] = (
+            initial_score_feature_rating.get("predicted_accuracy")
+        )
+        enriched["score_feature_consistency_repaired_accuracy_model_raw"] = None
+        enriched["score_feature_consistency_changed_feature_fields"] = []
+        enriched["score_feature_consistency_repair_resolution"] = (
+            "invalid_response_reverted"
+        )
+        return enriched
+
     max_attempts = max(1, int(retries) + 1)
     for attempt in range(max_attempts):
         use_cache = bool(cache_id and repair_feedback is None)
@@ -734,6 +770,9 @@ async def call_stage1(
                         initial_score_feature_rating = copy.deepcopy(normalized)
                         initial_score_feature_raw_features = copy.deepcopy(
                             raw_features
+                        )
+                        initial_score_feature_normalization_log = copy.deepcopy(
+                            normalization_log
                         )
                         repair_feedback = (
                             "上一次输出存在明确的化学证据—分数边界矛盾：\n"
@@ -867,6 +906,12 @@ async def call_stage1(
                         repair_resolution
                     )
                 except ValueError as exc:
+                    if (
+                        score_feature_repair_attempted
+                        and initial_score_feature_rating is not None
+                    ):
+                        enriched = revert_failed_consistency_repair(str(exc))
+                        return enriched, total_usage, time.time() - started
                     if attempt < max_attempts - 1:
                         repair_feedback = (
                             f"上一次 JSON 校验失败：{exc}\n"
@@ -900,6 +945,9 @@ async def call_stage1(
             last_error = str(exc)
         if attempt < max_attempts - 1:
             await asyncio.sleep(2**attempt + random.random())
+    if score_feature_repair_attempted and initial_score_feature_rating is not None:
+        enriched = revert_failed_consistency_repair(last_error)
+        return enriched, total_usage, time.time() - started
     raise RuntimeError(f"第一阶段请求失败：{last_error}")
 
 

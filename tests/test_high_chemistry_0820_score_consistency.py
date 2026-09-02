@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sys
+import types
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -11,6 +13,17 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import high_chemistry_pipeline_core_0820 as core
+
+for module_name in ("aiofiles", "aiohttp", "json_repair"):
+    sys.modules.setdefault(module_name, types.ModuleType(module_name))
+sys.modules["aiohttp"].ClientError = RuntimeError
+dotenv = sys.modules.setdefault("dotenv", types.ModuleType("dotenv"))
+dotenv.load_dotenv = lambda: None
+tqdm_package = sys.modules.setdefault("tqdm", types.ModuleType("tqdm"))
+tqdm_asyncio = sys.modules.setdefault("tqdm.asyncio", types.ModuleType("tqdm.asyncio"))
+tqdm_asyncio.tqdm = object()
+
+import high_chemistry_difficulty_rating_and_verify_0820 as runtime
 
 
 def direct_features() -> dict[str, object]:
@@ -35,7 +48,7 @@ def direct_features() -> dict[str, object]:
 
 
 class ScoreFeatureConsistencyTests(unittest.TestCase):
-    def test_explicit_reason_band_conflict_is_repairable(self) -> None:
+    def test_explicit_reason_band_conflict_is_audit_only(self) -> None:
         rating = {
             "features": direct_features(),
             "reason": "各项均为常规综合，未达到拔高结构，正确率位于58—85区间。",
@@ -47,7 +60,7 @@ class ScoreFeatureConsistencyTests(unittest.TestCase):
             if issue["boundary"] == "reason—分数一致性"
         ]
         self.assertEqual(len(reason_issues), 1)
-        self.assertTrue(reason_issues[0]["repairable"])
+        self.assertFalse(reason_issues[0]["repairable"])
 
     def test_reason_excluding_below_58_conflicts_with_score_55(self) -> None:
         rating = {
@@ -56,10 +69,12 @@ class ScoreFeatureConsistencyTests(unittest.TestCase):
             "predicted_accuracy": 55,
         }
         issues = core.detect_stage1_score_feature_conflicts(rating)
-        self.assertTrue(any(
-            issue["boundary"] == "reason—分数一致性"
-            for issue in issues
-        ))
+        reason_issues = [
+            issue for issue in issues
+            if issue["boundary"] == "reason—分数一致性"
+        ]
+        self.assertEqual(len(reason_issues), 1)
+        self.assertFalse(reason_issues[0]["repairable"])
 
     def test_boundary_comparison_is_not_mistaken_for_final_band(self) -> None:
         rating = {
@@ -189,6 +204,69 @@ class ScoreFeatureConsistencyTests(unittest.TestCase):
         issues = [{"boundary": "88边界", "repairable": False}]
         self.assertFalse(
             core.score_feature_repair_crosses_boundary(issues, 89)
+        )
+
+
+class ScoreFeatureRepairFallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_invalid_repair_response_reuses_first_valid_rating(self) -> None:
+        initial = {
+            "features": {},
+            "reason": "首次有效结果",
+            "predicted_accuracy": 82,
+        }
+        issue = {
+            "boundary": "85边界",
+            "problem": "测试矛盾",
+            "evidence": ["测试证据"],
+            "repairable": True,
+        }
+        with (
+            mock.patch.object(
+                runtime,
+                "_post_response",
+                new=mock.AsyncMock(side_effect=[
+                    (200, {"usage": {}}, ""),
+                    (200, {"usage": {}}, ""),
+                ]),
+            ),
+            mock.patch.object(
+                runtime,
+                "_parse_json_object",
+                side_effect=[{"features": {}}, {"features": {}}],
+            ),
+            mock.patch.object(
+                runtime,
+                "normalize_stage1_rating",
+                side_effect=[(initial, []), ValueError("features 缺少字段")],
+            ),
+            mock.patch.object(
+                runtime,
+                "detect_stage1_score_feature_conflicts",
+                return_value=[issue],
+            ),
+            mock.patch.object(
+                runtime,
+                "enrich_stage1_rating",
+                side_effect=lambda rating, **_: dict(rating),
+            ),
+        ):
+            rating, _, _ = await runtime.call_stage1(
+                session=object(),
+                question_text="测试题",
+                image_urls=[],
+                cache_state=None,
+                retries=1,
+                timeout=30,
+            )
+
+        self.assertEqual(rating["predicted_accuracy"], 82)
+        self.assertEqual(
+            rating["score_feature_consistency_repair_resolution"],
+            "invalid_response_reverted",
+        )
+        self.assertIn(
+            "features 缺少字段",
+            rating["score_feature_consistency_warning"][-1]["evidence"],
         )
 
 

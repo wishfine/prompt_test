@@ -693,7 +693,9 @@ def detect_stage1_score_feature_conflicts(
                     f"reason_explicit_band={name}",
                     f"predicted_accuracy={accuracy:g}",
                 ],
-                "repairable": True,
+                # reason 可能是矛盾中错误的一侧，不得单独用它触发
+                # 一次完整 Stage1 重生成并改分。
+                "repairable": False,
             })
 
     directional_claims = (
@@ -706,7 +708,7 @@ def detect_stage1_score_feature_conflicts(
                 "boundary": "reason—分数一致性",
                 "problem": f"{problem}，但 predicted_accuracy={accuracy:g}",
                 "evidence": [f"predicted_accuracy={accuracy:g}", "reason含明确的相邻边界排除结论"],
-                "repairable": True,
+                "repairable": False,
             })
 
     deduplicated: list[dict[str, Any]] = []
